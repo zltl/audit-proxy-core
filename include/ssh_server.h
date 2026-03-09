@@ -78,6 +78,17 @@ bool ssh_server_is_running(const ssh_server_t *server);
 const char *ssh_server_get_error(const ssh_server_t *server);
 
 /**
+ * @brief Check if a configuration reload was requested (SIGHUP)
+ *
+ * Returns true exactly once after a SIGHUP is received; subsequent
+ * calls return false until the next SIGHUP.
+ *
+ * @param server Server instance
+ * @return true if reload was requested since last check
+ */
+bool ssh_server_reload_requested(ssh_server_t *server);
+
+/**
  * @brief Generate a new RSA host key
  * @param path Path to save the key
  * @param bits Key size in bits (default 4096)

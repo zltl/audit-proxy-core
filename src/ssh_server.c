@@ -28,8 +28,9 @@ struct ssh_server {
     ssh_bind sshbind;
     int listen_fd;
     int epoll_fd;       /* epoll instance */
-    int signal_fd;      /* signalfd for SIGINT/SIGTERM */
+    int signal_fd;      /* signalfd for SIGINT/SIGTERM/SIGHUP */
     bool running;
+    bool reload_requested;  /* set on SIGHUP, cleared by caller */
     char error_msg[256];
 };
 
@@ -60,6 +61,7 @@ ssh_server_t *ssh_server_create(const ssh_server_config_t *config)
     server->epoll_fd = -1;
     server->signal_fd = -1;
     server->running = false;
+    server->reload_requested = false;
     server->error_msg[0] = '\0';
 
     /* Initialize libssh */
@@ -196,11 +198,12 @@ int ssh_server_start(ssh_server_t *server)
         return -1;
     }
 
-    /* Setup signalfd for SIGINT and SIGTERM */
+    /* Setup signalfd for SIGINT, SIGTERM and SIGHUP */
     sigset_t mask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGINT);
     sigaddset(&mask, SIGTERM);
+    sigaddset(&mask, SIGHUP);
 
     /* Block these signals so they are delivered via signalfd */
     /* Use pthread_sigmask for thread-safe signal blocking */
@@ -292,10 +295,17 @@ ssh_session ssh_server_accept(ssh_server_t *server)
             struct signalfd_siginfo siginfo;
             ssize_t s = read(server->signal_fd, &siginfo, sizeof(siginfo));
             if (s == sizeof(siginfo)) {
-                LOG_INFO("Received signal %d (%s)", siginfo.ssi_signo,
-                         siginfo.ssi_signo == SIGINT ? "SIGINT" : "SIGTERM");
-                server->running = false;
-                return NULL;
+                if (siginfo.ssi_signo == SIGHUP) {
+                    LOG_INFO("Received SIGHUP, requesting config reload");
+                    server->reload_requested = true;
+                    /* Don't stop the server, just flag reload */
+                } else {
+                    LOG_INFO("Received signal %d (%s)",
+                             siginfo.ssi_signo,
+                             siginfo.ssi_signo == SIGINT ? "SIGINT" : "SIGTERM");
+                    server->running = false;
+                    return NULL;
+                }
             }
             continue;
         }
@@ -346,6 +356,18 @@ const char *ssh_server_get_error(const ssh_server_t *server)
         return "Invalid server instance";
     }
     return server->error_msg;
+}
+
+bool ssh_server_reload_requested(ssh_server_t *server)
+{
+    if (server == NULL) {
+        return false;
+    }
+    if (server->reload_requested) {
+        server->reload_requested = false;
+        return true;
+    }
+    return false;
 }
 
 int ssh_server_generate_key(const char *path, int bits)

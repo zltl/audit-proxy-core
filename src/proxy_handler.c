@@ -90,14 +90,42 @@ static int setup_auth_and_handshake(proxy_handler_context_t *ctx, char **usernam
                              user, auth_attempts, max_attempts);
                 }
             } else if (subtype == SSH_AUTH_METHOD_PUBLICKEY) {
-                /* For now, just set a placeholder */
-                filter_ctx.pubkey = (void*)"pubkey";
-                filter_ctx.pubkey_len = 6;
-                LOG_DEBUG("Public key auth attempt for user '%s'", user);
-                
-                /* Run auth filters only for password/pubkey auth */
+                ssh_key client_pubkey = ssh_message_auth_pubkey(message);
+                if (client_pubkey == NULL) {
+                    LOG_DEBUG("No public key in auth message for user '%s'", user);
+                    ssh_message_reply_default(message);
+                    ssh_message_free(message);
+                    continue;
+                }
+
+                /* Handle SSH_PUBLICKEY_STATE_VALID (signature present) vs query-only */
+                enum ssh_publickey_state_e key_state = ssh_message_auth_publickey_state(message);
+
+                if (key_state == SSH_PUBLICKEY_STATE_NONE) {
+                    /* Client is querying if this key type is accepted — accept the probe */
+                    ssh_message_auth_reply_pk_ok_simple(message);
+                    ssh_message_free(message);
+                    continue;
+                }
+
+                /* SSH_PUBLICKEY_STATE_VALID: signature verified by libssh, now check authorization */
+                char *pubkey_b64 = NULL;
+                if (ssh_pki_export_pubkey_base64(client_pubkey, &pubkey_b64) != SSH_OK || pubkey_b64 == NULL) {
+                    LOG_WARN("Failed to export public key base64 for user '%s'", user);
+                    auth_attempts++;
+                    ssh_message_reply_default(message);
+                    ssh_message_free(message);
+                    continue;
+                }
+
+                /* Pass base64 key string as the pubkey data for filter chain */
+                size_t b64_len = strlen(pubkey_b64);
+                filter_ctx.pubkey = pubkey_b64;
+                filter_ctx.pubkey_len = b64_len;
+                LOG_DEBUG("Public key auth attempt for user '%s' (b64_len=%zu)", user, b64_len);
+
                 filter_status_t status = filter_chain_on_auth(ctx->filters, &filter_ctx);
-                
+
                 if (status == FILTER_CONTINUE) {
                     authenticated = true;
                     ssh_message_auth_reply_success(message, 0);
@@ -108,6 +136,7 @@ static int setup_auth_and_handshake(proxy_handler_context_t *ctx, char **usernam
                     LOG_WARN("Public key authentication failed for user '%s' (attempt %d/%d)", 
                              user, auth_attempts, max_attempts);
                 }
+                free(pubkey_b64);
             } else {
                 /* Handle other auth methods (like "none") - just reject them */
                 LOG_DEBUG("Unsupported auth method %d for user '%s'", subtype, user);

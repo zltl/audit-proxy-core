@@ -153,11 +153,13 @@ cat /tmp/ssh_proxy_audit/audit_*.log
 
 ### 3. 验证过滤器
 
-当前实现中，连接后会立即关闭（SSH 握手未完全实现）。日志输出会显示：
+当前实现中，连接后会进行完整的 SSH 握手和认证。认证成功后，代理会将连接转发到上游服务器。日志输出会显示：
 
 ```
 INFO  main.c: New connection accepted
-DEBUG main.c: Session 1: handshake not yet implemented, closing
+DEBUG proxy_handler.c: SSH handshake completed
+INFO  auth_filter.c: Auth success for user 'test'
+DEBUG proxy_handler.c: Connected to upstream 127.0.0.1:22
 ```
 
 ## 测试覆盖矩阵

@@ -289,16 +289,22 @@ CFLAGS="-fsanitize=address" make
 
 ## 监控
 
-### 健康检查端点 (待实现)
+### 健康检查端点
 
 ```bash
-# 未来版本将支持
-curl http://localhost:8080/health
+# 检查服务健康状态 (默认监听 127.0.0.1:9090)
+curl http://localhost:9090/health
+
+# 获取 Prometheus 格式指标
+curl http://localhost:9090/metrics
 ```
 
 ### 指标收集
 
 ```bash
+# 使用内置 Prometheus 指标端点
+curl -s http://localhost:9090/metrics | grep ssh_proxy
+
 # 查看当前连接数
 ss -s | grep -E "TCP|ESTAB"
 
@@ -344,8 +350,7 @@ sudo ln -sf /usr/local/lib/libssh.so.4 /usr/lib/
 
 ## 下一步
 
-1. **完善 SSH 握手** - 实现完整的 SSH 协议处理
-2. **添加配置文件** - 支持 YAML/JSON 配置
-3. **健康检查 API** - HTTP 接口用于监控
-4. **指标导出** - Prometheus 格式指标
-5. **热重载** - 支持配置热更新
+1. **TLS 终结** - 支持 TLS 层加密
+2. **集群部署** - 多实例水平扩展与状态同步
+3. **Vault 集成** - 外部密钥管理系统集成
+4. **审计日志外发** - 支持将审计日志发送到 SIEM 系统

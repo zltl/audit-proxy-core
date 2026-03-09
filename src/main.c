@@ -13,19 +13,25 @@
 #include "auth_filter.h"
 #include "config.h"
 #include "filter.h"
+#include "health_check.h"
 #include "logger.h"
+#include "metrics.h"
 #include "proxy_handler.h"
 #include "rate_limit_filter.h"
 #include "rbac_filter.h"
 #include "router.h"
 #include "session.h"
 #include "ssh_server.h"
+#include "version.h"
 #include <pthread.h>
+#include <sys/stat.h>
+#include <libssh/libssh.h>
 
 #define DEFAULT_HOST_KEY "/tmp/ssh_proxy_host_key"
 #define DEFAULT_CONFIG_FILE "/etc/ssh-proxy/config.ini"
 
 static proxy_config_t *g_config = NULL;
+static const char *g_config_path = NULL;  /* path for SIGHUP reload */
 
 static void print_usage(const char *prog_name) {
     printf("Usage: %s [options]\n", prog_name);
@@ -46,6 +52,23 @@ static int ensure_host_key(const char *path) {
 
     LOG_INFO("Generating new host key: %s", path);
     return ssh_server_generate_key(path, 4096);
+}
+
+/* Warn if a sensitive file has overly permissive permissions */
+static void check_file_permissions(const char *path, const char *description) {
+    struct stat st;
+    if (stat(path, &st) != 0) return;
+
+    if (st.st_mode & S_IROTH) {
+        LOG_WARN("%s '%s' is world-readable (mode %04o). "
+                 "Consider: chmod 600 %s",
+                 description, path, st.st_mode & 0777, path);
+    }
+    if (st.st_mode & S_IWOTH) {
+        LOG_WARN("%s '%s' is world-writable (mode %04o). "
+                 "This is a security risk!",
+                 description, path, st.st_mode & 0777);
+    }
 }
 
 /* Config-based auth callback */
@@ -79,6 +102,82 @@ static auth_result_t config_auth_cb(const char *username, const char *password, 
     return AUTH_RESULT_FAILURE;
 }
 
+/* Config-based public key auth callback */
+static auth_result_t config_pubkey_cb(const char *username, const void *pubkey_data,
+                                       size_t pubkey_len, void *user_data) {
+    proxy_config_t *config = (proxy_config_t *)user_data;
+    if (config == NULL || username == NULL || pubkey_data == NULL || pubkey_len == 0) {
+        return AUTH_RESULT_FAILURE;
+    }
+
+    config_user_t *user = config_find_user(config, username);
+    if (user == NULL || user->pubkeys == NULL || user->pubkeys[0] == '\0') {
+        LOG_DEBUG("No authorized keys configured for user '%s'", username);
+        return AUTH_RESULT_FAILURE;
+    }
+
+    /* The pubkey_data is a base64-encoded public key string from proxy_handler */
+    const char *client_b64 = (const char *)pubkey_data;
+
+    /* Import the client's public key from base64 */
+    ssh_key client_key = NULL;
+    if (ssh_pki_import_pubkey_base64(client_b64, SSH_KEYTYPE_UNKNOWN,
+                                      &client_key) != SSH_OK) {
+        LOG_WARN("Failed to import client public key for user '%s'", username);
+        return AUTH_RESULT_FAILURE;
+    }
+
+    /* Parse each line of configured authorized keys and compare */
+    char *keys_copy = strdup(user->pubkeys);
+    if (keys_copy == NULL) {
+        ssh_key_free(client_key);
+        return AUTH_RESULT_FAILURE;
+    }
+
+    auth_result_t result = AUTH_RESULT_FAILURE;
+    char *saveptr = NULL;
+    char *line = strtok_r(keys_copy, "\n", &saveptr);
+
+    while (line != NULL) {
+        /* Skip leading whitespace */
+        while (*line == ' ' || *line == '\t') line++;
+        /* Skip empty lines and comments */
+        if (*line == '\0' || *line == '#') {
+            line = strtok_r(NULL, "\n", &saveptr);
+            continue;
+        }
+
+        /* OpenSSH format: "type base64data comment" — skip the type prefix */
+        const char *b64_start = line;
+        /* Skip type field (e.g., "ssh-rsa", "ssh-ed25519") */
+        char *space = strchr(line, ' ');
+        if (space != NULL) {
+            b64_start = space + 1;
+            /* Trim trailing comment if present */
+            char *next_space = strchr(b64_start, ' ');
+            if (next_space != NULL) *next_space = '\0';
+        }
+
+        ssh_key configured_key = NULL;
+        if (ssh_pki_import_pubkey_base64(b64_start, SSH_KEYTYPE_UNKNOWN,
+                                          &configured_key) == SSH_OK) {
+            if (ssh_key_cmp(client_key, configured_key, SSH_KEY_CMP_PUBLIC) == 0) {
+                LOG_INFO("Public key match for user '%s'", username);
+                ssh_key_free(configured_key);
+                result = AUTH_RESULT_SUCCESS;
+                break;
+            }
+            ssh_key_free(configured_key);
+        }
+
+        line = strtok_r(NULL, "\n", &saveptr);
+    }
+
+    free(keys_copy);
+    ssh_key_free(client_key);
+    return result;
+}
+
 /* Fallback auth callback for testing (when no config) */
 static auth_result_t test_auth_cb(const char *username, const char *password, void *user_data) {
     (void)user_data;
@@ -103,7 +202,7 @@ int main(int argc, char *argv[]) {
             return EXIT_SUCCESS;
         }
         if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
-            printf("ssh-proxy-core version 1.0.0\n");
+            printf("%s\n", SSH_PROXY_VERSION_FULL);
             return EXIT_SUCCESS;
         }
         if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--debug") == 0) {
@@ -123,9 +222,12 @@ int main(int argc, char *argv[]) {
     /* Initialize logging */
     log_init(log_level, NULL);
 
+    /* Initialize runtime metrics */
+    metrics_init();
+
     /* Note: Signal handling is done via signalfd in ssh_server */
 
-    LOG_INFO("SSH Proxy Core v1.0.0 starting...");
+    LOG_INFO("SSH Proxy Core %s starting...", SSH_PROXY_VERSION_STRING);
 
     /* Load configuration file if specified */
     if (config_file != NULL) {
@@ -136,12 +238,14 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
         LOG_INFO("Loaded configuration from %s", config_file);
+        g_config_path = config_file;
     } else {
         /* Try default config file, but don't fail if not found */
         if (access(DEFAULT_CONFIG_FILE, R_OK) == 0) {
             g_config = config_load(DEFAULT_CONFIG_FILE);
             if (g_config != NULL) {
                 LOG_INFO("Loaded configuration from %s", DEFAULT_CONFIG_FILE);
+                g_config_path = DEFAULT_CONFIG_FILE;
             }
         }
     }
@@ -154,6 +258,12 @@ int main(int argc, char *argv[]) {
         host_key = (g_config != NULL && g_config->host_key_path[0] != '\0') 
                    ? g_config->host_key_path : DEFAULT_HOST_KEY;
     }
+
+    /* Check sensitive file permissions */
+    if (config_file != NULL) {
+        check_file_permissions(config_file, "Config file");
+    }
+    check_file_permissions(host_key, "Host key");
 
     /* Ensure host key exists */
     if (ensure_host_key(host_key) != 0) {
@@ -214,7 +324,7 @@ int main(int argc, char *argv[]) {
                                      .timeout_sec = (g_config != NULL) ? g_config->auth_timeout : 60,
                                      .local_users = NULL,
                                      .password_cb = (g_config != NULL) ? config_auth_cb : test_auth_cb,
-                                     .pubkey_cb = NULL,
+                                     .pubkey_cb = (g_config != NULL) ? config_pubkey_cb : NULL,
                                      .cb_user_data = g_config};
     filter_t *auth_filter = auth_filter_create(&auth_cfg);
     if (auth_filter != NULL) {
@@ -286,10 +396,33 @@ int main(int argc, char *argv[]) {
     }
 
     LOG_INFO("SSH server ready, waiting for connections...");
-    LOG_INFO("Press Ctrl+C to stop");
+    LOG_INFO("Press Ctrl+C to stop, send SIGHUP to reload config");
+
+    /* Start health check / metrics HTTP endpoint */
+    health_check_config_t hc_cfg = {.port = 9090, .bind_addr = "127.0.0.1"};
+    health_check_t *hc = health_check_start(&hc_cfg);
+    if (hc == NULL) {
+        LOG_WARN("Failed to start health check endpoint (non-fatal)");
+    }
 
     /* Main loop - accept connections */
     while (ssh_server_is_running(server)) {
+        /* Check for SIGHUP reload request */
+        if (ssh_server_reload_requested(server)) {
+            if (g_config != NULL && g_config_path != NULL) {
+                LOG_INFO("Reloading configuration from %s", g_config_path);
+                if (config_reload(g_config, g_config_path) == 0) {
+                    LOG_INFO("Configuration reloaded successfully");
+                    METRICS_INC(config_reloads);
+                } else {
+                    LOG_ERROR("Configuration reload failed, keeping old config");
+                    METRICS_INC(config_reload_errors);
+                }
+            } else {
+                LOG_WARN("SIGHUP received but no config file loaded, ignoring");
+            }
+        }
+
         ssh_session client_ssh = ssh_server_accept(server);
         if (client_ssh == NULL) {
             /* NULL means signal received or error - check if still running */
@@ -300,12 +433,16 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
+        METRICS_INC(connections_total);
+        METRICS_INC(connections_active);
         LOG_INFO("New connection accepted");
 
         /* Create session */
         session_t *session = session_manager_create_session(session_mgr, client_ssh);
         if (session == NULL) {
             LOG_WARN("Failed to create session (limit reached?)");
+            METRICS_INC(sessions_rejected);
+            METRICS_DEC(connections_active);
             ssh_disconnect(client_ssh);
             ssh_free(client_ssh);
             continue;
@@ -326,6 +463,8 @@ int main(int argc, char *argv[]) {
         filter_status_t status = filter_chain_on_connect(filters, &ctx);
         if (status == FILTER_REJECT) {
             LOG_WARN("Connection rejected by filter");
+            METRICS_INC(sessions_rejected);
+            METRICS_DEC(connections_active);
             session_manager_remove_session(session_mgr, session);
             continue;
         }
@@ -334,6 +473,7 @@ int main(int argc, char *argv[]) {
         proxy_handler_context_t *handler_ctx = malloc(sizeof(proxy_handler_context_t));
         if (handler_ctx == NULL) {
             LOG_ERROR("Failed to allocate handler context");
+            METRICS_DEC(connections_active);
             session_manager_remove_session(session_mgr, session);
             continue;
         }
@@ -348,38 +488,54 @@ int main(int argc, char *argv[]) {
         if (pthread_create(&thread, NULL, proxy_handler_run, handler_ctx) != 0) {
             LOG_ERROR("Failed to create proxy thread");
             free(handler_ctx);
+            METRICS_DEC(connections_active);
             session_manager_remove_session(session_mgr, session);
             continue;
         }
         pthread_detach(thread);
     }
 
-    /* Cleanup */
+    /* ---- Graceful shutdown ---- */
     LOG_INFO("Shutting down...");
     
-    /* Server already stopped by signal handler via signalfd */
+    /* 1. Stop accepting new connections (server already stopped by signalfd) */
     
-    /* Wait for active sessions to close gracefully using nanosleep */
+    /* 2. Stop health check endpoint */
+    health_check_stop(hc);
+
+    /* 3. Drain active sessions with a configurable timeout */
+    uint32_t drain_timeout_sec = (g_config != NULL) ? g_config->session_timeout : 30;
+    if (drain_timeout_sec > 30) drain_timeout_sec = 30;  /* cap at 30s */
+
     if (session_manager_get_count(session_mgr) > 0) {
-        LOG_DEBUG("Waiting for %zu active sessions to close...", 
-                  session_manager_get_count(session_mgr));
-        
+        LOG_INFO("Draining %zu active sessions (timeout %us)...",
+                 session_manager_get_count(session_mgr), drain_timeout_sec);
+
         struct timespec wait_time = {0, 100000000};  /* 100ms */
-        int wait_count = 0;
-        const int max_wait = 30;  /* Maximum 3 seconds */
-        
-        while (session_manager_get_count(session_mgr) > 0 && wait_count < max_wait) {
-            nanosleep(&wait_time, NULL);
+        uint32_t max_iterations = drain_timeout_sec * 10;
+
+        for (uint32_t i = 0; i < max_iterations; i++) {
             session_manager_cleanup(session_mgr);
-            wait_count++;
+            if (session_manager_get_count(session_mgr) == 0) {
+                LOG_INFO("All sessions drained");
+                break;
+            }
+            nanosleep(&wait_time, NULL);
+
+            /* Progress log every 5 seconds */
+            if (i > 0 && i % 50 == 0) {
+                LOG_INFO("Still draining: %zu sessions remaining",
+                         session_manager_get_count(session_mgr));
+            }
         }
-        
+
         if (session_manager_get_count(session_mgr) > 0) {
             LOG_WARN("Forcing shutdown with %zu active sessions",
                      session_manager_get_count(session_mgr));
         }
     }
     
+    /* 4. Destroy resources in reverse creation order */
     ssh_server_destroy(server);
     router_destroy(router);
     filter_chain_destroy(filters);

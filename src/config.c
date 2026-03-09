@@ -16,6 +16,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <unistd.h>
+#include <errno.h>
 
 /* Configuration sections */
 typedef enum {
@@ -777,6 +779,72 @@ proxy_config_t *config_load(const char *path)
     for (config_policy_t *p = config->policies; p != NULL; p = p->next) policy_count++;
     
     LOG_DEBUG("Config: %zu users, %zu routes, %zu policies", user_count, route_count, policy_count);
+    
+    /* Validate loaded configuration */
+    int warnings = 0;
+
+    if (config->port == 0) {
+        LOG_WARN("Config validation: port is 0, using default 2222");
+        config->port = 2222;
+        warnings++;
+    }
+
+    if (config->max_sessions == 0) {
+        LOG_WARN("Config validation: max_sessions is 0, using default 1000");
+        config->max_sessions = 1000;
+        warnings++;
+    }
+
+    if (config->session_timeout == 0) {
+        LOG_WARN("Config validation: session_timeout is 0, using default 3600");
+        config->session_timeout = 3600;
+        warnings++;
+    }
+
+    if (config->auth_timeout == 0) {
+        LOG_WARN("Config validation: auth_timeout is 0, using default 60");
+        config->auth_timeout = 60;
+        warnings++;
+    }
+
+    if (config->host_key_path[0] != '\0') {
+        if (access(config->host_key_path, R_OK) != 0) {
+            LOG_WARN("Config validation: host key '%s' not readable: %s",
+                     config->host_key_path, strerror(errno));
+            warnings++;
+        }
+    }
+
+    /* Validate routes have required upstream_host */
+    for (config_route_t *r = config->routes; r != NULL; r = r->next) {
+        if (r->upstream_host[0] == '\0') {
+            LOG_WARN("Config validation: route '%s' has no upstream host",
+                     r->proxy_user);
+            warnings++;
+        }
+        if (r->upstream_port == 0) {
+            LOG_WARN("Config validation: route '%s' has invalid port, "
+                     "using default 22",
+                     r->proxy_user);
+            r->upstream_port = 22;
+            warnings++;
+        }
+    }
+
+    /* Validate users have at least one auth method */
+    for (config_user_t *u = config->users; u != NULL; u = u->next) {
+        if (u->password_hash[0] == '\0' &&
+            (u->pubkeys == NULL || u->pubkeys[0] == '\0')) {
+            LOG_WARN("Config validation: user '%s' has no password_hash "
+                     "and no pubkey configured",
+                     u->username);
+            warnings++;
+        }
+    }
+
+    if (warnings > 0) {
+        LOG_WARN("Config validation: %d warning(s)", warnings);
+    }
     
     return config;
 }

@@ -29,6 +29,8 @@ GEN_DIR := $(BUILD_DIR)/gen
 DEPS_DIR := $(BUILD_DIR)/deps
 
 # json-gen-c (downloaded at build time)
+# NOTE: Pin to a release tag or specific commit SHA for production builds.
+# Example: JSON_GEN_C_VERSION := v1.0.0
 JSON_GEN_C_VERSION := main
 JSON_GEN_C_URL := https://github.com/zltl/json-gen-c/archive/refs/heads/$(JSON_GEN_C_VERSION).tar.gz
 JSON_GEN_C_DIR := $(DEPS_DIR)/json-gen-c-$(JSON_GEN_C_VERSION)
