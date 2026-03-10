@@ -18,6 +18,8 @@
 #include <ctype.h>
 #include <unistd.h>
 #include <errno.h>
+#include <stdarg.h>
+#include <sys/stat.h>
 
 /* Configuration sections */
 typedef enum {
@@ -636,6 +638,10 @@ proxy_config_t *config_load(const char *path)
                 config->port = (uint16_t)atoi(value);
             } else if (strcmp(key, "host_key") == 0) {
                 strncpy(config->host_key_path, value, sizeof(config->host_key_path) - 1);
+            } else if (strcmp(key, "banner") == 0) {
+                strncpy(config->banner_path, value, sizeof(config->banner_path) - 1);
+            } else if (strcmp(key, "motd") == 0) {
+                strncpy(config->motd, value, sizeof(config->motd) - 1);
             }
             break;
             
@@ -897,6 +903,8 @@ int config_reload(proxy_config_t *config, const char *path)
     config->default_policy = new_config->default_policy;
     config->log_transfers = new_config->log_transfers;
     config->log_port_forwards = new_config->log_port_forwards;
+    memcpy(config->banner_path, new_config->banner_path, sizeof(config->banner_path));
+    memcpy(config->motd, new_config->motd, sizeof(config->motd));
     
     /* Free shell only, not contents (transferred to config) */
     new_config->users = NULL;
@@ -906,4 +914,160 @@ int config_reload(proxy_config_t *config, const char *path)
     
     LOG_INFO("Configuration reloaded");
     return 0;
+}
+
+/* Helper to append a validation result to the list */
+static config_valid_result_t *add_result(config_valid_result_t **list,
+                                          config_valid_level_t level,
+                                          const char *fmt, ...)
+{
+    config_valid_result_t *r = calloc(1, sizeof(config_valid_result_t));
+    if (r == NULL) return NULL;
+    r->level = level;
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(r->message, sizeof(r->message), fmt, args);
+    va_end(args);
+    r->next = NULL;
+
+    if (*list == NULL) {
+        *list = r;
+    } else {
+        config_valid_result_t *tail = *list;
+        while (tail->next != NULL) tail = tail->next;
+        tail->next = r;
+    }
+    return r;
+}
+
+config_valid_result_t *config_validate(const proxy_config_t *config,
+                                       const char *config_path)
+{
+    config_valid_result_t *results = NULL;
+
+    if (config == NULL) {
+        add_result(&results, CONFIG_VALID_ERROR, "Configuration is NULL");
+        return results;
+    }
+
+    /* Server settings */
+    if (config->port == 0) {
+        add_result(&results, CONFIG_VALID_ERROR,
+                   "Port %u is out of valid range (1-65535)",
+                   (unsigned)config->port);
+    }
+
+    if (config->bind_addr[0] == '\0') {
+        add_result(&results, CONFIG_VALID_ERROR, "Bind address is empty");
+    }
+
+    /* Host key */
+    if (config->host_key_path[0] != '\0') {
+        if (access(config->host_key_path, R_OK) != 0) {
+            add_result(&results, CONFIG_VALID_ERROR,
+                       "Host key '%s' does not exist or is not readable",
+                       config->host_key_path);
+        } else {
+            struct stat st;
+            if (stat(config->host_key_path, &st) == 0 && (st.st_mode & S_IROTH)) {
+                add_result(&results, CONFIG_VALID_WARN,
+                           "Host key '%s' is world-readable (mode %04o)",
+                           config->host_key_path, (unsigned)(st.st_mode & 0777));
+            }
+        }
+    }
+
+    /* Users */
+    int user_count = 0;
+    const config_user_t *user = config->users;
+    while (user != NULL) {
+        user_count++;
+        if (user->username[0] == '\0') {
+            add_result(&results, CONFIG_VALID_ERROR,
+                       "User #%d has empty username", user_count);
+        }
+        if (user->password_hash[0] == '\0' &&
+            (user->pubkeys == NULL || user->pubkeys[0] == '\0')) {
+            add_result(&results, CONFIG_VALID_ERROR,
+                       "User '%s' has no password hash or public keys configured",
+                       user->username);
+        }
+        user = user->next;
+    }
+    if (user_count == 0) {
+        add_result(&results, CONFIG_VALID_WARN, "No users configured");
+    }
+
+    /* Routes */
+    int route_count = 0;
+    const config_route_t *route = config->routes;
+    while (route != NULL) {
+        route_count++;
+        if (route->upstream_host[0] == '\0') {
+            add_result(&results, CONFIG_VALID_ERROR,
+                       "Route #%d has empty upstream host", route_count);
+        }
+        if (route->upstream_port == 0) {
+            add_result(&results, CONFIG_VALID_ERROR,
+                       "Route #%d upstream port %u is out of valid range (1-65535)",
+                       route_count, (unsigned)route->upstream_port);
+        }
+        if (route->privkey_path[0] != '\0') {
+            if (access(route->privkey_path, R_OK) != 0) {
+                add_result(&results, CONFIG_VALID_ERROR,
+                           "Route #%d private key '%s' does not exist or is not readable",
+                           route_count, route->privkey_path);
+            }
+        }
+        /* Warn if route pattern doesn't match any configured user */
+        if (route->proxy_user[0] != '\0' && user_count > 0) {
+            bool matched = false;
+            const config_user_t *u = config->users;
+            while (u != NULL) {
+                if (strcmp(route->proxy_user, "*") == 0 ||
+                    strcmp(route->proxy_user, u->username) == 0 ||
+                    strchr(route->proxy_user, '*') != NULL ||
+                    strchr(route->proxy_user, '?') != NULL) {
+                    matched = true;
+                    break;
+                }
+                u = u->next;
+            }
+            if (!matched) {
+                add_result(&results, CONFIG_VALID_WARN,
+                           "Route #%d pattern '%s' does not match any configured user",
+                           route_count, route->proxy_user);
+            }
+        }
+        route = route->next;
+    }
+    if (route_count == 0) {
+        add_result(&results, CONFIG_VALID_WARN, "No routes configured");
+    }
+
+    /* Policies */
+    int policy_count = 0;
+    const config_policy_t *policy = config->policies;
+    while (policy != NULL) {
+        policy_count++;
+        policy = policy->next;
+    }
+
+    /* Summary info */
+    add_result(&results, CONFIG_VALID_INFO,
+               "Loaded %d user(s), %d route(s), %d policy/policies",
+               user_count, route_count, policy_count);
+
+    (void)config_path;  /* reserved for future file-level checks */
+
+    return results;
+}
+
+void config_valid_free(config_valid_result_t *results)
+{
+    while (results != NULL) {
+        config_valid_result_t *next = results->next;
+        free(results);
+        results = next;
+    }
 }

@@ -5,8 +5,11 @@
 
 #include "proxy_handler.h"
 #include "logger.h"
+#include "version.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <time.h>
 #include <unistd.h>
 #include <errno.h>
 #include <sys/epoll.h>
@@ -19,6 +22,91 @@
 
 #define BUF_SIZE 16384
 #define MAX_EPOLL_EVENTS 4
+
+void banner_expand_vars(const char *tmpl, char *output, size_t output_size,
+                        const char *username, const char *client_ip)
+{
+    if (tmpl == NULL || output == NULL || output_size == 0) return;
+
+    char hostname[256] = "unknown";
+    gethostname(hostname, sizeof(hostname) - 1);
+
+    char datetime[64];
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    strftime(datetime, sizeof(datetime), "%Y-%m-%d %H:%M:%S", tm_info);
+
+    const char *version = SSH_PROXY_VERSION_STRING;
+    const char *user = username ? username : "unknown";
+    const char *ip = client_ip ? client_ip : "unknown";
+
+    size_t pos = 0;
+    const char *p = tmpl;
+    while (*p != '\0' && pos < output_size - 1) {
+        if (*p == '{') {
+            const char *replacement = NULL;
+            size_t skip = 0;
+
+            if (strncmp(p, "{username}", 10) == 0) {
+                replacement = user; skip = 10;
+            } else if (strncmp(p, "{client_ip}", 11) == 0) {
+                replacement = ip; skip = 11;
+            } else if (strncmp(p, "{datetime}", 10) == 0) {
+                replacement = datetime; skip = 10;
+            } else if (strncmp(p, "{hostname}", 10) == 0) {
+                replacement = hostname; skip = 10;
+            } else if (strncmp(p, "{version}", 9) == 0) {
+                replacement = version; skip = 9;
+            }
+
+            if (replacement != NULL) {
+                size_t rlen = strlen(replacement);
+                if (pos + rlen < output_size - 1) {
+                    memcpy(output + pos, replacement, rlen);
+                    pos += rlen;
+                }
+                p += skip;
+                continue;
+            }
+        }
+        output[pos++] = *p++;
+    }
+    output[pos] = '\0';
+}
+
+/**
+ * @brief Send pre-auth banner to client
+ */
+static int send_banner(ssh_session client_ssh, const char *banner_path)
+{
+    if (banner_path == NULL || banner_path[0] == '\0') return 0;
+
+    FILE *f = fopen(banner_path, "r");
+    if (f == NULL) {
+        LOG_WARN("Cannot open banner file: %s", banner_path);
+        return -1;
+    }
+
+    char banner[4096];
+    size_t n = fread(banner, 1, sizeof(banner) - 1, f);
+    fclose(f);
+    banner[n] = '\0';
+
+    char expanded[4096];
+    banner_expand_vars(banner, expanded, sizeof(expanded), NULL, NULL);
+
+    ssh_string banner_str = ssh_string_from_char(expanded);
+    if (banner_str == NULL) {
+        LOG_WARN("Failed to allocate SSH string for banner");
+        return -1;
+    }
+    int rc = ssh_send_issue_banner(client_ssh, banner_str);
+    ssh_string_free(banner_str);
+    if (rc != SSH_OK) {
+        LOG_DEBUG("Failed to send banner: %d", rc);
+    }
+    return rc == SSH_OK ? 0 : -1;
+}
 
 /* Helper to clean up context */
 static void free_context(proxy_handler_context_t *ctx) {
@@ -36,7 +124,12 @@ static int setup_auth_and_handshake(proxy_handler_context_t *ctx, char **usernam
     ssh_session session = session_get_client(ctx->session);
     
     session_set_state(ctx->session, SESSION_STATE_AUTH);
-    
+
+    /* Send pre-auth banner if configured */
+    if (ctx->config != NULL && ctx->config->banner_path[0] != '\0') {
+        send_banner(session, ctx->config->banner_path);
+    }
+
     /* Perform key exchange first */
     if (ssh_handle_key_exchange(session) != SSH_OK) {
         LOG_ERROR("Key exchange failed: %s", ssh_get_error(session));
@@ -511,6 +604,25 @@ void *proxy_handler_run(void *arg) {
 
     session_set_state(ctx->session, SESSION_STATE_ACTIVE);
     LOG_INFO("Session %lu active, forwarding...", session_get_id(ctx->session));
+
+    /* Send MOTD after authentication */
+    if (ctx->config != NULL && ctx->config->motd[0] != '\0') {
+        session_metadata_t *meta = session_get_metadata(ctx->session);
+        char motd_expanded[1024];
+        banner_expand_vars(ctx->config->motd, motd_expanded, sizeof(motd_expanded),
+                           meta ? meta->username : username,
+                           meta ? meta->client_addr : NULL);
+        size_t mlen = strlen(motd_expanded);
+        if (mlen < sizeof(motd_expanded) - 2) {
+            motd_expanded[mlen] = '\n';
+            motd_expanded[mlen + 1] = '\0';
+            mlen++;
+        }
+        if (client_channel != NULL) {
+            ssh_channel_write(client_channel, motd_expanded, (uint32_t)mlen);
+        }
+        LOG_DEBUG("MOTD sent to session %lu", session_get_id(ctx->session));
+    }
 
     /* 5. Forward Data with audit recording */
     forward_loop(ctx, client_channel, upstream_channel, username);

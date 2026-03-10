@@ -36,6 +36,19 @@ typedef struct proxy_handler_context {
  */
 void *proxy_handler_run(void *arg);
 
+/**
+ * @brief Expand variables in a banner/MOTD string
+ * @param tmpl Template string with {variable} placeholders
+ * @param output Output buffer
+ * @param output_size Output buffer size
+ * @param username Username (for {username} variable)
+ * @param client_ip Client IP address (for {client_ip} variable)
+ *
+ * Supported variables: {username}, {client_ip}, {datetime}, {hostname}, {version}
+ */
+void banner_expand_vars(const char *tmpl, char *output, size_t output_size,
+                        const char *username, const char *client_ip);
+
 #ifdef __cplusplus
 }
 #endif

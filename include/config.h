@@ -81,6 +81,10 @@ typedef struct proxy_config {
     size_t max_sessions;
     uint32_t session_timeout;
     uint32_t auth_timeout;
+
+    /* Banner/MOTD */
+    char banner_path[CONFIG_MAX_PRIVKEY_PATH]; /* Pre-auth banner file path */
+    char motd[1024];                           /* Post-auth message of the day */
 } proxy_config_t;
 
 /**
@@ -183,6 +187,36 @@ config_policy_t *config_find_policy(const proxy_config_t *config,
  * @return 0 on success, -1 on error
  */
 int config_reload(proxy_config_t *config, const char *path);
+
+/* Configuration validation severity */
+typedef enum {
+    CONFIG_VALID_INFO = 0,
+    CONFIG_VALID_WARN,
+    CONFIG_VALID_ERROR
+} config_valid_level_t;
+
+/* Single validation result */
+typedef struct config_valid_result {
+    config_valid_level_t level;
+    char message[256];
+    struct config_valid_result *next;
+} config_valid_result_t;
+
+/**
+ * @brief Validate a configuration, returning a list of issues
+ * @param config Configuration to validate
+ * @param config_path Path to config file (for file-existence checks)
+ * @return Linked list of validation results, or NULL if no issues.
+ *         Caller must free with config_valid_free().
+ */
+config_valid_result_t *config_validate(const proxy_config_t *config,
+                                       const char *config_path);
+
+/**
+ * @brief Free validation result list
+ * @param results Result list from config_validate
+ */
+void config_valid_free(config_valid_result_t *results);
 
 #ifdef __cplusplus
 }
