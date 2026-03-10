@@ -129,6 +129,18 @@ int audit_write_frame(filter_t *filter, uint64_t session_id,
 void audit_stop_recording(filter_t *filter, uint64_t session_id);
 
 /**
+ * @brief Log a command execution to the command audit log
+ * @param filter Audit filter instance
+ * @param session_id Session ID
+ * @param username Username who executed the command
+ * @param upstream Target upstream server
+ * @param command The command string
+ */
+void audit_log_command(filter_t *filter, uint64_t session_id,
+                       const char *username, const char *upstream,
+                       const char *command);
+
+/**
  * @brief Get event type name
  * @param type Event type
  * @return Type name string

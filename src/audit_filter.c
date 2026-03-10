@@ -22,6 +22,11 @@ typedef struct recording_session {
     FILE *file;
     struct timeval start_time;
     bool active;
+    /* Command buffer for parsing input */
+    char cmd_buf[4096];
+    size_t cmd_len;
+    char username[128];
+    char target[256];
 } recording_session_t;
 
 /* Audit filter state */
@@ -234,6 +239,30 @@ static filter_status_t audit_on_authenticated(filter_t *filter, filter_context_t
                      session_get_id(ctx->session));
         }
     }
+
+    /* Store username/upstream in recording session for command logging */
+    if (config != NULL && config->record_commands) {
+        audit_filter_state_t *state = (audit_filter_state_t *)filter->state;
+        if (state != NULL) {
+            uint64_t sid = session_get_id(ctx->session);
+            for (size_t i = 0; i < MAX_RECORDINGS; i++) {
+                if (state->recordings[i].active &&
+                    state->recordings[i].session_id == sid) {
+                    if (ctx->username != NULL) {
+                        strncpy(state->recordings[i].username, ctx->username,
+                                sizeof(state->recordings[i].username) - 1);
+                        state->recordings[i].username[sizeof(state->recordings[i].username) - 1] = '\0';
+                    }
+                    if (meta != NULL && meta->target_addr[0] != '\0') {
+                        strncpy(state->recordings[i].target, meta->target_addr,
+                                sizeof(state->recordings[i].target) - 1);
+                        state->recordings[i].target[sizeof(state->recordings[i].target) - 1] = '\0';
+                    }
+                    break;
+                }
+            }
+        }
+    }
     
     return FILTER_CONTINUE;
 }
@@ -246,13 +275,71 @@ static filter_status_t audit_on_data_upstream(filter_t *filter, filter_context_t
     }
 
     audit_filter_config_t *config = (audit_filter_config_t *)filter->config;
-    if (config == NULL || !config->record_input) {
+    if (config == NULL) {
         return FILTER_CONTINUE;
     }
 
     /* Record to asciicast if enabled */
-    if (config->enable_asciicast && ctx->session != NULL) {
+    if (config->record_input && config->enable_asciicast && ctx->session != NULL) {
         audit_write_frame(filter, session_get_id(ctx->session), data, len, true);
+    }
+
+    /* Parse commands if enabled */
+    if (config->record_commands && ctx->session != NULL) {
+        audit_filter_state_t *state = (audit_filter_state_t *)filter->state;
+        if (state == NULL) return FILTER_CONTINUE;
+
+        uint64_t sid = session_get_id(ctx->session);
+        recording_session_t *rec = NULL;
+        for (size_t i = 0; i < MAX_RECORDINGS; i++) {
+            if (state->recordings[i].active && state->recordings[i].session_id == sid) {
+                rec = &state->recordings[i];
+                break;
+            }
+        }
+
+        if (rec != NULL) {
+            for (size_t i = 0; i < len; i++) {
+                uint8_t c = data[i];
+
+                if (c == '\r' || c == '\n') {
+                    /* End of command - log it if non-empty */
+                    if (rec->cmd_len > 0) {
+                        rec->cmd_buf[rec->cmd_len] = '\0';
+
+                        /* Trim leading/trailing whitespace */
+                        char *cmd = rec->cmd_buf;
+                        while (*cmd == ' ' || *cmd == '\t') cmd++;
+                        size_t clen = strlen(cmd);
+                        while (clen > 0 && (cmd[clen - 1] == ' ' || cmd[clen - 1] == '\t')) {
+                            cmd[--clen] = '\0';
+                        }
+
+                        if (clen > 0) {
+                            const char *uname = rec->username[0] ? rec->username : NULL;
+                            const char *tgt = rec->target[0] ? rec->target : NULL;
+                            session_metadata_t *meta = session_get_metadata(ctx->session);
+                            audit_log_command(filter, sid,
+                                uname ? uname : (ctx->username ? ctx->username : (meta ? meta->username : NULL)),
+                                tgt ? tgt : (meta ? meta->target_addr : NULL),
+                                cmd);
+                        }
+                        rec->cmd_len = 0;
+                    }
+                } else if (c == 0x7f || c == '\b') {
+                    /* Backspace - remove last character */
+                    if (rec->cmd_len > 0) {
+                        rec->cmd_len--;
+                    }
+                } else if (c >= 32 && c < 127) {
+                    /* Printable character */
+                    if (rec->cmd_len < sizeof(rec->cmd_buf) - 1) {
+                        rec->cmd_buf[rec->cmd_len++] = (char)c;
+                    }
+                }
+                /* Ignore other control characters (arrow keys, etc.) */
+            }
+        }
     }
 
     return FILTER_CONTINUE;
@@ -533,6 +620,61 @@ void audit_stop_recording(filter_t *filter, uint64_t session_id)
             return;
         }
     }
+}
+
+void audit_log_command(filter_t *filter, uint64_t session_id,
+                       const char *username, const char *upstream,
+                       const char *command)
+{
+    if (filter == NULL || command == NULL) return;
+
+    audit_filter_config_t *config = (audit_filter_config_t *)filter->config;
+    if (config == NULL || config->log_dir == NULL) return;
+
+    /* Build command log file path */
+    char path[512];
+    time_t now = time(NULL);
+    struct tm *tm = localtime(&now);
+    snprintf(path, sizeof(path), "%s/commands_%04d%02d%02d.log",
+             config->log_dir,
+             tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday);
+
+    FILE *f = fopen(path, "a");
+    if (f == NULL) {
+        LOG_ERROR("Failed to open command log: %s: %s", path, strerror(errno));
+        return;
+    }
+
+    /* Sanitize command - copy to local buffer */
+    char sanitized[4096];
+    strncpy(sanitized, command, sizeof(sanitized) - 1);
+    sanitized[sizeof(sanitized) - 1] = '\0';
+
+    /* Write JSON log entry */
+    fprintf(f, "{\"timestamp\":%ld,\"session\":%lu,\"user\":\"%s\","
+               "\"upstream\":\"%s\",\"type\":\"command\",\"command\":\"",
+            (long)now, session_id,
+            username ? username : "-",
+            upstream ? upstream : "-");
+
+    /* JSON-escape the command string */
+    for (const char *p = sanitized; *p != '\0'; p++) {
+        switch (*p) {
+        case '"':  fprintf(f, "\\\""); break;
+        case '\\': fprintf(f, "\\\\"); break;
+        case '\n': fprintf(f, "\\n"); break;
+        case '\r': fprintf(f, "\\r"); break;
+        case '\t': fprintf(f, "\\t"); break;
+        default:
+            if ((unsigned char)*p >= 32) {
+                fputc(*p, f);
+            }
+            break;
+        }
+    }
+
+    fprintf(f, "\"}\n");
+    fclose(f);
 }
 
 const char *audit_event_type_name(audit_event_type_t type)
