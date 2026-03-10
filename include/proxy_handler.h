@@ -49,6 +49,51 @@ void *proxy_handler_run(void *arg);
 void banner_expand_vars(const char *tmpl, char *output, size_t output_size,
                         const char *username, const char *client_ip);
 
+/**
+ * @brief Upstream connection error classification
+ */
+typedef enum {
+    UPSTREAM_ERR_NONE = 0,
+    UPSTREAM_ERR_ROUTE_NOT_FOUND,
+    UPSTREAM_ERR_SESSION_ALLOC,
+    UPSTREAM_ERR_CONNECT_FAILED,
+    UPSTREAM_ERR_HOST_KEY,
+    UPSTREAM_ERR_AUTH_PRIVKEY_LOAD,
+    UPSTREAM_ERR_AUTH_PRIVKEY,
+    UPSTREAM_ERR_AUTH_AUTO,
+    UPSTREAM_ERR_AUTH_NONE,
+    UPSTREAM_ERR_AUTH_ALL_FAILED,
+    UPSTREAM_ERR_CHANNEL_OPEN
+} upstream_error_t;
+
+/**
+ * @brief Detailed result from upstream connection attempt
+ */
+typedef struct connect_result {
+    upstream_error_t error;
+    char stage[64];        /* Human-readable stage name */
+    char detail[256];      /* Error detail (e.g., ssh_get_error()) */
+    char host[256];        /* Upstream host attempted */
+    uint16_t port;         /* Upstream port attempted */
+    char user[128];        /* Upstream user attempted */
+    int attempts;          /* Number of connection attempts made */
+} connect_result_t;
+
+/**
+ * @brief Context for banner variable expansion
+ */
+typedef struct banner_context {
+    const char *username;
+    const char *client_ip;
+    const char *upstream_host;
+    uint16_t upstream_port;
+    const char *upstream_user;
+    uint64_t session_id;
+} banner_context_t;
+
+void banner_expand_vars_ctx(const char *tmpl, char *output, size_t output_size,
+                            const banner_context_t *bctx);
+
 #ifdef __cplusplus
 }
 #endif

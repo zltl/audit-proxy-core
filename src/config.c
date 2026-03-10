@@ -164,6 +164,7 @@ proxy_config_t *config_create(void)
     config->default_policy = 0xFFFFFFFF;  /* All features allowed by default */
     config->log_transfers = true;
     config->log_port_forwards = true;
+    config->show_progress = true;  /* Enable by default */
     
     return config;
 }
@@ -642,6 +643,8 @@ proxy_config_t *config_load(const char *path)
                 strncpy(config->banner_path, value, sizeof(config->banner_path) - 1);
             } else if (strcmp(key, "motd") == 0) {
                 strncpy(config->motd, value, sizeof(config->motd) - 1);
+            } else if (strcmp(key, "show_progress") == 0) {
+                config->show_progress = (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 || strcmp(value, "yes") == 0);
             }
             break;
             
@@ -905,6 +908,7 @@ int config_reload(proxy_config_t *config, const char *path)
     config->log_port_forwards = new_config->log_port_forwards;
     memcpy(config->banner_path, new_config->banner_path, sizeof(config->banner_path));
     memcpy(config->motd, new_config->motd, sizeof(config->motd));
+    config->show_progress = new_config->show_progress;
     
     /* Free shell only, not contents (transferred to config) */
     new_config->users = NULL;

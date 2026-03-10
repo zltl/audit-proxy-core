@@ -85,6 +85,7 @@ typedef struct proxy_config {
     /* Banner/MOTD */
     char banner_path[CONFIG_MAX_PRIVKEY_PATH]; /* Pre-auth banner file path */
     char motd[1024];                           /* Post-auth message of the day */
+    bool show_progress;                    /* Show connection progress to client */
 } proxy_config_t;
 
 /**
