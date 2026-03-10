@@ -16,12 +16,14 @@ static struct {
     int use_color;
     int use_timestamp;
     int initialized;
+    log_format_t format;
 } g_logger = {
     .level = LOG_LEVEL_INFO,
     .file = NULL,
     .use_color = 1,
     .use_timestamp = 1,
-    .initialized = 0
+    .initialized = 0,
+    .format = LOG_FORMAT_TEXT
 };
 
 /* Level names */
@@ -87,6 +89,42 @@ void log_set_timestamp(int enable)
     g_logger.use_timestamp = enable;
 }
 
+void log_set_format(log_format_t format)
+{
+    g_logger.format = format;
+}
+
+log_format_t log_get_format(void)
+{
+    return g_logger.format;
+}
+
+static void json_escape(const char *src, char *dst, size_t dst_size)
+{
+    size_t j = 0;
+    for (size_t i = 0; src[i] != '\0' && j + 6 < dst_size; i++) {
+        unsigned char c = (unsigned char)src[i];
+        switch (c) {
+        case '"':  dst[j++] = '\\'; dst[j++] = '"';  break;
+        case '\\': dst[j++] = '\\'; dst[j++] = '\\'; break;
+        case '\n': dst[j++] = '\\'; dst[j++] = 'n';  break;
+        case '\r': dst[j++] = '\\'; dst[j++] = 'r';  break;
+        case '\t': dst[j++] = '\\'; dst[j++] = 't';  break;
+        default:
+            if (c < 0x20) {
+                int written = snprintf(dst + j, dst_size - j, "\\u%04x", c);
+                if (written > 0) {
+                    j += (size_t)written;
+                }
+            } else {
+                dst[j++] = (char)c;
+            }
+            break;
+        }
+    }
+    dst[j] = '\0';
+}
+
 void log_write(log_level_t level, const char *file, int line,
                const char *fmt, ...)
 {
@@ -112,6 +150,32 @@ void log_write(log_level_t level, const char *file, int line,
     va_start(args, fmt);
     vsnprintf(message, sizeof(message), fmt, args);
     va_end(args);
+
+    /* JSON output path */
+    if (g_logger.format == LOG_FORMAT_JSON) {
+        char escaped_msg[1024];
+        json_escape(message, escaped_msg, sizeof(escaped_msg));
+
+        char ts[32];
+        time_t now = time(NULL);
+        struct tm *utc = gmtime(&now);
+        strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", utc);
+
+        fprintf(stderr,
+                "{\"ts\":\"%s\",\"level\":\"%s\",\"file\":\"%s\","
+                "\"line\":%d,\"msg\":\"%s\"}\n",
+                ts, level_names[level], filename, line, escaped_msg);
+        fflush(stderr);
+
+        if (g_logger.file != NULL) {
+            fprintf(g_logger.file,
+                    "{\"ts\":\"%s\",\"level\":\"%s\",\"file\":\"%s\","
+                    "\"line\":%d,\"msg\":\"%s\"}\n",
+                    ts, level_names[level], filename, line, escaped_msg);
+            fflush(g_logger.file);
+        }
+        return;
+    }
 
     /* Write to stderr */
     FILE *out = stderr;

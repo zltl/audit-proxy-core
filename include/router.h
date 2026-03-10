@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <pthread.h>
 #include <libssh/libssh.h>
 #include "session.h"
 
@@ -73,6 +74,28 @@ typedef struct route_rule {
     route_rule_t *next;             /* Next rule in list */
 } route_rule_t;
 
+/* Connection pool entry */
+typedef struct pooled_conn {
+    ssh_session session;            /* SSH session handle */
+    char host[256];                 /* Upstream host */
+    uint16_t port;                  /* Upstream port */
+    char username[128];             /* Authenticated user */
+    time_t idle_since;              /* When connection became idle */
+    bool in_use;                    /* Currently checked out */
+    struct pooled_conn *next;       /* Linked list */
+} pooled_conn_t;
+
+/* Connection pool */
+typedef struct {
+    pooled_conn_t *connections;     /* Linked list of pooled connections */
+    size_t idle_count;              /* Number of idle connections */
+    size_t active_count;            /* Number of active (checked out) connections */
+    size_t max_idle;                /* Max idle connections per upstream */
+    uint32_t max_idle_time_sec;     /* Max time a connection can be idle */
+    bool enabled;                   /* Pool enabled flag */
+    pthread_mutex_t lock;           /* Thread safety */
+} connection_pool_t;
+
 /* Router configuration */
 typedef struct router_config {
     lb_policy_t lb_policy;          /* Load balancing policy */
@@ -80,6 +103,12 @@ typedef struct router_config {
     uint32_t health_check_interval; /* Health check interval (seconds) */
     int max_retries;                /* Maximum connection retries */
     bool health_check_enabled;      /* Enable health checks */
+    uint32_t retry_initial_delay_ms;/* Initial retry delay (default: 100) */
+    uint32_t retry_max_delay_ms;    /* Maximum retry delay (default: 5000) */
+    float retry_backoff_factor;     /* Backoff multiplier (default: 2.0) */
+    bool pool_enabled;              /* Enable connection pooling */
+    size_t pool_max_idle;           /* Max idle connections (default: 10) */
+    uint32_t pool_max_idle_time_sec; /* Max idle time in seconds (default: 300) */
 } router_config_t;
 
 /* Route result */
@@ -200,12 +229,68 @@ void router_health_check(router_t *router);
 int router_set_default_upstream(router_t *router, int index);
 
 /**
+ * @brief Connect to upstream with retry and exponential backoff
+ * @param router Router instance
+ * @param username Username for re-resolving routes on retry
+ * @param target Target address for re-resolving
+ * @param result Route result (updated on each retry)
+ * @param timeout_ms Connection timeout per attempt
+ * @return SSH session connected to upstream, or NULL if all retries exhausted
+ */
+ssh_session router_connect_with_retry(router_t *router, const char *username,
+                                       const char *target, route_result_t *result,
+                                       uint32_t timeout_ms);
+
+/**
  * @brief Match a string against a glob pattern
  * @param pattern Glob pattern (supports * and ?)
  * @param str String to match
  * @return true if matches
  */
 bool router_glob_match(const char *pattern, const char *str);
+
+/**
+ * @brief Initialize the connection pool
+ * @param pool Pool to initialize
+ * @param max_idle Max idle connections
+ * @param max_idle_time Max idle time in seconds
+ * @return 0 on success
+ */
+int connection_pool_init(connection_pool_t *pool, size_t max_idle, uint32_t max_idle_time);
+
+/**
+ * @brief Get a connection from the pool
+ * @param pool Connection pool
+ * @param host Target host
+ * @param port Target port
+ * @return SSH session if available, NULL if no cached connection
+ */
+ssh_session connection_pool_get(connection_pool_t *pool, const char *host, uint16_t port);
+
+/**
+ * @brief Return a connection to the pool
+ * @param pool Connection pool
+ * @param session SSH session to return
+ * @param host Upstream host
+ * @param port Upstream port
+ * @param username User who was connected
+ * @return 0 if pooled, -1 if pool full (caller should close session)
+ */
+int connection_pool_put(connection_pool_t *pool, ssh_session session,
+                        const char *host, uint16_t port, const char *username);
+
+/**
+ * @brief Clean up expired idle connections
+ * @param pool Connection pool
+ * @return Number of connections cleaned up
+ */
+int connection_pool_cleanup(connection_pool_t *pool);
+
+/**
+ * @brief Destroy the connection pool (closes all connections)
+ * @param pool Connection pool
+ */
+void connection_pool_destroy(connection_pool_t *pool);
 
 #ifdef __cplusplus
 }

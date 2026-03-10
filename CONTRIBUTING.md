@@ -69,4 +69,4 @@ for responsible disclosure instructions. **Do not open a public issue.**
 ## License
 
 By contributing, you agree that your contributions will be licensed under
-the Apache License 2.0 (see [LICENSE](LICENSE)).
+the GNU GPL v3.0 only (see [LICENSE](LICENSE)).

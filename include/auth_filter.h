@@ -90,6 +90,10 @@ struct auth_filter_config {
     const char *ldap_base_dn;
     const char *ldap_bind_dn;
     const char *ldap_bind_pw;
+
+    /* LDAP extended settings */
+    const char *ldap_user_filter;   /* User search filter, e.g. "uid=%s" */
+    int ldap_timeout;               /* Connection timeout in seconds (default: 5) */
 };
 
 /**
@@ -120,6 +124,17 @@ int auth_filter_add_user(auth_filter_config_t *config,
  */
 int auth_filter_remove_user(auth_filter_config_t *config,
                             const char *username);
+
+/**
+ * @brief Perform LDAP Simple Bind authentication
+ * @param uri LDAP URI (ldap://host:port)
+ * @param bind_dn Bind DN
+ * @param password Password
+ * @param timeout_sec Timeout in seconds
+ * @return Authentication result
+ */
+auth_result_t ldap_simple_bind(const char *uri, const char *bind_dn,
+                                const char *password, int timeout_sec);
 
 /**
  * @brief Hash a password using bcrypt (simple implementation)

@@ -35,13 +35,14 @@ typedef struct rate_limit_state {
 
 /* Forward declarations */
 static filter_status_t rate_limit_on_connect(filter_t *filter, filter_context_t *ctx);
+static filter_status_t rate_limit_on_authenticated(filter_t *filter, filter_context_t *ctx);
 static void rate_limit_on_close(filter_t *filter, filter_context_t *ctx);
 static void rate_limit_destroy(filter_t *filter);
 
 /* Filter callbacks */
 static const filter_callbacks_t rate_limit_callbacks = {.on_connect = rate_limit_on_connect,
                                                         .on_auth = NULL,
-                                                        .on_authenticated = NULL,
+                                                        .on_authenticated = rate_limit_on_authenticated,
                                                         .on_route = NULL,
                                                         .on_data_upstream = NULL,
                                                         .on_data_downstream = NULL,
@@ -145,6 +146,24 @@ static filter_status_t rate_limit_on_connect(filter_t *filter, filter_context_t 
     return FILTER_CONTINUE;
 }
 
+static filter_status_t rate_limit_on_authenticated(filter_t *filter, filter_context_t *ctx)
+{
+    if (filter == NULL || ctx == NULL || ctx->username == NULL) {
+        return FILTER_CONTINUE;
+    }
+
+    rate_limit_result_t result = rate_limit_check_user_sessions(filter, ctx->username);
+    if (result == RATE_LIMIT_DENY) {
+        rate_limit_filter_config_t *config = (rate_limit_filter_config_t *)filter->config;
+        if (config != NULL && config->log_rejections) {
+            LOG_WARN("Rate limit: User '%s' exceeded per-user session limit", ctx->username);
+        }
+        return FILTER_REJECT;
+    }
+
+    return FILTER_CONTINUE;
+}
+
 static void rate_limit_on_close(filter_t *filter, filter_context_t *ctx) {
     if (filter == NULL || ctx == NULL) {
         return;
@@ -157,7 +176,28 @@ static void rate_limit_on_close(filter_t *filter, filter_context_t *ctx) {
 
     const char *client_addr = meta ? meta->client_addr : NULL;
 
+    /* Release IP-based tracking */
     rate_limit_release(filter, client_addr, ctx->username);
+
+    /* Release username-based tracking (for per-user session limits) */
+    if (ctx->username != NULL) {
+        rate_limit_state_t *state = (rate_limit_state_t *)filter->state;
+        if (state != NULL) {
+            pthread_mutex_lock(&state->lock);
+            for (int i = 0; i < MAX_ENTRIES; i++) {
+                if (state->entries[i].active && strcmp(state->entries[i].key, ctx->username) == 0) {
+                    if (state->entries[i].current_connections > 0) {
+                        state->entries[i].current_connections--;
+                    }
+                    if (state->entries[i].current_connections == 0) {
+                        state->entries[i].active = false;
+                    }
+                    break;
+                }
+            }
+            pthread_mutex_unlock(&state->lock);
+        }
+    }
 }
 
 static void rate_limit_destroy(filter_t *filter) {
@@ -179,6 +219,12 @@ static void rate_limit_destroy(filter_t *filter) {
             free(rule);
             rule = next;
         }
+        rate_limit_rule_t *urule = config->user_session_rules;
+        while (urule != NULL) {
+            rate_limit_rule_t *next = urule->next;
+            free(urule);
+            urule = next;
+        }
     }
 
     LOG_DEBUG("Rate limit filter destroyed");
@@ -196,6 +242,7 @@ filter_t *rate_limit_filter_create(const rate_limit_filter_config_t *config) {
     }
     *cfg_copy = *config;
     cfg_copy->rules = NULL;
+    cfg_copy->user_session_rules = NULL;
 
     /* Copy rules */
     rate_limit_rule_t *src = config->rules;
@@ -219,10 +266,44 @@ filter_t *rate_limit_filter_create(const rate_limit_filter_config_t *config) {
         src = src->next;
     }
 
+    /* Copy user session rules */
+    src = config->user_session_rules;
+    dst = &cfg_copy->user_session_rules;
+    while (src != NULL) {
+        *dst = calloc(1, sizeof(rate_limit_rule_t));
+        if (*dst == NULL) {
+            /* Cleanup on error */
+            rate_limit_rule_t *r = cfg_copy->user_session_rules;
+            while (r != NULL) {
+                rate_limit_rule_t *next = r->next;
+                free(r);
+                r = next;
+            }
+            r = cfg_copy->rules;
+            while (r != NULL) {
+                rate_limit_rule_t *next = r->next;
+                free(r);
+                r = next;
+            }
+            free(cfg_copy);
+            return NULL;
+        }
+        **dst = *src;
+        (*dst)->next = NULL;
+        dst = &(*dst)->next;
+        src = src->next;
+    }
+
     filter_t *filter =
         filter_create("rate_limit", FILTER_TYPE_RATE_LIMIT, &rate_limit_callbacks, cfg_copy);
     if (filter == NULL) {
         rate_limit_rule_t *r = cfg_copy->rules;
+        while (r != NULL) {
+            rate_limit_rule_t *next = r->next;
+            free(r);
+            r = next;
+        }
+        r = cfg_copy->user_session_rules;
         while (r != NULL) {
             rate_limit_rule_t *next = r->next;
             free(r);
@@ -237,6 +318,12 @@ filter_t *rate_limit_filter_create(const rate_limit_filter_config_t *config) {
     if (state == NULL) {
         free(filter);
         rate_limit_rule_t *r = cfg_copy->rules;
+        while (r != NULL) {
+            rate_limit_rule_t *next = r->next;
+            free(r);
+            r = next;
+        }
+        r = cfg_copy->user_session_rules;
         while (r != NULL) {
             rate_limit_rule_t *next = r->next;
             free(r);
@@ -412,6 +499,59 @@ void rate_limit_release(filter_t *filter, const char *client_addr, const char *u
     }
 
     pthread_mutex_unlock(&state->lock);
+}
+
+rate_limit_result_t rate_limit_check_user_sessions(filter_t *filter, const char *username)
+{
+    if (filter == NULL || username == NULL) {
+        return RATE_LIMIT_ALLOW;
+    }
+
+    rate_limit_filter_config_t *config = (rate_limit_filter_config_t *)filter->config;
+    rate_limit_state_t *state = (rate_limit_state_t *)filter->state;
+    if (config == NULL || state == NULL) {
+        return RATE_LIMIT_ALLOW;
+    }
+
+    pthread_mutex_lock(&state->lock);
+
+    /* Count current sessions for this user */
+    int user_sessions = 0;
+    for (int i = 0; i < MAX_ENTRIES; i++) {
+        if (state->entries[i].active && strcmp(state->entries[i].key, username) == 0) {
+            user_sessions = state->entries[i].current_connections;
+            break;
+        }
+    }
+
+    /* Check per-user rules first (more specific) */
+    rate_limit_rule_t *rule = config->user_session_rules;
+    while (rule != NULL) {
+        if (router_glob_match(rule->match_pattern, username)) {
+            if (rule->max_connections > 0 && user_sessions >= rule->max_connections) {
+                pthread_mutex_unlock(&state->lock);
+                return RATE_LIMIT_DENY;
+            }
+            pthread_mutex_unlock(&state->lock);
+            return RATE_LIMIT_ALLOW;  /* Matched specific rule, use it */
+        }
+        rule = rule->next;
+    }
+
+    /* Check default per-user limit */
+    if (config->per_user_max_sessions > 0 && user_sessions >= config->per_user_max_sessions) {
+        pthread_mutex_unlock(&state->lock);
+        return RATE_LIMIT_DENY;
+    }
+
+    /* Track user connection */
+    rate_entry_t *entry = find_or_create_entry(state, username);
+    if (entry != NULL) {
+        entry->current_connections++;
+    }
+
+    pthread_mutex_unlock(&state->lock);
+    return RATE_LIMIT_ALLOW;
 }
 
 int rate_limit_get_count(filter_t *filter, const char *pattern) {

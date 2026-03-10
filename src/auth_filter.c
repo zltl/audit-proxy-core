@@ -118,6 +118,33 @@ static filter_status_t auth_on_auth(filter_t *filter, filter_context_t *ctx)
         case AUTH_BACKEND_CALLBACK:
             result = auth_callback_password(config, ctx->username, ctx->password);
             break;
+        case AUTH_BACKEND_LDAP: {
+            if (config->ldap_uri == NULL) {
+                LOG_ERROR("LDAP backend configured but ldap_uri not set");
+                return FILTER_REJECT;
+            }
+
+            /* Build bind DN from user filter or direct DN */
+            char bind_dn[512];
+            if (config->ldap_user_filter != NULL && config->ldap_base_dn != NULL) {
+                char user_rdn[256];
+                snprintf(user_rdn, sizeof(user_rdn), config->ldap_user_filter,
+                         ctx->username);
+                snprintf(bind_dn, sizeof(bind_dn), "%s,%s",
+                         user_rdn, config->ldap_base_dn);
+            } else if (config->ldap_base_dn != NULL) {
+                snprintf(bind_dn, sizeof(bind_dn), "uid=%s,%s",
+                         ctx->username, config->ldap_base_dn);
+            } else {
+                LOG_ERROR("LDAP: ldap_base_dn not configured");
+                return FILTER_REJECT;
+            }
+
+            int timeout = config->ldap_timeout > 0 ? config->ldap_timeout : 5;
+            result = ldap_simple_bind(config->ldap_uri, bind_dn,
+                                       ctx->password, timeout);
+            break;
+        }
         default:
             LOG_WARN("Auth backend %d not implemented for password", config->backend);
             break;

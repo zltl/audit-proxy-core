@@ -41,6 +41,8 @@ struct rate_limit_filter_config {
     int global_interval_sec;        /* Global rate limit interval */
     bool log_rejections;            /* Log rate limit rejections */
     rate_limit_rule_t *rules;       /* Per-pattern rules */
+    int per_user_max_sessions;              /* Default per-user max concurrent sessions (0 = unlimited) */
+    rate_limit_rule_t *user_session_rules;  /* Per-user session limit rules */
 };
 
 /**
@@ -88,6 +90,14 @@ rate_limit_result_t rate_limit_check(filter_t *filter,
 void rate_limit_release(filter_t *filter,
                         const char *client_addr,
                         const char *username);
+
+/**
+ * @brief Check per-user session limit
+ * @param filter Rate limit filter instance
+ * @param username Username to check
+ * @return RATE_LIMIT_ALLOW if under limit, RATE_LIMIT_DENY if at limit
+ */
+rate_limit_result_t rate_limit_check_user_sessions(filter_t *filter, const char *username);
 
 /**
  * @brief Get current connection count for a pattern

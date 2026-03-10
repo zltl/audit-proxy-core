@@ -206,4 +206,4 @@ Client ──► SSH Server ──► Filter Chain ──► Router ──► Up
 
 ## License
 
-This project is licensed under the [Apache License 2.0](LICENSE).
+This project is licensed under the [GNU GPL v3.0 only](LICENSE).

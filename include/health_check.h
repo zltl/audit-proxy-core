@@ -22,6 +22,15 @@ typedef struct health_check health_check_t;
 typedef struct {
     uint16_t port;      /* HTTP listen port (default 9090) */
     const char *bind_addr;  /* Bind address (default "127.0.0.1") */
+
+    /* Admin API settings */
+    bool admin_api_enabled;
+    char admin_auth_token[256];    /* Bearer token for API auth (empty = no auth) */
+
+    /* Component references for admin API */
+    void *session_manager;  /* session_manager_t* */
+    void *router;           /* router_t* */
+    void *config;           /* proxy_config_t* (for reload) */
 } health_check_config_t;
 
 /**

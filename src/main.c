@@ -42,6 +42,7 @@ static void print_usage(const char *prog_name) {
     printf("  -c, --config FILE  Configuration file (default: %s)\n", DEFAULT_CONFIG_FILE);
     printf("  -p, --port PORT    Listen port (default: 2222)\n");
     printf("  -k, --key FILE     Host key file (default: auto-generate)\n");
+    printf("  -t, --check        Validate configuration and exit\n");
 }
 
 static int ensure_host_key(const char *path) {
@@ -194,6 +195,7 @@ int main(int argc, char *argv[]) {
     uint16_t port = 0;  /* 0 means use config or default */
     const char *host_key = NULL;
     const char *config_file = NULL;
+    bool check_mode = false;
 
     /* Handle command line arguments */
     for (int i = 1; i < argc; i++) {
@@ -216,6 +218,9 @@ int main(int argc, char *argv[]) {
         }
         if ((strcmp(argv[i], "-k") == 0 || strcmp(argv[i], "--key") == 0) && i + 1 < argc) {
             host_key = argv[++i];
+        }
+        if (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--check") == 0) {
+            check_mode = true;
         }
     }
 
@@ -257,6 +262,48 @@ int main(int argc, char *argv[]) {
     if (host_key == NULL) {
         host_key = (g_config != NULL && g_config->host_key_path[0] != '\0') 
                    ? g_config->host_key_path : DEFAULT_HOST_KEY;
+    }
+
+    /* Config validation mode */
+    if (check_mode) {
+        if (g_config == NULL) {
+            fprintf(stderr, "Error: No configuration file loaded. Use -c to specify one.\n");
+            log_shutdown();
+            return EXIT_FAILURE;
+        }
+
+        printf("Validating configuration: %s\n", g_config_path ? g_config_path : "(unknown)");
+        config_valid_result_t *results = config_validate(g_config, g_config_path);
+
+        int errors = 0, warnings = 0, infos = 0;
+        config_valid_result_t *r = results;
+        while (r != NULL) {
+            const char *prefix = "INFO";
+            if (r->level == CONFIG_VALID_WARN) { prefix = "WARN"; warnings++; }
+            else if (r->level == CONFIG_VALID_ERROR) { prefix = "ERROR"; errors++; }
+            else { infos++; }
+            printf("  [%s] %s\n", prefix, r->message);
+            r = r->next;
+        }
+
+        config_valid_free(results);
+
+        if (errors > 0) {
+            printf("\nConfiguration INVALID: %d error(s), %d warning(s)\n", errors, warnings);
+            config_destroy(g_config);
+            log_shutdown();
+            return EXIT_FAILURE;
+        } else if (warnings > 0) {
+            printf("\nConfiguration valid with %d warning(s)\n", warnings);
+            config_destroy(g_config);
+            log_shutdown();
+            return 2;  /* Warnings exit code */
+        } else {
+            printf("\nConfiguration OK\n");
+            config_destroy(g_config);
+            log_shutdown();
+            return EXIT_SUCCESS;
+        }
     }
 
     /* Check sensitive file permissions */

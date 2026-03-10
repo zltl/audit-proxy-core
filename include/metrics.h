@@ -28,6 +28,9 @@ typedef struct {
     atomic_uint_fast64_t sessions_rejected;
     atomic_uint_fast64_t config_reloads;
     atomic_uint_fast64_t config_reload_errors;
+    atomic_uint_fast64_t upstream_retries_total;     /* Total retry attempts */
+    atomic_uint_fast64_t upstream_retries_success;   /* Successful after retry */
+    atomic_uint_fast64_t upstream_retries_exhausted; /* All retries failed */
 } metrics_t;
 
 /**

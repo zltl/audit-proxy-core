@@ -24,6 +24,12 @@ typedef enum {
     LOG_LEVEL_OFF
 } log_level_t;
 
+/* Log output format */
+typedef enum {
+    LOG_FORMAT_TEXT = 0,    /* Human-readable text (default) */
+    LOG_FORMAT_JSON         /* Structured JSON */
+} log_format_t;
+
 /**
  * @brief Initialize the logging system
  * @param level Minimum log level to output
@@ -60,6 +66,18 @@ void log_set_color(int enable);
  * @param enable true to enable timestamps
  */
 void log_set_timestamp(int enable);
+
+/**
+ * @brief Set the log output format
+ * @param format LOG_FORMAT_TEXT or LOG_FORMAT_JSON
+ */
+void log_set_format(log_format_t format);
+
+/**
+ * @brief Get the current log output format
+ * @return Current format
+ */
+log_format_t log_get_format(void);
 
 /**
  * @brief Core logging function

@@ -78,6 +78,59 @@ static int test_format_args(void)
     return 0;
 }
 
+/* Test: JSON format set/get */
+static int test_json_format_set_get(void)
+{
+    log_init(LOG_LEVEL_INFO, NULL);
+
+    TEST_ASSERT_EQ(log_get_format(), LOG_FORMAT_TEXT, "Default format should be TEXT");
+
+    log_set_format(LOG_FORMAT_JSON);
+    TEST_ASSERT_EQ(log_get_format(), LOG_FORMAT_JSON, "Format should be JSON");
+
+    log_set_format(LOG_FORMAT_TEXT);
+    TEST_ASSERT_EQ(log_get_format(), LOG_FORMAT_TEXT, "Format should be TEXT again");
+
+    log_shutdown();
+    return 0;
+}
+
+/* Test: JSON format output */
+static int test_json_format_output(void)
+{
+    log_init(LOG_LEVEL_TRACE, NULL);
+    log_set_format(LOG_FORMAT_JSON);
+
+    printf("  (Visual test - checking JSON log output)\n");
+    LOG_TRACE("Trace message in JSON");
+    LOG_DEBUG("Debug message in JSON");
+    LOG_INFO("Info message in JSON");
+    LOG_WARN("Warning message in JSON");
+    LOG_ERROR("Error message in JSON");
+
+    log_set_format(LOG_FORMAT_TEXT);
+    log_shutdown();
+    return 0;
+}
+
+/* Test: JSON escaping of special characters */
+static int test_json_escape_special_chars(void)
+{
+    log_init(LOG_LEVEL_INFO, NULL);
+    log_set_format(LOG_FORMAT_JSON);
+
+    printf("  (Visual test - JSON escaping special chars)\n");
+    LOG_INFO("Message with \"quotes\"");
+    LOG_INFO("Message with back\\slash");
+    LOG_INFO("Message with\nnewline");
+    LOG_INFO("Message with\ttab");
+    LOG_INFO("String: %s, Int: %d", "hello \"world\"", 42);
+
+    log_set_format(LOG_FORMAT_TEXT);
+    log_shutdown();
+    return 0;
+}
+
 int main(void)
 {
     TEST_BEGIN("Logger Tests");
@@ -87,6 +140,9 @@ int main(void)
     RUN_TEST(test_log_output);
     RUN_TEST(test_log_filtering);
     RUN_TEST(test_format_args);
+    RUN_TEST(test_json_format_set_get);
+    RUN_TEST(test_json_format_output);
+    RUN_TEST(test_json_escape_special_chars);
 
     TEST_END();
 }

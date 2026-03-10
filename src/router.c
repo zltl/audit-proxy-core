@@ -4,6 +4,7 @@
  */
 
 #include "router.h"
+#include "metrics.h"
 #include "logger.h"
 
 #include <stdlib.h>
@@ -18,6 +19,7 @@ struct router {
     route_rule_t *rules;
     int default_upstream;
     size_t round_robin_index;   /* For round-robin LB */
+    connection_pool_t pool;     /* Upstream connection pool */
 };
 
 /* Simple glob pattern matching */
@@ -77,6 +79,12 @@ router_t *router_create(const router_config_t *config)
     router->default_upstream = -1;
     router->round_robin_index = 0;
 
+    if (config->pool_enabled) {
+        connection_pool_init(&router->pool,
+                             config->pool_max_idle > 0 ? config->pool_max_idle : 10,
+                             config->pool_max_idle_time_sec > 0 ? config->pool_max_idle_time_sec : 300);
+    }
+
     LOG_DEBUG("Router created, lb_policy=%d", config->lb_policy);
     return router;
 }
@@ -86,6 +94,9 @@ void router_destroy(router_t *router)
     if (router == NULL) {
         return;
     }
+
+    /* Destroy connection pool */
+    connection_pool_destroy(&router->pool);
 
     /* Free rules */
     route_rule_t *rule = router->rules;
@@ -494,6 +505,78 @@ void router_health_check(router_t *router)
     }
 }
 
+ssh_session router_connect_with_retry(router_t *router, const char *username,
+                                       const char *target, route_result_t *result,
+                                       uint32_t timeout_ms)
+{
+    if (router == NULL || result == NULL) {
+        return NULL;
+    }
+
+    router_config_t *config = &router->config;
+    int max_retries = config->max_retries > 0 ? config->max_retries : 3;
+    uint32_t initial_delay = config->retry_initial_delay_ms > 0
+                             ? config->retry_initial_delay_ms : 100;
+    uint32_t max_delay = config->retry_max_delay_ms > 0
+                         ? config->retry_max_delay_ms : 5000;
+    float backoff = config->retry_backoff_factor > 0
+                    ? config->retry_backoff_factor : 2.0f;
+
+    ssh_session upstream = NULL;
+    uint32_t delay_ms = initial_delay;
+
+    for (int attempt = 0; attempt <= max_retries; attempt++) {
+        if (attempt > 0) {
+            METRICS_INC(upstream_retries_total);
+
+            LOG_INFO("Retry %d/%d connecting to upstream %s:%d (delay %ums)",
+                     attempt, max_retries,
+                     result->upstream ? result->upstream->config.host : "unknown",
+                     result->upstream ? result->upstream->config.port : 0,
+                     delay_ms);
+
+            struct timespec ts = {
+                .tv_sec = delay_ms / 1000,
+                .tv_nsec = (delay_ms % 1000) * 1000000L
+            };
+            nanosleep(&ts, NULL);
+
+            /* Re-resolve route on retry (LB may pick different upstream) */
+            if (username != NULL) {
+                route_result_t new_result;
+                if (router_resolve(router, username, target, &new_result) == 0) {
+                    *result = new_result;
+                }
+            }
+
+            delay_ms = (uint32_t)(delay_ms * backoff);
+            if (delay_ms > max_delay) {
+                delay_ms = max_delay;
+            }
+        }
+
+        upstream = router_connect(router, result, timeout_ms);
+        if (upstream != NULL) {
+            if (attempt > 0) {
+                METRICS_INC(upstream_retries_success);
+                LOG_INFO("Successfully connected to upstream on attempt %d",
+                         attempt + 1);
+            }
+            return upstream;
+        }
+
+        LOG_WARN("Failed to connect to upstream %s:%d (attempt %d/%d)",
+                 result->upstream ? result->upstream->config.host : "unknown",
+                 result->upstream ? result->upstream->config.port : 0,
+                 attempt + 1, max_retries + 1);
+    }
+
+    METRICS_INC(upstream_retries_exhausted);
+    LOG_ERROR("All %d connection attempts to upstream exhausted",
+              max_retries + 1);
+    return NULL;
+}
+
 int router_set_default_upstream(router_t *router, int index)
 {
     if (router == NULL) {
@@ -507,4 +590,202 @@ int router_set_default_upstream(router_t *router, int index)
     router->default_upstream = index;
     LOG_DEBUG("Default upstream set to %d", index);
     return 0;
+}
+
+/* --- Connection Pool Implementation --- */
+
+int connection_pool_init(connection_pool_t *pool, size_t max_idle, uint32_t max_idle_time)
+{
+    if (!pool) return -1;
+    memset(pool, 0, sizeof(*pool));
+    pool->max_idle = max_idle;
+    pool->max_idle_time_sec = max_idle_time;
+    pool->enabled = true;
+    pthread_mutex_init(&pool->lock, NULL);
+    LOG_INFO("Connection pool initialized (max_idle=%zu, max_idle_time=%us)",
+             max_idle, max_idle_time);
+    return 0;
+}
+
+ssh_session connection_pool_get(connection_pool_t *pool, const char *host, uint16_t port)
+{
+    if (!pool || !pool->enabled || !host) return NULL;
+
+    pthread_mutex_lock(&pool->lock);
+
+    pooled_conn_t *prev = NULL;
+    pooled_conn_t *conn = pool->connections;
+    time_t now = time(NULL);
+
+    while (conn) {
+        /* Skip in-use or expired connections */
+        if (conn->in_use ||
+            (pool->max_idle_time_sec > 0 &&
+             (now - conn->idle_since) > (time_t)pool->max_idle_time_sec)) {
+            prev = conn;
+            conn = conn->next;
+            continue;
+        }
+
+        /* Match by host and port */
+        if (strcmp(conn->host, host) == 0 && conn->port == port) {
+            /* Check if SSH session is still alive */
+            if (ssh_is_connected(conn->session)) {
+                /* Remove from idle list */
+                if (prev) {
+                    prev->next = conn->next;
+                } else {
+                    pool->connections = conn->next;
+                }
+                pool->idle_count--;
+                pool->active_count++;
+
+                ssh_session session = conn->session;
+                free(conn);
+
+                pthread_mutex_unlock(&pool->lock);
+                LOG_DEBUG("Connection pool: Reusing connection to %s:%u", host, port);
+                return session;
+            } else {
+                /* Dead connection, remove it */
+                if (prev) {
+                    prev->next = conn->next;
+                } else {
+                    pool->connections = conn->next;
+                }
+                pooled_conn_t *dead = conn;
+                conn = conn->next;
+                ssh_disconnect(dead->session);
+                ssh_free(dead->session);
+                free(dead);
+                pool->idle_count--;
+                continue;
+            }
+        }
+
+        prev = conn;
+        conn = conn->next;
+    }
+
+    pthread_mutex_unlock(&pool->lock);
+    return NULL;
+}
+
+int connection_pool_put(connection_pool_t *pool, ssh_session session,
+                        const char *host, uint16_t port, const char *username)
+{
+    if (!pool || !pool->enabled || !session || !host) return -1;
+
+    /* Check if session is still connected */
+    if (!ssh_is_connected(session)) {
+        return -1;
+    }
+
+    pthread_mutex_lock(&pool->lock);
+
+    /* Check if pool is full */
+    if (pool->idle_count >= pool->max_idle) {
+        pthread_mutex_unlock(&pool->lock);
+        LOG_DEBUG("Connection pool full, not pooling connection to %s:%u", host, port);
+        return -1;
+    }
+
+    pooled_conn_t *conn = calloc(1, sizeof(pooled_conn_t));
+    if (!conn) {
+        pthread_mutex_unlock(&pool->lock);
+        return -1;
+    }
+
+    conn->session = session;
+    strncpy(conn->host, host, sizeof(conn->host) - 1);
+    conn->port = port;
+    if (username) {
+        strncpy(conn->username, username, sizeof(conn->username) - 1);
+    }
+    conn->idle_since = time(NULL);
+    conn->in_use = false;
+
+    /* Add to front of list */
+    conn->next = pool->connections;
+    pool->connections = conn;
+    pool->idle_count++;
+
+    if (pool->active_count > 0) {
+        pool->active_count--;
+    }
+
+    pthread_mutex_unlock(&pool->lock);
+    LOG_DEBUG("Connection pool: Cached connection to %s:%u (idle=%zu)",
+             host, port, pool->idle_count);
+    return 0;
+}
+
+int connection_pool_cleanup(connection_pool_t *pool)
+{
+    if (!pool || !pool->enabled) return 0;
+
+    pthread_mutex_lock(&pool->lock);
+
+    int cleaned = 0;
+    time_t now = time(NULL);
+    pooled_conn_t *prev = NULL;
+    pooled_conn_t *conn = pool->connections;
+
+    while (conn) {
+        bool expired = (pool->max_idle_time_sec > 0 &&
+                       (now - conn->idle_since) > (time_t)pool->max_idle_time_sec);
+        bool dead = !ssh_is_connected(conn->session);
+
+        if (!conn->in_use && (expired || dead)) {
+            pooled_conn_t *to_remove = conn;
+            if (prev) {
+                prev->next = conn->next;
+            } else {
+                pool->connections = conn->next;
+            }
+            conn = conn->next;
+
+            ssh_disconnect(to_remove->session);
+            ssh_free(to_remove->session);
+            free(to_remove);
+            pool->idle_count--;
+            cleaned++;
+        } else {
+            prev = conn;
+            conn = conn->next;
+        }
+    }
+
+    pthread_mutex_unlock(&pool->lock);
+
+    if (cleaned > 0) {
+        LOG_DEBUG("Connection pool: Cleaned %d expired connections", cleaned);
+    }
+    return cleaned;
+}
+
+void connection_pool_destroy(connection_pool_t *pool)
+{
+    if (!pool) return;
+
+    pthread_mutex_lock(&pool->lock);
+
+    pooled_conn_t *conn = pool->connections;
+    while (conn) {
+        pooled_conn_t *next = conn->next;
+        if (conn->session) {
+            ssh_disconnect(conn->session);
+            ssh_free(conn->session);
+        }
+        free(conn);
+        conn = next;
+    }
+    pool->connections = NULL;
+    pool->idle_count = 0;
+    pool->enabled = false;
+
+    pthread_mutex_unlock(&pool->lock);
+    pthread_mutex_destroy(&pool->lock);
+
+    LOG_INFO("Connection pool destroyed");
 }

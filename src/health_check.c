@@ -7,6 +7,9 @@
 #include "metrics.h"
 #include "version.h"
 #include "logger.h"
+#include "session.h"
+#include "router.h"
+#include "config.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -20,16 +23,18 @@
 #include <time.h>
 #include <stdio.h>
 #include <inttypes.h>
+#include <signal.h>
 
 #define HC_BACKLOG      8
-#define HC_BUF_SIZE     1024
-#define HC_RESP_SIZE    4096
+#define HC_BUF_SIZE     4096
+#define HC_RESP_SIZE    8192
 
 struct health_check {
     int listen_fd;
     pthread_t thread;
     volatile bool running;
     uint16_t port;
+    health_check_config_t config;
 };
 
 /* ------------------------------------------------------------------ */
@@ -117,7 +122,16 @@ static void handle_metrics(int fd)
         "ssh_proxy_config_reloads_total %" PRIuFAST64 "\n"
         "# HELP ssh_proxy_config_reload_errors_total Failed config reloads.\n"
         "# TYPE ssh_proxy_config_reload_errors_total counter\n"
-        "ssh_proxy_config_reload_errors_total %" PRIuFAST64 "\n",
+        "ssh_proxy_config_reload_errors_total %" PRIuFAST64 "\n"
+        "# HELP ssh_proxy_upstream_retries_total Total upstream connection retry attempts.\n"
+        "# TYPE ssh_proxy_upstream_retries_total counter\n"
+        "ssh_proxy_upstream_retries_total %" PRIuFAST64 "\n"
+        "# HELP ssh_proxy_upstream_retries_success Successful connections after retry.\n"
+        "# TYPE ssh_proxy_upstream_retries_success counter\n"
+        "ssh_proxy_upstream_retries_success %" PRIuFAST64 "\n"
+        "# HELP ssh_proxy_upstream_retries_exhausted Connections where all retries were exhausted.\n"
+        "# TYPE ssh_proxy_upstream_retries_exhausted counter\n"
+        "ssh_proxy_upstream_retries_exhausted %" PRIuFAST64 "\n",
         (long)uptime,
         METRICS_GET(connections_total),
         METRICS_GET(connections_active),
@@ -127,7 +141,10 @@ static void handle_metrics(int fd)
         METRICS_GET(bytes_downstream),
         METRICS_GET(sessions_rejected),
         METRICS_GET(config_reloads),
-        METRICS_GET(config_reload_errors));
+        METRICS_GET(config_reload_errors),
+        METRICS_GET(upstream_retries_total),
+        METRICS_GET(upstream_retries_success),
+        METRICS_GET(upstream_retries_exhausted));
 
     send_response(fd, "200 OK",
                   "text/plain; version=0.0.4; charset=utf-8",
@@ -141,24 +158,233 @@ static void handle_not_found(int fd)
 }
 
 /* ------------------------------------------------------------------ */
+/* Admin API helpers                                                    */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    char method[16];
+    char path[512];
+    char auth_header[512];
+    int content_length;
+} http_request_t;
+
+static int parse_http_request(const char *raw, http_request_t *req)
+{
+    memset(req, 0, sizeof(*req));
+
+    /* Parse request line: "METHOD /path HTTP/1.x\r\n" */
+    const char *space1 = strchr(raw, ' ');
+    if (!space1) return -1;
+
+    size_t method_len = (size_t)(space1 - raw);
+    if (method_len >= sizeof(req->method)) return -1;
+    memcpy(req->method, raw, method_len);
+    req->method[method_len] = '\0';
+
+    const char *path_start = space1 + 1;
+    const char *space2 = strchr(path_start, ' ');
+    if (!space2) return -1;
+
+    size_t path_len = (size_t)(space2 - path_start);
+    if (path_len >= sizeof(req->path)) return -1;
+    memcpy(req->path, path_start, path_len);
+    req->path[path_len] = '\0';
+
+    /* Parse Authorization header */
+    const char *auth = strstr(raw, "Authorization: Bearer ");
+    if (auth) {
+        auth += 22; /* skip "Authorization: Bearer " */
+        const char *eol = strstr(auth, "\r\n");
+        if (eol) {
+            size_t len = (size_t)(eol - auth);
+            if (len < sizeof(req->auth_header)) {
+                memcpy(req->auth_header, auth, len);
+                req->auth_header[len] = '\0';
+            }
+        }
+    }
+
+    return 0;
+}
+
+static bool check_admin_auth(const health_check_config_t *cfg,
+                              const http_request_t *req)
+{
+    if (cfg->admin_auth_token[0] == '\0') return true;
+    return strcmp(cfg->admin_auth_token, req->auth_header) == 0;
+}
+
+static void send_json_response(int client_fd, int status_code,
+                                const char *status_text, const char *json_body)
+{
+    char header[512];
+    int body_len = json_body ? (int)strlen(json_body) : 0;
+    int header_len = snprintf(header, sizeof(header),
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %d\r\n"
+        "Connection: close\r\n\r\n",
+        status_code, status_text, body_len);
+    (void)write(client_fd, header, (size_t)header_len);
+    if (json_body && body_len > 0) {
+        (void)write(client_fd, json_body, (size_t)body_len);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Admin API endpoint handlers                                         */
+/* ------------------------------------------------------------------ */
+
+static void handle_api_sessions_list(int client_fd, health_check_config_t *cfg)
+{
+    session_manager_t *mgr = (session_manager_t *)cfg->session_manager;
+    if (!mgr) {
+        send_json_response(client_fd, 503, "Service Unavailable",
+                          "{\"error\":\"session manager not available\"}");
+        return;
+    }
+
+    size_t count = session_manager_get_count(mgr);
+
+    char body[HC_RESP_SIZE];
+    snprintf(body, sizeof(body),
+        "{\"sessions\":[],\"total\":%zu}", count);
+
+    send_json_response(client_fd, 200, "OK", body);
+}
+
+static void handle_api_upstreams_list(int client_fd, health_check_config_t *cfg)
+{
+    router_t *router = (router_t *)cfg->router;
+    if (!router) {
+        send_json_response(client_fd, 503, "Service Unavailable",
+                          "{\"error\":\"router not available\"}");
+        return;
+    }
+
+    size_t n = router_get_upstream_count(router);
+
+    char body[HC_RESP_SIZE];
+    int pos = 0;
+    pos += snprintf(body + pos, sizeof(body) - (size_t)pos, "{\"upstreams\":[");
+
+    for (size_t i = 0; i < n; i++) {
+        upstream_t *u = router_get_upstream(router, (int)i);
+        if (!u) continue;
+        if (i > 0) {
+            pos += snprintf(body + pos, sizeof(body) - (size_t)pos, ",");
+        }
+        const char *health_str = "unknown";
+        if (u->health == UPSTREAM_HEALTH_HEALTHY) health_str = "healthy";
+        else if (u->health == UPSTREAM_HEALTH_UNHEALTHY) health_str = "unhealthy";
+
+        pos += snprintf(body + pos, sizeof(body) - (size_t)pos,
+            "{\"host\":\"%s\",\"port\":%u,\"health\":\"%s\","
+            "\"active_connections\":%zu,\"total_connections\":%zu,"
+            "\"enabled\":%s}",
+            u->config.host, u->config.port, health_str,
+            u->active_connections, u->total_connections,
+            u->config.enabled ? "true" : "false");
+    }
+
+    pos += snprintf(body + pos, sizeof(body) - (size_t)pos,
+        "],\"total\":%zu}", n);
+
+    send_json_response(client_fd, 200, "OK", body);
+}
+
+static void handle_api_reload(int client_fd)
+{
+    kill(getpid(), SIGHUP);
+    send_json_response(client_fd, 200, "OK",
+                      "{\"status\":\"reload triggered\"}");
+}
+
+static void handle_api_config(int client_fd, health_check_config_t *cfg)
+{
+    proxy_config_t *pcfg = (proxy_config_t *)cfg->config;
+    if (!pcfg) {
+        send_json_response(client_fd, 503, "Service Unavailable",
+                          "{\"error\":\"config not available\"}");
+        return;
+    }
+
+    int num_users = 0;
+    for (config_user_t *u = pcfg->users; u; u = u->next) num_users++;
+
+    int num_routes = 0;
+    for (config_route_t *r = pcfg->routes; r; r = r->next) num_routes++;
+
+    char body[4096];
+    snprintf(body, sizeof(body),
+        "{\"bind_addr\":\"%s\",\"port\":%u,\"num_users\":%d,\"num_routes\":%d}",
+        pcfg->bind_addr, pcfg->port, num_users, num_routes);
+
+    send_json_response(client_fd, 200, "OK", body);
+}
+
+/* ------------------------------------------------------------------ */
 /* Request dispatch                                                    */
 /* ------------------------------------------------------------------ */
 
-static void handle_request(int fd)
+static void handle_request(int fd, health_check_config_t *cfg)
 {
     char buf[HC_BUF_SIZE];
     ssize_t n = read(fd, buf, sizeof(buf) - 1);
     if (n <= 0) return;
     buf[n] = '\0';
 
-    /* Minimal HTTP parsing — only care about the request line */
-    if (strncmp(buf, "GET /health", 11) == 0) {
-        handle_health(fd);
-    } else if (strncmp(buf, "GET /metrics", 12) == 0) {
-        handle_metrics(fd);
-    } else {
-        handle_not_found(fd);
+    http_request_t req;
+    if (parse_http_request(buf, &req) != 0) {
+        send_json_response(fd, 400, "Bad Request",
+                          "{\"error\":\"invalid request\"}");
+        return;
     }
+
+    /* Existing endpoints (no auth required) */
+    if (strcmp(req.path, "/health") == 0 && strcmp(req.method, "GET") == 0) {
+        handle_health(fd);
+        return;
+    }
+    if (strcmp(req.path, "/metrics") == 0 && strcmp(req.method, "GET") == 0) {
+        handle_metrics(fd);
+        return;
+    }
+
+    /* Admin API endpoints */
+    if (strncmp(req.path, "/api/v1/", 8) == 0) {
+        if (!cfg->admin_api_enabled) {
+            send_json_response(fd, 404, "Not Found",
+                              "{\"error\":\"not found\"}");
+            return;
+        }
+
+        if (!check_admin_auth(cfg, &req)) {
+            send_json_response(fd, 401, "Unauthorized",
+                              "{\"error\":\"invalid or missing auth token\"}");
+            return;
+        }
+
+        if (strcmp(req.path, "/api/v1/sessions") == 0 &&
+            strcmp(req.method, "GET") == 0) {
+            handle_api_sessions_list(fd, cfg);
+        } else if (strcmp(req.path, "/api/v1/upstreams") == 0 &&
+                   strcmp(req.method, "GET") == 0) {
+            handle_api_upstreams_list(fd, cfg);
+        } else if (strcmp(req.path, "/api/v1/reload") == 0 &&
+                   strcmp(req.method, "POST") == 0) {
+            handle_api_reload(fd);
+        } else if (strcmp(req.path, "/api/v1/config") == 0 &&
+                   strcmp(req.method, "GET") == 0) {
+            handle_api_config(fd, cfg);
+        } else {
+            send_json_response(fd, 404, "Not Found",
+                              "{\"error\":\"endpoint not found\"}");
+        }
+        return;
+    }
+
+    handle_not_found(fd);
 }
 
 /* ------------------------------------------------------------------ */
@@ -186,7 +412,7 @@ static void *health_check_thread(void *arg)
         struct timeval tv = {.tv_sec = 2, .tv_usec = 0};
         setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-        handle_request(client_fd);
+        handle_request(client_fd, &hc->config);
         close(client_fd);
     }
 
@@ -244,6 +470,15 @@ health_check_t *health_check_start(const health_check_config_t *config)
     hc->listen_fd = fd;
     hc->port = port;
     hc->running = true;
+
+    if (config) {
+        hc->config = *config;
+    } else {
+        memset(&hc->config, 0, sizeof(hc->config));
+    }
+    /* Preserve resolved values */
+    hc->config.port = port;
+    hc->config.bind_addr = bind_addr;
 
     if (pthread_create(&hc->thread, NULL, health_check_thread, hc) != 0) {
         LOG_ERROR("health_check pthread_create: %s", strerror(errno));

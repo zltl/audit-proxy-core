@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-03-09
 
 ### Added
-- Apache-2.0 LICENSE file
+- GPL-3.0-only LICENSE file
 - Semantic version management (`include/version.h`)
 - GitHub Actions CI/CD pipeline (`.github/workflows/ci.yml`)
 - Dockerfile for container-based deployment
