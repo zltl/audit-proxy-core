@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cluster"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/collab"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
@@ -46,7 +47,11 @@ type API struct {
 	threat     *threat.Detector
 	compliance *complianceState
 	siemState  *siemState
-	discovery  *discoveryState
+	discovery        *discoveryState
+	collab           *collab.Manager
+	collabChats      map[string]*collab.ChatRoom
+	collabRecordings map[string]*collab.Recorder
+	cmdCtrl          *cmdCtrlState
 }
 
 // userStore holds the in-memory user list backed by a JSON file.

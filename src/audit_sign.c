@@ -207,6 +207,25 @@ void hmac_sha256(const uint8_t *key, size_t key_len,
     sha256_update(&ctx, k_opad, SHA256_BLOCK_SIZE);
     sha256_update(&ctx, inner, SHA256_DIGEST_SIZE);
     sha256_final(&ctx, output);
+
+    /* Clear sensitive key material from stack */
+    explicit_bzero(k_ipad, sizeof(k_ipad));
+    explicit_bzero(k_opad, sizeof(k_opad));
+    explicit_bzero(tk, sizeof(tk));
+    explicit_bzero(inner, sizeof(inner));
+}
+
+/* ===== Constant-time comparison ===== */
+
+static int ct_memcmp(const void *a, const void *b, size_t len)
+{
+    const volatile uint8_t *x = (const volatile uint8_t *)a;
+    const volatile uint8_t *y = (const volatile uint8_t *)b;
+    volatile uint8_t diff = 0;
+    for (size_t i = 0; i < len; i++) {
+        diff |= x[i] ^ y[i];
+    }
+    return (int)diff;
 }
 
 /* ===== Hex utilities ===== */
@@ -478,8 +497,8 @@ int audit_verify_log(const char *path, const char *hex_key)
                     (const uint8_t *)content_buf, (size_t)content_len,
                     expected_hmac);
 
-        /* Compare */
-        if (memcmp(claimed_hmac, expected_hmac, SHA256_DIGEST_SIZE) != 0) {
+        /* Constant-time compare */
+        if (ct_memcmp(claimed_hmac, expected_hmac, SHA256_DIGEST_SIZE) != 0) {
             audit_verify_error_line = line_num;
             audit_verify_error_msg = "HMAC verification failed";
             fclose(f);
@@ -502,7 +521,7 @@ int audit_verify_log(const char *path, const char *hex_key)
                 return -1;
             }
 
-            if (memcmp(claimed_prev, prev_hash, SHA256_DIGEST_SIZE) != 0) {
+            if (ct_memcmp(claimed_prev, prev_hash, SHA256_DIGEST_SIZE) != 0) {
                 audit_verify_error_line = line_num;
                 audit_verify_error_msg = "chain hash mismatch";
                 fclose(f);

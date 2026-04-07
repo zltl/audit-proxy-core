@@ -249,6 +249,12 @@ static void hc_hmac_sha256_raw(const uint8_t *key, size_t key_len,
     hc_sha256_update(&ctx, k_opad, 64);
     hc_sha256_update(&ctx, inner, 32);
     hc_sha256_final(&ctx, output);
+
+    /* Clear sensitive key material from stack */
+    explicit_bzero(k_ipad, sizeof(k_ipad));
+    explicit_bzero(k_opad, sizeof(k_opad));
+    explicit_bzero(tk, sizeof(tk));
+    explicit_bzero(inner, sizeof(inner));
 }
 
 int health_check_hmac_sha256(const void *key, size_t key_len,
@@ -460,9 +466,18 @@ static hc_auth_result_t check_admin_auth(const health_check_config_t *cfg,
         return health_check_validate_token(req->auth_header, secret, expiry);
     }
 
-    /* Simple string comparison (backward compatible) */
-    if (strcmp(cfg->admin_auth_token, req->auth_header) == 0) {
-        return HC_AUTH_OK_ADMIN;
+    /* Constant-time string comparison (backward compatible) */
+    {
+        const char *a = cfg->admin_auth_token;
+        const char *b = req->auth_header;
+        size_t alen = strlen(a);
+        size_t blen = strlen(b);
+        volatile uint8_t diff = (alen != blen) ? 1 : 0;
+        size_t cmp_len = alen < blen ? alen : blen;
+        for (size_t i = 0; i < cmp_len; i++) {
+            diff |= (uint8_t)(a[i] ^ b[i]);
+        }
+        if (diff == 0) return HC_AUTH_OK_ADMIN;
     }
     return HC_AUTH_DENIED;
 }
