@@ -13,6 +13,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "account_lock.h"
+#include "password_policy.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -86,6 +89,10 @@ typedef struct proxy_config {
     char banner_path[CONFIG_MAX_PRIVKEY_PATH]; /* Pre-auth banner file path */
     char motd[1024];                           /* Post-auth message of the day */
     bool show_progress;                    /* Show connection progress to client */
+
+    /* Security (P1.4 / P1.5) */
+    account_lock_config_t lockout;             /* Account lockout settings */
+    password_policy_t password_policy;         /* Password complexity policy */
 } proxy_config_t;
 
 /**
@@ -188,6 +195,30 @@ config_policy_t *config_find_policy(const proxy_config_t *config,
  * @return 0 on success, -1 on error
  */
 int config_reload(proxy_config_t *config, const char *path);
+
+/**
+ * @brief Expand environment variable and file references in a value
+ *
+ * Supports two expansion forms:
+ *   ${env:VARNAME}    — replaced by the environment variable VARNAME
+ *   ${file:/path}     — replaced by the first line of the given file
+ *
+ * @param value   Input string to expand
+ * @param out     Output buffer for expanded string
+ * @param out_len Size of output buffer
+ * @return 0 on success, -1 on expansion error
+ */
+int config_expand_env(const char *value, char *out, size_t out_len);
+
+/**
+ * @brief Securely clear sensitive fields in configuration
+ *
+ * Overwrites password hashes and other sensitive data with zeros using
+ * explicit_bzero() to prevent compiler optimisation from eliding the clear.
+ *
+ * @param config Configuration instance
+ */
+void config_clear_sensitive(proxy_config_t *config);
 
 /* Configuration validation severity */
 typedef enum {

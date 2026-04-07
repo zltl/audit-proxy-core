@@ -4,6 +4,7 @@
  */
 
 #include "auth_filter.h"
+#include "account_lock.h"
 #include "logger.h"
 
 #include <stdlib.h>
@@ -105,6 +106,13 @@ static filter_status_t auth_on_auth(filter_t *filter, filter_context_t *ctx)
         return FILTER_REJECT;
     }
 
+    /* Check account lockout before attempting auth */
+    if (ctx->username != NULL && account_is_locked(ctx->username)) {
+        LOG_WARN("Authentication rejected: account '%s' is locked",
+                 ctx->username);
+        return FILTER_REJECT;
+    }
+
     auth_result_t result = AUTH_RESULT_FAILURE;
 
     /* Password authentication */
@@ -167,10 +175,12 @@ static filter_status_t auth_on_auth(filter_t *filter, filter_context_t *ctx)
 
     if (result == AUTH_RESULT_SUCCESS) {
         LOG_INFO("Authentication successful for user '%s'", ctx->username);
+        account_record_success(ctx->username);
         return FILTER_CONTINUE;
     }
 
     LOG_WARN("Authentication failed for user '%s'", ctx->username);
+    account_record_failure(ctx->username);
     return FILTER_REJECT;
 }
 

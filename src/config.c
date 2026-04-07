@@ -29,7 +29,8 @@ typedef enum {
     SECTION_LIMITS,
     SECTION_USER,
     SECTION_ROUTE,
-    SECTION_POLICY
+    SECTION_POLICY,
+    SECTION_SECURITY
 } config_section_t;
 
 /* Helper: trim whitespace */
@@ -74,6 +75,7 @@ static config_section_t parse_section(const char *line)
     if (strcmp(section, "server") == 0) return SECTION_SERVER;
     if (strcmp(section, "logging") == 0) return SECTION_LOGGING;
     if (strcmp(section, "limits") == 0) return SECTION_LIMITS;
+    if (strcmp(section, "security") == 0) return SECTION_SECURITY;
     if (strncmp(section, "user:", 5) == 0) return SECTION_USER;
     if (strncmp(section, "route:", 6) == 0) return SECTION_ROUTE;
     if (strncmp(section, "policy:", 7) == 0) return SECTION_POLICY;
@@ -136,6 +138,110 @@ static int parse_key_value(const char *line, char *key, size_t key_len,
         value[vlen - 2] = '\0';
     }
     
+    /* Expand ${env:...} and ${file:...} references */
+    char expanded[CONFIG_MAX_LINE];
+    if (config_expand_env(value, expanded, sizeof(expanded)) == 0) {
+        strncpy(value, expanded, value_len - 1);
+        value[value_len - 1] = '\0';
+    }
+    
+    return 0;
+}
+
+/* Check if a value looks like plaintext (no ${env:} or ${file:} ref) */
+static bool is_plaintext_value(const char *value)
+{
+    if (value == NULL || value[0] == '\0') {
+        return false;
+    }
+    return (strstr(value, "${env:") == NULL &&
+            strstr(value, "${file:") == NULL);
+}
+
+int config_expand_env(const char *value, char *out, size_t out_len)
+{
+    if (value == NULL || out == NULL || out_len == 0) {
+        return -1;
+    }
+
+    const char *src = value;
+    size_t pos = 0;
+
+    while (*src != '\0' && pos < out_len - 1) {
+        /* Look for ${env:...} or ${file:...} */
+        if (src[0] == '$' && src[1] == '{') {
+            const char *close = strchr(src + 2, '}');
+            if (close == NULL) {
+                /* No closing brace — copy literally */
+                out[pos++] = *src++;
+                continue;
+            }
+
+            /* Extract the prefix:body between ${ and } */
+            size_t inner_len = close - (src + 2);
+            char inner[CONFIG_MAX_LINE];
+            if (inner_len >= sizeof(inner)) {
+                inner_len = sizeof(inner) - 1;
+            }
+            memcpy(inner, src + 2, inner_len);
+            inner[inner_len] = '\0';
+
+            const char *replacement = NULL;
+            char file_buf[CONFIG_MAX_LINE];
+
+            if (strncmp(inner, "env:", 4) == 0) {
+                const char *varname = inner + 4;
+                replacement = getenv(varname);
+                if (replacement == NULL) {
+                    LOG_WARN("config: environment variable '%s' not set",
+                             varname);
+                    /* Leave empty */
+                    replacement = "";
+                }
+            } else if (strncmp(inner, "file:", 5) == 0) {
+                const char *filepath = inner + 5;
+                FILE *fp = fopen(filepath, "r");
+                if (fp == NULL) {
+                    LOG_WARN("config: cannot open file '%s' for expansion",
+                             filepath);
+                    replacement = "";
+                } else {
+                    if (fgets(file_buf, sizeof(file_buf), fp) != NULL) {
+                        /* Strip trailing newline */
+                        size_t flen = strlen(file_buf);
+                        while (flen > 0 &&
+                               (file_buf[flen - 1] == '\n' ||
+                                file_buf[flen - 1] == '\r')) {
+                            file_buf[--flen] = '\0';
+                        }
+                        replacement = file_buf;
+                    } else {
+                        replacement = "";
+                    }
+                    fclose(fp);
+                }
+            } else {
+                /* Unknown prefix — copy literally */
+                out[pos++] = *src++;
+                continue;
+            }
+
+            /* Copy replacement into output */
+            size_t rlen = strlen(replacement);
+            if (pos + rlen >= out_len) {
+                rlen = out_len - pos - 1;
+            }
+            memcpy(out + pos, replacement, rlen);
+            pos += rlen;
+
+            /* Advance past ${...} */
+            src = close + 1;
+        } else {
+            out[pos++] = *src++;
+        }
+    }
+
+    out[pos] = '\0';
     return 0;
 }
 
@@ -166,6 +272,12 @@ proxy_config_t *config_create(void)
     config->log_port_forwards = true;
     config->show_progress = true;  /* Enable by default */
     
+    /* Security defaults */
+    config->lockout.lockout_enabled = false;
+    config->lockout.lockout_threshold = 5;
+    config->lockout.lockout_duration_sec = 300;
+    config->password_policy = password_policy_defaults();
+    
     return config;
 }
 
@@ -173,10 +285,14 @@ void config_destroy(proxy_config_t *config)
 {
     if (config == NULL) return;
     
+    /* Clear sensitive data before freeing */
+    config_clear_sensitive(config);
+    
     /* Free users */
     config_user_t *user = config->users;
     while (user != NULL) {
         config_user_t *next = user->next;
+        explicit_bzero(user->password_hash, sizeof(user->password_hash));
         free(user->pubkeys);
         free(user);
         user = next;
@@ -199,6 +315,17 @@ void config_destroy(proxy_config_t *config)
     }
     
     free(config);
+}
+
+void config_clear_sensitive(proxy_config_t *config)
+{
+    if (config == NULL) return;
+
+    config_user_t *user = config->users;
+    while (user != NULL) {
+        explicit_bzero(user->password_hash, sizeof(user->password_hash));
+        user = user->next;
+    }
 }
 
 int config_add_user(proxy_config_t *config,
@@ -767,6 +894,38 @@ proxy_config_t *config_load(const char *path)
             }
             break;
             
+        case SECTION_SECURITY:
+            if (strcmp(key, "lockout_enabled") == 0) {
+                config->lockout.lockout_enabled =
+                    (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 ||
+                     strcmp(value, "yes") == 0);
+            } else if (strcmp(key, "lockout_threshold") == 0) {
+                config->lockout.lockout_threshold = (uint32_t)atoi(value);
+            } else if (strcmp(key, "lockout_duration") == 0) {
+                config->lockout.lockout_duration_sec = (uint32_t)atoi(value);
+            } else if (strcmp(key, "password_min_length") == 0) {
+                config->password_policy.min_length = (uint32_t)atoi(value);
+            } else if (strcmp(key, "password_require_uppercase") == 0) {
+                config->password_policy.require_uppercase =
+                    (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 ||
+                     strcmp(value, "yes") == 0);
+            } else if (strcmp(key, "password_require_lowercase") == 0) {
+                config->password_policy.require_lowercase =
+                    (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 ||
+                     strcmp(value, "yes") == 0);
+            } else if (strcmp(key, "password_require_digit") == 0) {
+                config->password_policy.require_digit =
+                    (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 ||
+                     strcmp(value, "yes") == 0);
+            } else if (strcmp(key, "password_require_special") == 0) {
+                config->password_policy.require_special =
+                    (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 ||
+                     strcmp(value, "yes") == 0);
+            } else if (strcmp(key, "password_max_age_days") == 0) {
+                config->password_policy.max_age_days = (uint32_t)atoi(value);
+            }
+            break;
+            
         default:
             /* Global section or unknown */
             break;
@@ -849,6 +1008,14 @@ proxy_config_t *config_load(const char *path)
                      u->username);
             warnings++;
         }
+        /* Warn about plaintext sensitive fields */
+        if (u->password_hash[0] != '\0' &&
+            is_plaintext_value(u->password_hash)) {
+            LOG_WARN("Config validation: user '%s' password_hash appears to "
+                     "be plaintext (consider using ${env:} or ${file:})",
+                     u->username);
+            warnings++;
+        }
     }
 
     if (warnings > 0) {
@@ -909,6 +1076,8 @@ int config_reload(proxy_config_t *config, const char *path)
     memcpy(config->banner_path, new_config->banner_path, sizeof(config->banner_path));
     memcpy(config->motd, new_config->motd, sizeof(config->motd));
     config->show_progress = new_config->show_progress;
+    config->lockout = new_config->lockout;
+    config->password_policy = new_config->password_policy;
     
     /* Free shell only, not contents (transferred to config) */
     new_config->users = NULL;

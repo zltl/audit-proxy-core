@@ -456,6 +456,135 @@ static int test_config_load_routes(void) {
     return 1;
 }
 
+/* Test: ${env:VAR} expansion */
+static int test_config_env_expansion(void) {
+    /* Set a test environment variable */
+    setenv("SSH_PROXY_TEST_VAR", "expanded_value", 1);
+    
+    char out[256];
+    if (config_expand_env("prefix_${env:SSH_PROXY_TEST_VAR}_suffix", out, sizeof(out)) != 0) {
+        return 0;
+    }
+    
+    if (strcmp(out, "prefix_expanded_value_suffix") != 0) {
+        printf("  Got: '%s'\n", out);
+        return 0;
+    }
+    
+    unsetenv("SSH_PROXY_TEST_VAR");
+    return 1;
+}
+
+/* Test: ${file:path} expansion */
+static int test_config_file_expansion(void) {
+    /* Create a temp file with a known value */
+    const char *filepath = "test_expand_file.txt";
+    FILE *fp = fopen(filepath, "w");
+    if (fp == NULL) return 0;
+    fprintf(fp, "file_secret_value\n");
+    fclose(fp);
+    
+    char pattern[512];
+    snprintf(pattern, sizeof(pattern), "${file:%s}", filepath);
+    
+    char out[256];
+    if (config_expand_env(pattern, out, sizeof(out)) != 0) {
+        unlink(filepath);
+        return 0;
+    }
+    
+    if (strcmp(out, "file_secret_value") != 0) {
+        printf("  Got: '%s'\n", out);
+        unlink(filepath);
+        return 0;
+    }
+    
+    unlink(filepath);
+    return 1;
+}
+
+/* Test: missing env var expands to empty */
+static int test_config_missing_env(void) {
+    unsetenv("SSH_PROXY_NONEXISTENT_VAR_12345");
+    
+    char out[256];
+    if (config_expand_env("${env:SSH_PROXY_NONEXISTENT_VAR_12345}", out, sizeof(out)) != 0) {
+        return 0;
+    }
+    
+    if (strcmp(out, "") != 0) {
+        printf("  Got: '%s'\n", out);
+        return 0;
+    }
+    
+    return 1;
+}
+
+/* Test: no expansion pattern passes through */
+static int test_config_no_expansion(void) {
+    char out[256];
+    if (config_expand_env("plain_value", out, sizeof(out)) != 0) {
+        return 0;
+    }
+    
+    if (strcmp(out, "plain_value") != 0) {
+        return 0;
+    }
+    
+    return 1;
+}
+
+/* Test: config loads security section */
+static int test_config_load_security(void) {
+    const char *content =
+        "[security]\n"
+        "lockout_enabled = true\n"
+        "lockout_threshold = 10\n"
+        "lockout_duration = 600\n"
+        "password_min_length = 12\n"
+        "password_require_uppercase = true\n"
+        "password_require_digit = false\n";
+
+    if (create_test_config(content) != 0) return 0;
+
+    proxy_config_t *config = config_load(TEST_CONFIG_PATH);
+    if (config == NULL) return 0;
+
+    if (!config->lockout.lockout_enabled) {
+        config_destroy(config);
+        return 0;
+    }
+
+    if (config->lockout.lockout_threshold != 10) {
+        config_destroy(config);
+        return 0;
+    }
+
+    if (config->lockout.lockout_duration_sec != 600) {
+        config_destroy(config);
+        return 0;
+    }
+
+    if (config->password_policy.min_length != 12) {
+        config_destroy(config);
+        return 0;
+    }
+
+    if (!config->password_policy.require_uppercase) {
+        config_destroy(config);
+        return 0;
+    }
+
+    if (config->password_policy.require_digit) {
+        config_destroy(config);
+        return 0;
+    }
+
+    config_destroy(config);
+    unlink(TEST_CONFIG_PATH);
+    return 1;
+}
+
 int main(void) {
     printf("=== Configuration Module Tests ===\n\n");
     
@@ -471,6 +600,11 @@ int main(void) {
     RUN_TEST(test_config_null_handling);
     RUN_TEST(test_config_routes);
     RUN_TEST(test_config_load_routes);
+    RUN_TEST(test_config_env_expansion);
+    RUN_TEST(test_config_file_expansion);
+    RUN_TEST(test_config_missing_env);
+    RUN_TEST(test_config_no_expansion);
+    RUN_TEST(test_config_load_security);
     
     log_shutdown();
     
