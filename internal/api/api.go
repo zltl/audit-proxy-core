@@ -8,6 +8,7 @@ import (
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/threat"
 )
 
 // Config holds API-specific configuration.
@@ -41,7 +42,10 @@ type API struct {
 	servers  *serverStore
 	jitStore *jit.Store
 	ca       *sshca.CA
-	cluster  *cluster.Manager
+	cluster    *cluster.Manager
+	threat     *threat.Detector
+	compliance *complianceState
+	siemState  *siemState
 }
 
 // userStore holds the in-memory user list backed by a JSON file.
