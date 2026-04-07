@@ -1,0 +1,245 @@
+{{template "base" .}}
+
+{{define "title"}}Dashboard{{end}}
+
+{{define "page-title"}}Dashboard{{end}}
+
+{{define "content"}}
+<!-- Stats Row -->
+<div class="stats-grid" id="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon blue">🖥️</div>
+        <div class="stat-info">
+            <div class="stat-label">Active Sessions</div>
+            <div class="stat-value" id="stat-sessions">—</div>
+            <div class="stat-sub" id="stat-sessions-sub">Loading…</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon green">👥</div>
+        <div class="stat-info">
+            <div class="stat-label">Total Users</div>
+            <div class="stat-value" id="stat-users">—</div>
+            <div class="stat-sub" id="stat-users-sub">Loading…</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon amber">🖧</div>
+        <div class="stat-info">
+            <div class="stat-label">Total Servers</div>
+            <div class="stat-value" id="stat-servers">—</div>
+            <div class="stat-sub" id="stat-servers-sub">Loading…</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon red">🔑</div>
+        <div class="stat-info">
+            <div class="stat-label">Auth Success Rate</div>
+            <div class="stat-value" id="stat-auth">—</div>
+            <div class="stat-sub" id="stat-auth-sub">Loading…</div>
+        </div>
+    </div>
+</div>
+
+<!-- Main Panels -->
+<div class="grid grid-2" style="align-items:start;">
+    <!-- Recent Sessions -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Recent Sessions</h3>
+            <a href="/sessions" class="btn btn-ghost btn-sm">View All →</a>
+        </div>
+        <div class="table-wrapper" id="recent-sessions-table" data-skeleton-rows="5">
+            <table>
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Target</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="recent-sessions-body">
+                    <tr><td colspan="4" class="table-empty">
+                        <div class="skeleton skeleton-row"></div>
+                        <div class="skeleton skeleton-row"></div>
+                        <div class="skeleton skeleton-row"></div>
+                    </td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Recent Audit Events -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Recent Events</h3>
+            <a href="/audit" class="btn btn-ghost btn-sm">View All →</a>
+        </div>
+        <div class="card-body" id="recent-events">
+            <div class="timeline" id="events-timeline">
+                <div class="skeleton skeleton-row"></div>
+                <div class="skeleton skeleton-row"></div>
+                <div class="skeleton skeleton-row"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="mt-lg grid grid-2" style="align-items:start;">
+    <!-- Server Health -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Server Health</h3>
+            <a href="/servers" class="btn btn-ghost btn-sm">Manage →</a>
+        </div>
+        <div class="card-body" id="server-health-grid">
+            <div class="grid grid-auto" id="server-health-items">
+                <div class="skeleton skeleton-card"></div>
+                <div class="skeleton skeleton-card"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Quick Actions</h3>
+        </div>
+        <div class="card-body">
+            <div class="grid grid-2 gap-sm">
+                <button class="btn btn-danger" id="btn-kill-all" onclick="dashKillAll()">
+                    ⏹ Kill All Sessions
+                </button>
+                <button class="btn btn-primary" id="btn-reload" onclick="dashReloadConfig()">
+                    🔄 Reload Config
+                </button>
+                <a href="/users" class="btn btn-secondary">👥 Manage Users</a>
+                <a href="/audit" class="btn btn-secondary">📋 View Audit Log</a>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+(function() {
+    function loadDashboard() {
+        App.api('GET', '/api/v1/dashboard/stats').then(function(data) {
+            document.getElementById('stat-sessions').textContent = data.active_sessions || 0;
+            document.getElementById('stat-sessions-sub').textContent = (data.total_sessions || 0) + ' total today';
+            document.getElementById('stat-users').textContent = data.total_users || 0;
+            document.getElementById('stat-users-sub').textContent = (data.active_users || 0) + ' active now';
+            document.getElementById('stat-servers').textContent = data.total_servers || 0;
+            document.getElementById('stat-servers-sub').textContent = (data.healthy_servers || 0) + ' healthy';
+            var rate = data.auth_success_rate != null ? data.auth_success_rate.toFixed(1) + '%' : '—';
+            document.getElementById('stat-auth').textContent = rate;
+            document.getElementById('stat-auth-sub').textContent = (data.auth_failures_today || 0) + ' failures today';
+        }).catch(function() {
+            document.getElementById('stat-sessions').textContent = '0';
+            document.getElementById('stat-sessions-sub').textContent = 'Unable to load';
+        });
+
+        App.api('GET', '/api/v1/sessions?limit=10&sort=start_time&order=desc').then(function(data) {
+            var tbody = document.getElementById('recent-sessions-body');
+            var items = data.sessions || data.items || data || [];
+            if (!items.length) {
+                tbody.innerHTML = '<tr><td colspan="4" class="table-empty">No sessions found</td></tr>';
+                return;
+            }
+            tbody.innerHTML = items.slice(0, 10).map(function(s) {
+                var statusCls = s.status === 'active' ? 'badge-success' : 'badge-neutral';
+                return '<tr>' +
+                    '<td>' + App.escapeHtml(s.user || s.username || '—') + '</td>' +
+                    '<td>' + App.escapeHtml(s.target || s.upstream || '—') + '</td>' +
+                    '<td>' + App.formatDuration(s.duration) + '</td>' +
+                    '<td><span class="badge ' + statusCls + '">' + App.escapeHtml(s.status || 'unknown') + '</span></td>' +
+                    '</tr>';
+            }).join('');
+        }).catch(function() {
+            document.getElementById('recent-sessions-body').innerHTML =
+                '<tr><td colspan="4" class="table-empty">Failed to load sessions</td></tr>';
+        });
+
+        App.api('GET', '/api/v1/audit?limit=8&sort=timestamp&order=desc').then(function(data) {
+            var container = document.getElementById('events-timeline');
+            var items = data.events || data.items || data || [];
+            if (!items.length) {
+                container.innerHTML = '<p class="text-muted text-center">No events yet</p>';
+                return;
+            }
+            container.innerHTML = items.slice(0, 8).map(function(ev) {
+                var dotCls = 'info';
+                if (ev.event_type === 'auth.failure' || ev.event_type === 'error') dotCls = 'danger';
+                else if (ev.event_type === 'session.open') dotCls = 'success';
+                else if (ev.event_type === 'session.close') dotCls = 'warning';
+                return '<div class="timeline-item">' +
+                    '<div class="timeline-dot ' + dotCls + '"></div>' +
+                    '<div class="timeline-time">' + App.timeAgo(ev.timestamp) + '</div>' +
+                    '<div class="timeline-content">' +
+                        '<strong>' + App.escapeHtml(ev.event_type || ev.type || '') + '</strong> — ' +
+                        App.escapeHtml(ev.user || '') + ' ' + App.escapeHtml(ev.details || ev.message || '') +
+                    '</div></div>';
+            }).join('');
+        }).catch(function() {
+            document.getElementById('events-timeline').innerHTML =
+                '<p class="text-muted text-center">Failed to load events</p>';
+        });
+
+        App.api('GET', '/api/v1/upstreams').then(function(data) {
+            var container = document.getElementById('server-health-items');
+            var items = data.upstreams || data.servers || data || [];
+            if (!items.length) {
+                container.innerHTML = '<p class="text-muted">No servers configured</p>';
+                return;
+            }
+            container.innerHTML = items.map(function(srv) {
+                var dot = srv.healthy !== false ? 'online' : 'offline';
+                return '<div class="server-card">' +
+                    '<div class="server-card-header">' +
+                        '<span class="server-card-name">' + App.escapeHtml(srv.host || srv.address || srv.name || '—') + '</span>' +
+                        '<span class="status-dot ' + dot + '"></span>' +
+                    '</div>' +
+                    '<div class="server-card-stats">' +
+                        '<div><div class="server-card-stat-value">' + (srv.connections || 0) + '</div><div class="server-card-stat-label">Conns</div></div>' +
+                        '<div><div class="server-card-stat-value">' + (srv.latency_ms != null ? srv.latency_ms + 'ms' : '—') + '</div><div class="server-card-stat-label">Latency</div></div>' +
+                        '<div><div class="server-card-stat-value">' + (srv.port || '—') + '</div><div class="server-card-stat-label">Port</div></div>' +
+                    '</div></div>';
+            }).join('');
+        }).catch(function() {
+            document.getElementById('server-health-items').innerHTML =
+                '<p class="text-muted">Failed to load servers</p>';
+        });
+    }
+
+    window.dashKillAll = async function() {
+        var ok = await App.confirm('Are you sure you want to kill ALL active sessions?');
+        if (!ok) return;
+        App.btnLoading('#btn-kill-all', true);
+        try {
+            await App.api('POST', '/api/v1/sessions/kill-all');
+            App.notify('All sessions terminated', 'success');
+            loadDashboard();
+        } catch(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+        App.btnLoading('#btn-kill-all', false);
+    };
+
+    window.dashReloadConfig = async function() {
+        App.btnLoading('#btn-reload', true);
+        try {
+            await App.api('POST', '/api/v1/reload');
+            App.notify('Configuration reloaded', 'success');
+        } catch(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+        App.btnLoading('#btn-reload', false);
+    };
+
+    var refresher = App.autoRefresh(loadDashboard, 30000);
+    refresher.start();
+})();
+</script>
+{{end}}

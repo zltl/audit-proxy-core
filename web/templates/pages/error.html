@@ -1,0 +1,42 @@
+{{define "title"}}Error{{end}}
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.ErrorCode}} — SSH Proxy Core</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="error-page">
+        <div>
+            <div class="error-code">{{.ErrorCode}}</div>
+            <h1 class="error-title">
+                {{if eq .ErrorCode 404}}Page Not Found
+                {{else if eq .ErrorCode 403}}Access Denied
+                {{else if eq .ErrorCode 500}}Internal Server Error
+                {{else}}Something Went Wrong
+                {{end}}
+            </h1>
+            <p class="error-message">
+                {{if .ErrorMessage}}
+                    {{.ErrorMessage}}
+                {{else if eq .ErrorCode 404}}
+                    The page you're looking for doesn't exist or has been moved.
+                {{else if eq .ErrorCode 403}}
+                    You don't have permission to access this resource. Please contact your administrator.
+                {{else if eq .ErrorCode 500}}
+                    An unexpected error occurred. Our team has been notified and is working on it.
+                {{else}}
+                    An unexpected error occurred. Please try again later.
+                {{end}}
+            </p>
+            <div class="error-actions">
+                <a href="javascript:history.back()" class="btn btn-secondary">← Go Back</a>
+                <a href="/dashboard" class="btn btn-primary">Go to Dashboard</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

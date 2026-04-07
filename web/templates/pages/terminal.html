@@ -1,0 +1,175 @@
+{{template "base" .}}
+
+{{define "title"}}Terminal{{end}}
+
+{{define "page-title"}}Web Terminal{{end}}
+
+{{define "content"}}
+<div class="terminal-container">
+    <div class="terminal-toolbar">
+        <div class="terminal-toolbar-left">
+            <div class="terminal-status">
+                <span class="terminal-status-dot disconnected" id="terminal-status-dot"></span>
+                <span id="terminal-status-text">Disconnected</span>
+            </div>
+            <select id="terminal-host-select">
+                <option value="">Select a server…</option>
+                {{range .Servers}}
+                <option value="{{.Host}}:{{.Port}}">{{.Host}}:{{.Port}}</option>
+                {{end}}
+            </select>
+            <button onclick="connectTerminal()" id="terminal-connect-btn">Connect</button>
+        </div>
+        <div class="terminal-toolbar-right">
+            <button onclick="changeFontSize(-1)" title="Decrease font size">A-</button>
+            <button onclick="changeFontSize(1)" title="Increase font size">A+</button>
+            <button onclick="toggleFullscreen()" title="Fullscreen">⛶</button>
+            <button onclick="disconnectTerminal()" id="terminal-disconnect-btn" disabled>Disconnect</button>
+        </div>
+    </div>
+
+    <div id="terminal"></div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<!-- xterm.js loaded from vendor if available -->
+<link rel="stylesheet" href="/static/vendor/xterm.css" onerror="">
+<script src="/static/vendor/xterm.js" onerror=""></script>
+<script src="/static/vendor/xterm-addon-fit.js" onerror=""></script>
+<script>
+(function() {
+    var term = null;
+    var wsConn = null;
+    var fontSize = 14;
+
+    function initTerminal() {
+        if (typeof Terminal === 'undefined') {
+            document.getElementById('terminal').innerHTML =
+                '<div style="color:var(--terminal-text);padding:40px;text-align:center;">' +
+                '<p style="font-size:18px;margin-bottom:12px;">⚠ Terminal library not loaded</p>' +
+                '<p style="color:#8b949e;">Place xterm.js files in <code>/static/vendor/</code> to enable the web terminal.</p>' +
+                '</div>';
+            return;
+        }
+
+        term = new Terminal({
+            fontSize: fontSize,
+            fontFamily: '"Cascadia Code", "Fira Code", "Menlo", "Consolas", monospace',
+            theme: {
+                background: '#0d1117',
+                foreground: '#c9d1d9',
+                cursor: '#58a6ff',
+                selectionBackground: '#264f78',
+            },
+            cursorBlink: true,
+            allowTransparency: true,
+        });
+
+        var fitAddon = null;
+        if (typeof FitAddon !== 'undefined') {
+            fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+        }
+
+        term.open(document.getElementById('terminal'));
+        if (fitAddon) fitAddon.fit();
+
+        term.writeln('SSH Proxy Core — Web Terminal');
+        term.writeln('Select a server above and click Connect.\r\n');
+
+        term.onData(function(data) {
+            if (wsConn) wsConn.send(data);
+        });
+
+        window.addEventListener('resize', function() {
+            if (fitAddon) fitAddon.fit();
+            if (wsConn) {
+                wsConn.send(JSON.stringify({
+                    type: 'resize',
+                    cols: term.cols,
+                    rows: term.rows,
+                }));
+            }
+        });
+    }
+
+    window.connectTerminal = function() {
+        var host = document.getElementById('terminal-host-select').value;
+        if (!host) {
+            App.notify('Please select a server', 'warning');
+            return;
+        }
+        if (!term) {
+            App.notify('Terminal not initialized', 'error');
+            return;
+        }
+
+        setStatus('connecting');
+        term.clear();
+        term.writeln('Connecting to ' + host + '…\r\n');
+
+        wsConn = App.ws('/api/v1/terminal/ws?host=' + encodeURIComponent(host), {
+            onOpen: function() {
+                setStatus('connected');
+                document.getElementById('terminal-disconnect-btn').disabled = false;
+                document.getElementById('terminal-connect-btn').disabled = true;
+                wsConn.send(JSON.stringify({
+                    type: 'resize',
+                    cols: term.cols,
+                    rows: term.rows,
+                }));
+            },
+            onMessage: function(data) {
+                if (typeof data === 'string') {
+                    term.write(data);
+                } else if (data.output) {
+                    term.write(data.output);
+                }
+            },
+            onClose: function() {
+                setStatus('disconnected');
+                document.getElementById('terminal-disconnect-btn').disabled = true;
+                document.getElementById('terminal-connect-btn').disabled = false;
+                if (term) term.writeln('\r\n\x1b[31mConnection closed.\x1b[0m');
+            },
+            onError: function() {
+                setStatus('disconnected');
+                App.notify('Terminal connection error', 'error');
+            },
+            maxReconnect: 0,
+        });
+    };
+
+    window.disconnectTerminal = function() {
+        if (wsConn) {
+            wsConn.close();
+            wsConn = null;
+        }
+    };
+
+    function setStatus(s) {
+        var dot = document.getElementById('terminal-status-dot');
+        var text = document.getElementById('terminal-status-text');
+        dot.className = 'terminal-status-dot ' + s;
+        text.textContent = s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    window.changeFontSize = function(delta) {
+        fontSize = Math.max(8, Math.min(24, fontSize + delta));
+        if (term) term.options.fontSize = fontSize;
+    };
+
+    window.toggleFullscreen = function() {
+        var el = document.querySelector('.terminal-container');
+        if (!document.fullscreenElement) {
+            el.requestFullscreen().catch(function() {});
+        } else {
+            document.exitFullscreen();
+        }
+    };
+
+    initTerminal();
+})();
+</script>
+{{end}}

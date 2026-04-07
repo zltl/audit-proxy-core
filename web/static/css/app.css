@@ -1,0 +1,10 @@
+/* SSH Proxy Control Plane – base styles */
+*, *::before, *::after { box-sizing: border-box; }
+body { font-family: system-ui, sans-serif; margin: 0; padding: 0; background: #f5f5f5; color: #222; }
+nav { background: #1a1a2e; color: #fff; padding: .75rem 1.5rem; display: flex; align-items: center; gap: 1rem; }
+nav span:first-child { font-weight: 700; margin-right: auto; }
+main { max-width: 72rem; margin: 2rem auto; padding: 0 1rem; }
+.error { color: #c0392b; }
+form label { display: block; margin-bottom: .75rem; }
+form input { display: block; margin-top: .25rem; padding: .4rem .6rem; }
+button { padding: .5rem 1rem; cursor: pointer; }

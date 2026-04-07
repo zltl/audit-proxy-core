@@ -1,0 +1,211 @@
+{{template "base" .}}
+
+{{define "title"}}Sessions{{end}}
+
+{{define "page-title"}}Sessions{{end}}
+
+{{define "content"}}
+<!-- Toolbar -->
+<div class="toolbar">
+    <div class="toolbar-left">
+        <div class="filter-group">
+            <select class="form-control" id="filter-status" style="width:140px;">
+                <option value="">All Status</option>
+                <option value="active">Active</option>
+                <option value="closed">Closed</option>
+                <option value="killed">Killed</option>
+            </select>
+            <div class="search-input">
+                <input type="text" id="filter-user" placeholder="Search user…">
+            </div>
+            <input type="date" class="form-control" id="filter-date-from" style="width:150px;" title="From date">
+            <input type="date" class="form-control" id="filter-date-to" style="width:150px;" title="To date">
+            <button class="btn btn-secondary btn-sm" onclick="loadSessions()">🔍 Filter</button>
+        </div>
+    </div>
+    <div class="toolbar-right">
+        <button class="btn btn-danger btn-sm" id="btn-kill-selected" style="display:none;" onclick="killSelected()">
+            ⏹ Kill Selected
+        </button>
+        <button class="btn btn-secondary btn-sm" onclick="loadSessions()">↻ Refresh</button>
+    </div>
+</div>
+
+<!-- Sessions Table -->
+<div class="card">
+    <div class="table-wrapper">
+        <table id="sessions-table">
+            <thead>
+                <tr>
+                    <th class="col-check"><input type="checkbox" class="select-all"></th>
+                    <th class="sortable">ID <span class="sort-icon">↕</span></th>
+                    <th class="sortable">User <span class="sort-icon">↕</span></th>
+                    <th class="sortable">Source IP <span class="sort-icon">↕</span></th>
+                    <th class="sortable">Target <span class="sort-icon">↕</span></th>
+                    <th class="sortable">Start Time <span class="sort-icon">↕</span></th>
+                    <th class="sortable">Duration <span class="sort-icon">↕</span></th>
+                    <th>Status</th>
+                    <th class="col-actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="sessions-body">
+                <tr><td colspan="9" class="table-empty">
+                    <div class="skeleton skeleton-row"></div>
+                    <div class="skeleton skeleton-row"></div>
+                    <div class="skeleton skeleton-row"></div>
+                </td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Session Detail Modal (reusable) -->
+<div class="modal-overlay" id="session-detail-overlay">
+    <div class="modal modal-lg">
+        <div class="modal-header">
+            <h3 class="modal-title">Session Details</h3>
+            <button class="modal-close" onclick="closeSessionDetail()">✕</button>
+        </div>
+        <div class="modal-body" id="session-detail-body">
+            Loading…
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeSessionDetail()">Close</button>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+(function() {
+    var tableHelper;
+
+    window.loadSessions = function() {
+        var status = document.getElementById('filter-status').value;
+        var user = document.getElementById('filter-user').value.trim();
+        var from = document.getElementById('filter-date-from').value;
+        var to = document.getElementById('filter-date-to').value;
+
+        var params = new URLSearchParams();
+        if (status) params.set('status', status);
+        if (user) params.set('user', user);
+        if (from) params.set('from', from);
+        if (to) params.set('to', to);
+        params.set('sort', 'start_time');
+        params.set('order', 'desc');
+
+        App.api('GET', '/api/v1/sessions?' + params.toString()).then(function(data) {
+            var tbody = document.getElementById('sessions-body');
+            var items = data.sessions || data.items || data || [];
+            if (!items.length) {
+                tbody.innerHTML = '<tr><td colspan="9" class="table-empty">' +
+                    '<div class="table-empty-icon">🖥️</div>No sessions found</td></tr>';
+                return;
+            }
+            tbody.innerHTML = items.map(function(s) {
+                var statusCls = 'badge-neutral';
+                if (s.status === 'active') statusCls = 'badge-success';
+                else if (s.status === 'killed') statusCls = 'badge-danger';
+
+                var actions = '<button class="btn btn-ghost btn-sm" onclick="viewSession(\'' + App.escapeHtml(s.id) + '\')" title="Details">👁</button>';
+                if (s.status === 'active') {
+                    actions += ' <button class="btn btn-ghost btn-sm" onclick="killSession(\'' + App.escapeHtml(s.id) + '\')" title="Kill" style="color:var(--color-danger);">⏹</button>';
+                    actions += ' <a href="/terminal?session=' + encodeURIComponent(s.id) + '" class="btn btn-ghost btn-sm" title="Watch Live">📺</a>';
+                }
+                if (s.recording_url) {
+                    actions += ' <a href="' + App.escapeHtml(s.recording_url) + '" class="btn btn-ghost btn-sm" title="Playback">▶</a>';
+                }
+
+                return '<tr data-id="' + App.escapeHtml(s.id) + '">' +
+                    '<td class="col-check"><input type="checkbox" class="row-check" value="' + App.escapeHtml(s.id) + '"></td>' +
+                    '<td><code>' + App.escapeHtml((s.id || '').substring(0, 8)) + '</code></td>' +
+                    '<td>' + App.escapeHtml(s.user || s.username || '—') + '</td>' +
+                    '<td>' + App.escapeHtml(s.source_ip || s.client_ip || '—') + '</td>' +
+                    '<td>' + App.escapeHtml(s.target || s.upstream || '—') + '</td>' +
+                    '<td>' + App.formatTime(s.start_time || s.started_at) + '</td>' +
+                    '<td>' + App.formatDuration(s.duration) + '</td>' +
+                    '<td><span class="badge ' + statusCls + '">' + App.escapeHtml(s.status || 'unknown') + '</span></td>' +
+                    '<td class="col-actions">' + actions + '</td>' +
+                    '</tr>';
+            }).join('');
+
+            tableHelper = App.table('#sessions-table', {
+                onSelectionChange: function() {
+                    var sel = tableHelper.getSelected();
+                    document.getElementById('btn-kill-selected').style.display = sel.length ? '' : 'none';
+                }
+            });
+        }).catch(function(e) {
+            document.getElementById('sessions-body').innerHTML =
+                '<tr><td colspan="9" class="table-empty">Failed to load: ' + App.escapeHtml(e.message) + '</td></tr>';
+        });
+    };
+
+    window.viewSession = function(id) {
+        var overlay = document.getElementById('session-detail-overlay');
+        var body = document.getElementById('session-detail-body');
+        body.innerHTML = '<div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>';
+        overlay.classList.add('show');
+
+        App.api('GET', '/api/v1/sessions/' + encodeURIComponent(id)).then(function(s) {
+            body.innerHTML =
+                '<div class="form-row">' +
+                    '<div class="form-group"><label class="form-label">Session ID</label><div><code>' + App.escapeHtml(s.id) + '</code></div></div>' +
+                    '<div class="form-group"><label class="form-label">Status</label><div>' + App.escapeHtml(s.status) + '</div></div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label class="form-label">User</label><div>' + App.escapeHtml(s.user || s.username) + '</div></div>' +
+                    '<div class="form-group"><label class="form-label">Source IP</label><div>' + App.escapeHtml(s.source_ip || s.client_ip) + '</div></div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label class="form-label">Target</label><div>' + App.escapeHtml(s.target || s.upstream) + '</div></div>' +
+                    '<div class="form-group"><label class="form-label">Duration</label><div>' + App.formatDuration(s.duration) + '</div></div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label class="form-label">Start Time</label><div>' + App.formatTime(s.start_time || s.started_at) + '</div></div>' +
+                    '<div class="form-group"><label class="form-label">End Time</label><div>' + App.formatTime(s.end_time || s.ended_at) + '</div></div>' +
+                '</div>' +
+                '<div class="form-group"><label class="form-label">Bytes Transferred</label><div>↑ ' + App.formatBytes(s.bytes_sent) + ' / ↓ ' + App.formatBytes(s.bytes_received) + '</div></div>' +
+                (s.commands ? '<div class="form-group"><label class="form-label">Command History</label><pre style="background:var(--terminal-bg);color:var(--terminal-text);padding:12px;border-radius:var(--radius-md);max-height:200px;overflow:auto;font-size:12px;">' + App.escapeHtml(s.commands.join('\n')) + '</pre></div>' : '');
+        }).catch(function(e) {
+            body.innerHTML = '<div class="alert alert-danger"><span class="alert-icon">✕</span><div class="alert-content">Failed to load session details: ' + App.escapeHtml(e.message) + '</div></div>';
+        });
+    };
+
+    window.closeSessionDetail = function() {
+        document.getElementById('session-detail-overlay').classList.remove('show');
+    };
+
+    window.killSession = async function(id) {
+        var ok = await App.confirm('Kill session ' + id.substring(0, 8) + '…?');
+        if (!ok) return;
+        try {
+            await App.api('POST', '/api/v1/sessions/' + encodeURIComponent(id) + '/kill');
+            App.notify('Session killed', 'success');
+            loadSessions();
+        } catch(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    window.killSelected = async function() {
+        if (!tableHelper) return;
+        var ids = tableHelper.getSelected();
+        if (!ids.length) return;
+        var ok = await App.confirm('Kill ' + ids.length + ' selected session(s)?');
+        if (!ok) return;
+        try {
+            await App.api('POST', '/api/v1/sessions/kill', { session_ids: ids });
+            App.notify(ids.length + ' session(s) killed', 'success');
+            loadSessions();
+        } catch(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    // Initial load
+    loadSessions();
+})();
+</script>
+{{end}}

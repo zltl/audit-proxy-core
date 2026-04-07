@@ -1,0 +1,269 @@
+{{template "base" .}}
+
+{{define "title"}}Servers{{end}}
+
+{{define "page-title"}}Servers{{end}}
+
+{{define "content"}}
+<!-- Toolbar -->
+<div class="toolbar">
+    <div class="toolbar-left">
+        <div class="search-input">
+            <input type="text" id="server-search" placeholder="Search servers…" oninput="filterServers()">
+        </div>
+        <select class="form-control" id="server-group-filter" style="width:160px;" onchange="filterServers()">
+            <option value="">All Groups</option>
+        </select>
+    </div>
+    <div class="toolbar-right">
+        <div class="view-toggle">
+            <button class="view-toggle-btn active" id="view-grid-btn" onclick="setView('grid')">▦</button>
+            <button class="view-toggle-btn" id="view-table-btn" onclick="setView('table')">☰</button>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="showServerModal()">+ Add Server</button>
+    </div>
+</div>
+
+<!-- Grid View -->
+<div id="server-grid-view">
+    <div class="grid grid-auto" id="server-cards">
+        <div class="skeleton skeleton-card"></div>
+        <div class="skeleton skeleton-card"></div>
+        <div class="skeleton skeleton-card"></div>
+    </div>
+</div>
+
+<!-- Table View (hidden by default) -->
+<div id="server-table-view" class="hidden">
+    <div class="card">
+        <div class="table-wrapper">
+            <table id="servers-table">
+                <thead>
+                    <tr>
+                        <th class="sortable">Host <span class="sort-icon">↕</span></th>
+                        <th>Port</th>
+                        <th>Status</th>
+                        <th class="sortable">Connections <span class="sort-icon">↕</span></th>
+                        <th class="sortable">Latency <span class="sort-icon">↕</span></th>
+                        <th>Group/Tags</th>
+                        <th>Last Check</th>
+                        <th>Maintenance</th>
+                        <th class="col-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="servers-body"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Add/Edit Server Modal -->
+<div class="modal-overlay" id="server-modal-overlay">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title" id="server-modal-title">Add Server</h3>
+            <button class="modal-close" onclick="closeServerModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <form id="server-form">
+                <input type="hidden" id="server-edit-id" name="id">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Host / IP <span class="required">*</span></label>
+                        <input type="text" class="form-control" id="server-host" name="host" required placeholder="e.g. 10.0.1.5">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Port</label>
+                        <input type="number" class="form-control" id="server-port" name="port" value="22" min="1" max="65535">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">SSH User</label>
+                        <input type="text" class="form-control" id="server-user" name="user" placeholder="e.g. ubuntu">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Group / Tag</label>
+                        <input type="text" class="form-control" id="server-group" name="group" placeholder="e.g. production">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Private Key Path</label>
+                    <input type="text" class="form-control" id="server-privkey" name="privkey" placeholder="e.g. ~/.ssh/id_rsa">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" id="server-description" name="description" rows="2" placeholder="Optional description"></textarea>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeServerModal()">Cancel</button>
+            <button class="btn btn-primary" id="server-save-btn" onclick="saveServer()">Save Server</button>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+(function() {
+    var allServers = [];
+    var currentView = 'grid';
+
+    window.loadServers = function() {
+        App.api('GET', '/api/v1/upstreams').then(function(data) {
+            allServers = data.upstreams || data.servers || data || [];
+            populateGroupFilter();
+            renderServers(allServers);
+        }).catch(function(e) {
+            document.getElementById('server-cards').innerHTML =
+                '<p class="text-muted">Failed to load: ' + App.escapeHtml(e.message) + '</p>';
+        });
+    };
+
+    function populateGroupFilter() {
+        var groups = {};
+        allServers.forEach(function(s) { if (s.group) groups[s.group] = true; });
+        var sel = document.getElementById('server-group-filter');
+        sel.innerHTML = '<option value="">All Groups</option>';
+        Object.keys(groups).sort().forEach(function(g) {
+            sel.innerHTML += '<option value="' + App.escapeHtml(g) + '">' + App.escapeHtml(g) + '</option>';
+        });
+    }
+
+    function renderServers(servers) {
+        // Grid
+        var cards = document.getElementById('server-cards');
+        if (!servers.length) {
+            cards.innerHTML = '<p class="text-muted text-center" style="grid-column:1/-1;">No servers found</p>';
+        } else {
+            cards.innerHTML = servers.map(function(s) {
+                var dot = s.healthy !== false && !s.maintenance ? 'online' : (s.maintenance ? 'warning' : 'offline');
+                var statusLabel = s.maintenance ? 'Maintenance' : (s.healthy !== false ? 'Healthy' : 'Offline');
+                return '<div class="server-card" onclick="editServer(\'' + App.escapeHtml(s.host || s.address || s.name || '') + '\')">' +
+                    '<div class="server-card-header">' +
+                        '<span class="server-card-name">' + App.escapeHtml(s.host || s.address || s.name || '—') + '</span>' +
+                        '<span class="status-indicator"><span class="status-dot ' + dot + '"></span> ' + statusLabel + '</span>' +
+                    '</div>' +
+                    (s.description ? '<p class="text-muted text-sm mb-sm">' + App.escapeHtml(s.description) + '</p>' : '') +
+                    '<div class="server-card-stats">' +
+                        '<div><div class="server-card-stat-value">' + (s.connections || 0) + '</div><div class="server-card-stat-label">Conns</div></div>' +
+                        '<div><div class="server-card-stat-value">' + (s.latency_ms != null ? s.latency_ms + 'ms' : '—') + '</div><div class="server-card-stat-label">Latency</div></div>' +
+                        '<div><div class="server-card-stat-value">' + (s.port || 22) + '</div><div class="server-card-stat-label">Port</div></div>' +
+                    '</div></div>';
+            }).join('');
+        }
+
+        // Table
+        var tbody = document.getElementById('servers-body');
+        if (!servers.length) {
+            tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No servers found</td></tr>';
+        } else {
+            tbody.innerHTML = servers.map(function(s) {
+                var dot = s.healthy !== false && !s.maintenance ? 'online' : (s.maintenance ? 'warning' : 'offline');
+                return '<tr>' +
+                    '<td><strong>' + App.escapeHtml(s.host || s.address || s.name || '—') + '</strong></td>' +
+                    '<td>' + (s.port || 22) + '</td>' +
+                    '<td><span class="status-indicator"><span class="status-dot ' + dot + '"></span></span></td>' +
+                    '<td>' + (s.connections || 0) + '</td>' +
+                    '<td>' + (s.latency_ms != null ? s.latency_ms + 'ms' : '—') + '</td>' +
+                    '<td>' + App.escapeHtml(s.group || '—') + '</td>' +
+                    '<td>' + App.timeAgo(s.last_check) + '</td>' +
+                    '<td>' +
+                        '<label class="toggle"><input type="checkbox" ' + (s.maintenance ? 'checked' : '') +
+                        ' onchange="toggleMaintenance(\'' + App.escapeHtml(s.host || s.address || s.name || '') + '\', this.checked)">' +
+                        '<span class="toggle-slider"></span></label>' +
+                    '</td>' +
+                    '<td class="col-actions">' +
+                        '<button class="btn btn-ghost btn-sm" onclick="editServer(\'' + App.escapeHtml(s.host || s.address || s.name || '') + '\')" title="Edit">✏️</button>' +
+                    '</td></tr>';
+            }).join('');
+            App.table('#servers-table');
+        }
+    }
+
+    window.filterServers = function() {
+        var q = document.getElementById('server-search').value.toLowerCase();
+        var group = document.getElementById('server-group-filter').value;
+        var filtered = allServers.filter(function(s) {
+            var matchQ = !q || (s.host || s.address || s.name || '').toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q);
+            var matchG = !group || s.group === group;
+            return matchQ && matchG;
+        });
+        renderServers(filtered);
+    };
+
+    window.setView = function(v) {
+        currentView = v;
+        document.getElementById('server-grid-view').classList.toggle('hidden', v !== 'grid');
+        document.getElementById('server-table-view').classList.toggle('hidden', v !== 'table');
+        document.getElementById('view-grid-btn').classList.toggle('active', v === 'grid');
+        document.getElementById('view-table-btn').classList.toggle('active', v === 'table');
+    };
+
+    window.showServerModal = function(server) {
+        document.getElementById('server-modal-title').textContent = server ? 'Edit Server' : 'Add Server';
+        document.getElementById('server-edit-id').value = server ? (server.host || server.address || server.name || '') : '';
+        document.getElementById('server-host').value = server ? (server.host || server.address || '') : '';
+        document.getElementById('server-port').value = server ? (server.port || 22) : 22;
+        document.getElementById('server-user').value = server ? (server.user || '') : '';
+        document.getElementById('server-group').value = server ? (server.group || '') : '';
+        document.getElementById('server-privkey').value = server ? (server.privkey || '') : '';
+        document.getElementById('server-description').value = server ? (server.description || '') : '';
+        document.getElementById('server-modal-overlay').classList.add('show');
+    };
+
+    window.closeServerModal = function() {
+        document.getElementById('server-modal-overlay').classList.remove('show');
+    };
+
+    window.editServer = function(host) {
+        var srv = allServers.find(function(s) { return (s.host || s.address || s.name) === host; });
+        if (srv) showServerModal(srv);
+    };
+
+    window.saveServer = async function() {
+        var form = document.getElementById('server-form');
+        if (!form.checkValidity()) { form.reportValidity(); return; }
+
+        var id = document.getElementById('server-edit-id').value;
+        var payload = {
+            host: document.getElementById('server-host').value,
+            port: parseInt(document.getElementById('server-port').value) || 22,
+            user: document.getElementById('server-user').value,
+            group: document.getElementById('server-group').value,
+            privkey: document.getElementById('server-privkey').value,
+            description: document.getElementById('server-description').value,
+        };
+
+        App.btnLoading('#server-save-btn', true);
+        try {
+            if (id) {
+                await App.api('PUT', '/api/v1/upstreams/' + encodeURIComponent(id), payload);
+            } else {
+                await App.api('POST', '/api/v1/upstreams', payload);
+            }
+            App.notify('Server saved', 'success');
+            closeServerModal();
+            loadServers();
+        } catch(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+        App.btnLoading('#server-save-btn', false);
+    };
+
+    window.toggleMaintenance = async function(host, enabled) {
+        try {
+            await App.api('POST', '/api/v1/upstreams/' + encodeURIComponent(host) + '/maintenance', { enabled: enabled });
+            App.notify('Maintenance mode ' + (enabled ? 'enabled' : 'disabled'), 'success');
+        } catch(e) {
+            App.notify('Failed: ' + e.message, 'error');
+            loadServers();
+        }
+    };
+
+    loadServers();
+})();
+</script>
+{{end}}

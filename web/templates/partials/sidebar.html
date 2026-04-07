@@ -1,0 +1,60 @@
+{{define "sidebar"}}
+<aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+        <div class="sidebar-brand-icon">⛨</div>
+        <span class="sidebar-brand-text">SSH Proxy Core</span>
+    </div>
+
+    <nav class="sidebar-nav">
+        <div class="sidebar-section-title">Overview</div>
+
+        <a href="/dashboard" class="sidebar-nav-item{{if eq .ActivePage "dashboard"}} active{{end}}">
+            <span class="sidebar-nav-icon">📊</span>
+            <span class="sidebar-nav-label">Dashboard</span>
+        </a>
+
+        <a href="/sessions" class="sidebar-nav-item{{if eq .ActivePage "sessions"}} active{{end}}">
+            <span class="sidebar-nav-icon">🖥️</span>
+            <span class="sidebar-nav-label">Sessions</span>
+        </a>
+
+        <div class="sidebar-section-title">Management</div>
+
+        <a href="/users" class="sidebar-nav-item{{if eq .ActivePage "users"}} active{{end}}">
+            <span class="sidebar-nav-icon">👥</span>
+            <span class="sidebar-nav-label">Users</span>
+        </a>
+
+        <a href="/servers" class="sidebar-nav-item{{if eq .ActivePage "servers"}} active{{end}}">
+            <span class="sidebar-nav-icon">🖧</span>
+            <span class="sidebar-nav-label">Servers</span>
+        </a>
+
+        <a href="/policies" class="sidebar-nav-item{{if eq .ActivePage "policies"}} active{{end}}">
+            <span class="sidebar-nav-icon">🔑</span>
+            <span class="sidebar-nav-label">Routes &amp; Policies</span>
+        </a>
+
+        <div class="sidebar-section-title">System</div>
+
+        <a href="/audit" class="sidebar-nav-item{{if eq .ActivePage "audit"}} active{{end}}">
+            <span class="sidebar-nav-icon">📋</span>
+            <span class="sidebar-nav-label">Audit Log</span>
+        </a>
+
+        <a href="/settings" class="sidebar-nav-item{{if eq .ActivePage "settings"}} active{{end}}">
+            <span class="sidebar-nav-icon">⚙️</span>
+            <span class="sidebar-nav-label">Settings</span>
+        </a>
+    </nav>
+
+    <div class="sidebar-version">
+        <span class="sidebar-nav-icon" style="width:auto;font-size:12px;">⬡</span>
+        <span class="sidebar-version-text">v{{.Version}}</span>
+    </div>
+
+    <button class="sidebar-collapse-btn" title="Toggle sidebar">
+        ◀
+    </button>
+</aside>
+{{end}}

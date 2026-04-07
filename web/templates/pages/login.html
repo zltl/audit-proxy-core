@@ -1,0 +1,92 @@
+{{define "title"}}Login{{end}}
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{.CSRFToken}}">
+    <title>Login - SSH Proxy Core</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="login-page">
+        <div class="login-card">
+            <div class="login-logo">
+                <div class="login-logo-icon">⛨</div>
+                <h1>SSH Proxy Core</h1>
+                <p>Sign in to the control plane</p>
+            </div>
+
+            <div class="login-error" id="login-error">
+                <span>✕</span>
+                <span id="login-error-msg">Invalid username or password.</span>
+            </div>
+
+            {{if .Error}}
+            <div class="login-error show">
+                <span>✕</span>
+                <span>{{.Error}}</span>
+            </div>
+            {{end}}
+
+            <form class="login-form" id="login-form" method="POST" action="/login">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+
+                <div class="form-group">
+                    <label class="form-label" for="username">Username</label>
+                    <input type="text" class="form-control" id="username" name="username"
+                           placeholder="Enter your username" required autofocus
+                           value="{{.Username}}">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="password">Password</label>
+                    <input type="password" class="form-control" id="password" name="password"
+                           placeholder="Enter your password" required>
+                </div>
+
+                <div class="form-group" style="display:flex;align-items:center;justify-content:space-between;">
+                    <label class="form-check">
+                        <input type="checkbox" name="remember" value="1">
+                        <span>Remember me</span>
+                    </label>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-lg" id="login-btn">
+                    Sign In
+                </button>
+            </form>
+
+            <div class="login-footer">
+                SSH Proxy Core &copy; {{.Year}}
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+    <script>
+    (function() {
+        var form = document.getElementById('login-form');
+        var btn = document.getElementById('login-btn');
+        var errorBox = document.getElementById('login-error');
+        var errorMsg = document.getElementById('login-error-msg');
+
+        form.addEventListener('submit', function(e) {
+            var user = document.getElementById('username').value.trim();
+            var pass = document.getElementById('password').value;
+
+            if (!user || !pass) {
+                e.preventDefault();
+                errorMsg.textContent = 'Please enter both username and password.';
+                errorBox.classList.add('show');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Signing in…';
+        });
+    })();
+    </script>
+</body>
+</html>

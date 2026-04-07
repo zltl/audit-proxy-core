@@ -1,0 +1,560 @@
+{{template "base" .}}
+
+{{define "title"}}Settings{{end}}
+
+{{define "page-title"}}Settings{{end}}
+
+{{define "content"}}
+<div class="tabs">
+    <button class="tab-item active" data-tab="tab-general">General</button>
+    <button class="tab-item" data-tab="tab-security">Security</button>
+    <button class="tab-item" data-tab="tab-ldap">LDAP</button>
+    <button class="tab-item" data-tab="tab-routes">Routes</button>
+    <button class="tab-item" data-tab="tab-policies">Policies</button>
+</div>
+
+<!-- General -->
+<div class="tab-content active" id="tab-general">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Server Configuration</h3>
+        </div>
+        <div class="card-body">
+            <form id="settings-general-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Bind Address</label>
+                        <input type="text" class="form-control" name="bind_addr" id="cfg-bind-addr" placeholder="0.0.0.0">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Port</label>
+                        <input type="number" class="form-control" name="port" id="cfg-port" placeholder="2222">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Host Key Path</label>
+                        <input type="text" class="form-control" name="host_key" id="cfg-host-key" placeholder="/etc/ssh-proxy/host_key">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Log Level</label>
+                        <select class="form-control" name="log_level" id="cfg-log-level">
+                            <option value="debug">Debug</option>
+                            <option value="info">Info</option>
+                            <option value="warn">Warn</option>
+                            <option value="error">Error</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Max Sessions</label>
+                        <input type="number" class="form-control" name="max_sessions" id="cfg-max-sessions" placeholder="100">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Session Timeout (s)</label>
+                        <input type="number" class="form-control" name="session_timeout" id="cfg-session-timeout" placeholder="3600">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Auth Timeout (s)</label>
+                        <input type="number" class="form-control" name="auth_timeout" id="cfg-auth-timeout" placeholder="60">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Per-User Max Sessions</label>
+                        <input type="number" class="form-control" name="per_user_max_sessions" id="cfg-per-user-max" placeholder="10">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Log Format</label>
+                    <select class="form-control" name="log_format" id="cfg-log-format" style="width:200px;">
+                        <option value="text">Text</option>
+                        <option value="json">JSON (NDJSON)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-check">
+                        <input type="checkbox" name="show_progress" id="cfg-show-progress">
+                        <span>Show connection progress to client</span>
+                    </label>
+                </div>
+            </form>
+        </div>
+        <div class="card-footer">
+            <button class="btn btn-secondary" onclick="loadConfig()">Reset</button>
+            <button class="btn btn-primary" onclick="saveConfig('general')">💾 Save Changes</button>
+        </div>
+    </div>
+</div>
+
+<!-- Security -->
+<div class="tab-content" id="tab-security">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Security &amp; MFA Settings</h3>
+        </div>
+        <div class="card-body">
+            <form id="settings-security-form">
+                <h4 class="mb-md">IP Access Control</h4>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">ACL Mode</label>
+                        <select class="form-control" name="ip_acl_mode" id="cfg-acl-mode">
+                            <option value="blacklist">Blacklist</option>
+                            <option value="whitelist">Whitelist</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-check" style="margin-top:24px;">
+                            <input type="checkbox" name="log_rejections" id="cfg-log-rejections">
+                            <span>Log rejected connections</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">ACL Rules</label>
+                    <textarea class="form-control" name="ip_acl_rules" id="cfg-acl-rules" rows="3" placeholder="127.0.0.0/8:allow, 10.0.0.0/8:allow"></textarea>
+                    <div class="form-hint">Comma-separated CIDR:action pairs</div>
+                </div>
+
+                <h4 class="mt-lg mb-md">MFA / TOTP</h4>
+                <div class="form-group">
+                    <label class="form-check">
+                        <input type="checkbox" name="mfa_enabled" id="cfg-mfa-enabled">
+                        <span>Enable TOTP-based MFA</span>
+                    </label>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Issuer</label>
+                        <input type="text" class="form-control" name="mfa_issuer" id="cfg-mfa-issuer" placeholder="SSH-Proxy">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Time Step (s)</label>
+                        <input type="number" class="form-control" name="mfa_time_step" id="cfg-mfa-timestep" placeholder="30">
+                    </div>
+                </div>
+
+                <h4 class="mt-lg mb-md">Webhook</h4>
+                <div class="form-group">
+                    <label class="form-check">
+                        <input type="checkbox" name="webhook_enabled" id="cfg-webhook-enabled">
+                        <span>Enable webhooks</span>
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Webhook URL</label>
+                    <input type="url" class="form-control" name="webhook_url" id="cfg-webhook-url" placeholder="https://hooks.example.com/ssh-events">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Events</label>
+                    <input type="text" class="form-control" name="webhook_events" id="cfg-webhook-events" placeholder="auth.failure, rate_limit.triggered, ip_acl.denied">
+                </div>
+            </form>
+        </div>
+        <div class="card-footer">
+            <button class="btn btn-secondary" onclick="loadConfig()">Reset</button>
+            <button class="btn btn-primary" onclick="saveConfig('security')">💾 Save Changes</button>
+        </div>
+    </div>
+</div>
+
+<!-- LDAP -->
+<div class="tab-content" id="tab-ldap">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">LDAP Authentication</h3>
+        </div>
+        <div class="card-body">
+            <form id="settings-ldap-form">
+                <div class="form-group">
+                    <label class="form-label">Auth Backend</label>
+                    <select class="form-control" name="auth_backend" id="cfg-auth-backend" style="width:200px;">
+                        <option value="local">Local</option>
+                        <option value="ldap">LDAP</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">LDAP URI</label>
+                        <input type="text" class="form-control" name="ldap_uri" id="cfg-ldap-uri" placeholder="ldap://ldap.example.com:389">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Base DN</label>
+                        <input type="text" class="form-control" name="ldap_base_dn" id="cfg-ldap-basedn" placeholder="dc=example,dc=com">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Bind DN</label>
+                        <input type="text" class="form-control" name="ldap_bind_dn" id="cfg-ldap-binddn" placeholder="cn=admin,dc=example,dc=com">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Bind Password</label>
+                        <input type="password" class="form-control" name="ldap_bind_pw" id="cfg-ldap-bindpw" placeholder="••••••••">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">User Filter</label>
+                        <input type="text" class="form-control" name="ldap_user_filter" id="cfg-ldap-filter" placeholder="(uid=%s)">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Timeout (s)</label>
+                        <input type="number" class="form-control" name="ldap_timeout" id="cfg-ldap-timeout" placeholder="5">
+                    </div>
+                </div>
+            </form>
+        </div>
+        <div class="card-footer">
+            <button class="btn btn-secondary" onclick="loadConfig()">Reset</button>
+            <button class="btn btn-warning btn-sm" onclick="testLdap()">🔗 Test Connection</button>
+            <button class="btn btn-primary" onclick="saveConfig('ldap')">💾 Save Changes</button>
+        </div>
+    </div>
+</div>
+
+<!-- Routes -->
+<div class="tab-content" id="tab-routes">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Routing Rules</h3>
+            <button class="btn btn-primary btn-sm" onclick="addRouteRow()">+ Add Route</button>
+        </div>
+        <div class="table-wrapper">
+            <table id="routes-table">
+                <thead>
+                    <tr>
+                        <th>User Pattern</th>
+                        <th>Upstream Host</th>
+                        <th>Port</th>
+                        <th>SSH User</th>
+                        <th>Auth Method</th>
+                        <th class="col-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="routes-body">
+                    <tr><td colspan="6" class="table-empty">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer">
+            <button class="btn btn-primary" onclick="saveConfig('routes')">💾 Save Routes</button>
+        </div>
+    </div>
+</div>
+
+<!-- Policies -->
+<div class="tab-content" id="tab-policies">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Feature Policies</h3>
+            <button class="btn btn-primary btn-sm" onclick="addPolicyRow()">+ Add Policy</button>
+        </div>
+        <div class="table-wrapper">
+            <table id="policies-table">
+                <thead>
+                    <tr>
+                        <th>Pattern (user@upstream)</th>
+                        <th>Allowed Features</th>
+                        <th>Denied Features</th>
+                        <th class="col-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="policies-body">
+                    <tr><td colspan="4" class="table-empty">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer">
+            <button class="btn btn-primary" onclick="saveConfig('policies')">💾 Save Policies</button>
+        </div>
+    </div>
+</div>
+
+<!-- Config Version History -->
+<div class="mt-lg">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Configuration History</h3>
+        </div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Version</th>
+                        <th>Changed By</th>
+                        <th>Date</th>
+                        <th>Summary</th>
+                        <th class="col-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="config-history-body">
+                    <tr><td colspan="5" class="table-empty">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Diff Preview Modal -->
+<div class="modal-overlay" id="diff-modal-overlay">
+    <div class="modal modal-lg">
+        <div class="modal-header">
+            <h3 class="modal-title">Configuration Diff</h3>
+            <button class="modal-close" onclick="closeDiffModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <pre id="diff-content" style="background:var(--terminal-bg);color:var(--terminal-text);padding:16px;border-radius:var(--radius-md);font-size:12px;max-height:400px;overflow:auto;white-space:pre-wrap;"></pre>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeDiffModal()">Close</button>
+            <button class="btn btn-primary" id="diff-apply-btn" onclick="applyConfig()">Apply Changes</button>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+(function() {
+    var configData = {};
+    var pendingSection = '';
+
+    window.loadConfig = function() {
+        App.api('GET', '/api/v1/config').then(function(data) {
+            configData = data;
+            // General
+            document.getElementById('cfg-bind-addr').value = data.bind_addr || '';
+            document.getElementById('cfg-port').value = data.port || '';
+            document.getElementById('cfg-host-key').value = data.host_key || '';
+            document.getElementById('cfg-log-level').value = data.log_level || 'info';
+            document.getElementById('cfg-max-sessions').value = data.max_sessions || '';
+            document.getElementById('cfg-session-timeout').value = data.session_timeout || '';
+            document.getElementById('cfg-auth-timeout').value = data.auth_timeout || '';
+            document.getElementById('cfg-per-user-max').value = data.per_user_max_sessions || '';
+            document.getElementById('cfg-log-format').value = data.log_format || 'text';
+            document.getElementById('cfg-show-progress').checked = !!data.show_progress;
+
+            // Security
+            document.getElementById('cfg-acl-mode').value = data.ip_acl_mode || 'blacklist';
+            document.getElementById('cfg-log-rejections').checked = !!data.log_rejections;
+            document.getElementById('cfg-acl-rules').value = data.ip_acl_rules || '';
+            document.getElementById('cfg-mfa-enabled').checked = !!data.mfa_enabled;
+            document.getElementById('cfg-mfa-issuer').value = data.mfa_issuer || '';
+            document.getElementById('cfg-mfa-timestep').value = data.mfa_time_step || '';
+            document.getElementById('cfg-webhook-enabled').checked = !!data.webhook_enabled;
+            document.getElementById('cfg-webhook-url').value = data.webhook_url || '';
+            document.getElementById('cfg-webhook-events').value = data.webhook_events || '';
+
+            // LDAP
+            document.getElementById('cfg-auth-backend').value = data.auth_backend || 'local';
+            document.getElementById('cfg-ldap-uri').value = data.ldap_uri || '';
+            document.getElementById('cfg-ldap-basedn').value = data.ldap_base_dn || '';
+            document.getElementById('cfg-ldap-binddn').value = data.ldap_bind_dn || '';
+            document.getElementById('cfg-ldap-bindpw').value = '';
+            document.getElementById('cfg-ldap-filter').value = data.ldap_user_filter || '';
+            document.getElementById('cfg-ldap-timeout').value = data.ldap_timeout || '';
+
+            // Routes
+            renderRoutes(data.routes || []);
+            // Policies
+            renderPolicies(data.policies || []);
+        }).catch(function(e) {
+            App.notify('Failed to load config: ' + e.message, 'error');
+        });
+
+        // Config history
+        App.api('GET', '/api/v1/config/history').then(function(data) {
+            var items = data.versions || data.history || data || [];
+            var tbody = document.getElementById('config-history-body');
+            if (!items.length) {
+                tbody.innerHTML = '<tr><td colspan="5" class="table-empty">No history</td></tr>';
+                return;
+            }
+            tbody.innerHTML = items.map(function(v) {
+                return '<tr>' +
+                    '<td><code>' + App.escapeHtml(v.version || v.id || '') + '</code></td>' +
+                    '<td>' + App.escapeHtml(v.changed_by || v.user || '—') + '</td>' +
+                    '<td>' + App.formatTime(v.timestamp || v.date) + '</td>' +
+                    '<td>' + App.escapeHtml(v.summary || v.message || '—') + '</td>' +
+                    '<td class="col-actions">' +
+                        '<button class="btn btn-ghost btn-sm" onclick="viewDiff(\'' + App.escapeHtml(v.version || v.id || '') + '\')" title="View">👁</button> ' +
+                        '<button class="btn btn-ghost btn-sm" onclick="rollbackConfig(\'' + App.escapeHtml(v.version || v.id || '') + '\')" title="Rollback" style="color:var(--color-warning);">↩</button>' +
+                    '</td></tr>';
+            }).join('');
+        }).catch(function() {
+            document.getElementById('config-history-body').innerHTML =
+                '<tr><td colspan="5" class="table-empty">Failed to load history</td></tr>';
+        });
+    };
+
+    function renderRoutes(routes) {
+        var tbody = document.getElementById('routes-body');
+        if (!routes.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No routes configured</td></tr>';
+            return;
+        }
+        tbody.innerHTML = routes.map(function(r, i) {
+            return '<tr data-idx="' + i + '">' +
+                '<td><input type="text" class="form-control" value="' + App.escapeHtml(r.pattern || r.user || '') + '" data-field="pattern"></td>' +
+                '<td><input type="text" class="form-control" value="' + App.escapeHtml(r.upstream || r.host || '') + '" data-field="upstream"></td>' +
+                '<td><input type="number" class="form-control" value="' + (r.port || 22) + '" data-field="port" style="width:80px;"></td>' +
+                '<td><input type="text" class="form-control" value="' + App.escapeHtml(r.user || r.ssh_user || '') + '" data-field="user"></td>' +
+                '<td><select class="form-control" data-field="auth_method">' +
+                    '<option value="key"' + (r.auth_method === 'key' ? ' selected' : '') + '>Key</option>' +
+                    '<option value="password"' + (r.auth_method === 'password' ? ' selected' : '') + '>Password</option>' +
+                '</select></td>' +
+                '<td class="col-actions"><button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="color:var(--color-danger);">🗑</button></td>' +
+                '</tr>';
+        }).join('');
+    }
+
+    function renderPolicies(policies) {
+        var tbody = document.getElementById('policies-body');
+        if (!policies.length) {
+            tbody.innerHTML = '<tr><td colspan="4" class="table-empty">No policies configured</td></tr>';
+            return;
+        }
+        tbody.innerHTML = policies.map(function(p, i) {
+            return '<tr data-idx="' + i + '">' +
+                '<td><input type="text" class="form-control" value="' + App.escapeHtml(p.pattern || '') + '" data-field="pattern"></td>' +
+                '<td><input type="text" class="form-control" value="' + App.escapeHtml((p.allow || []).join(', ')) + '" data-field="allow"></td>' +
+                '<td><input type="text" class="form-control" value="' + App.escapeHtml((p.deny || []).join(', ')) + '" data-field="deny"></td>' +
+                '<td class="col-actions"><button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="color:var(--color-danger);">🗑</button></td>' +
+                '</tr>';
+        }).join('');
+    }
+
+    window.addRouteRow = function() {
+        var tbody = document.getElementById('routes-body');
+        var empty = tbody.querySelector('.table-empty');
+        if (empty) empty.closest('tr').remove();
+        var tr = document.createElement('tr');
+        tr.innerHTML =
+            '<td><input type="text" class="form-control" placeholder="user or *" data-field="pattern"></td>' +
+            '<td><input type="text" class="form-control" placeholder="10.0.1.5" data-field="upstream"></td>' +
+            '<td><input type="number" class="form-control" value="22" data-field="port" style="width:80px;"></td>' +
+            '<td><input type="text" class="form-control" placeholder="ubuntu" data-field="user"></td>' +
+            '<td><select class="form-control" data-field="auth_method"><option value="key">Key</option><option value="password">Password</option></select></td>' +
+            '<td class="col-actions"><button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="color:var(--color-danger);">🗑</button></td>';
+        tbody.appendChild(tr);
+    };
+
+    window.addPolicyRow = function() {
+        var tbody = document.getElementById('policies-body');
+        var empty = tbody.querySelector('.table-empty');
+        if (empty) empty.closest('tr').remove();
+        var tr = document.createElement('tr');
+        tr.innerHTML =
+            '<td><input type="text" class="form-control" placeholder="user@host or *" data-field="pattern"></td>' +
+            '<td><input type="text" class="form-control" placeholder="shell, exec, scp" data-field="allow"></td>' +
+            '<td><input type="text" class="form-control" placeholder="port_forward" data-field="deny"></td>' +
+            '<td class="col-actions"><button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="color:var(--color-danger);">🗑</button></td>';
+        tbody.appendChild(tr);
+    };
+
+    window.saveConfig = async function(section) {
+        pendingSection = section;
+        // Gather form data
+        var payload = {};
+        if (section === 'general') {
+            var form = document.getElementById('settings-general-form');
+            new FormData(form).forEach(function(v, k) { payload[k] = v; });
+            payload.show_progress = document.getElementById('cfg-show-progress').checked;
+        } else if (section === 'security') {
+            var form = document.getElementById('settings-security-form');
+            new FormData(form).forEach(function(v, k) { payload[k] = v; });
+            payload.mfa_enabled = document.getElementById('cfg-mfa-enabled').checked;
+            payload.webhook_enabled = document.getElementById('cfg-webhook-enabled').checked;
+            payload.log_rejections = document.getElementById('cfg-log-rejections').checked;
+        } else if (section === 'ldap') {
+            var form = document.getElementById('settings-ldap-form');
+            new FormData(form).forEach(function(v, k) { payload[k] = v; });
+        } else if (section === 'routes') {
+            payload.routes = collectTableData('routes-body', ['pattern', 'upstream', 'port', 'user', 'auth_method']);
+        } else if (section === 'policies') {
+            payload.policies = collectTableData('policies-body', ['pattern', 'allow', 'deny']);
+        }
+
+        // Show diff
+        try {
+            var diff = await App.api('POST', '/api/v1/config/preview', { section: section, changes: payload });
+            document.getElementById('diff-content').textContent = diff.diff || JSON.stringify(payload, null, 2);
+            document.getElementById('diff-modal-overlay').classList.add('show');
+        } catch(e) {
+            // If preview not available, save directly
+            applyConfig();
+        }
+    };
+
+    function collectTableData(tbodyId, fields) {
+        var rows = [];
+        App.qsa('#' + tbodyId + ' tr').forEach(function(tr) {
+            if (tr.querySelector('.table-empty')) return;
+            var row = {};
+            fields.forEach(function(f) {
+                var input = tr.querySelector('[data-field="' + f + '"]');
+                if (input) row[f] = input.value;
+            });
+            rows.push(row);
+        });
+        return rows;
+    }
+
+    window.applyConfig = async function() {
+        closeDiffModal();
+        try {
+            await App.api('POST', '/api/v1/config', { section: pendingSection });
+            App.notify('Configuration saved. Reloading…', 'success');
+            loadConfig();
+        } catch(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    window.closeDiffModal = function() {
+        document.getElementById('diff-modal-overlay').classList.remove('show');
+    };
+
+    window.viewDiff = function(version) {
+        App.api('GET', '/api/v1/config/history/' + encodeURIComponent(version)).then(function(data) {
+            document.getElementById('diff-content').textContent = data.diff || JSON.stringify(data, null, 2);
+            document.getElementById('diff-apply-btn').style.display = 'none';
+            document.getElementById('diff-modal-overlay').classList.add('show');
+        }).catch(function(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        });
+    };
+
+    window.rollbackConfig = async function(version) {
+        var ok = await App.confirm('Rollback configuration to version ' + version + '?');
+        if (!ok) return;
+        try {
+            await App.api('POST', '/api/v1/config/rollback', { version: version });
+            App.notify('Configuration rolled back', 'success');
+            loadConfig();
+        } catch(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    window.testLdap = async function() {
+        try {
+            var data = await App.api('POST', '/api/v1/config/test-ldap', {
+                ldap_uri: document.getElementById('cfg-ldap-uri').value,
+                ldap_base_dn: document.getElementById('cfg-ldap-basedn').value,
+                ldap_bind_dn: document.getElementById('cfg-ldap-binddn').value,
+                ldap_bind_pw: document.getElementById('cfg-ldap-bindpw').value,
+            });
+            App.notify('LDAP connection successful!', 'success');
+        } catch(e) {
+            App.notify('LDAP test failed: ' + e.message, 'error');
+        }
+    };
+
+    loadConfig();
+})();
+</script>
+{{end}}

@@ -1,0 +1,45 @@
+{{define "header"}}
+<header class="header">
+    <div class="header-left">
+        <button class="btn btn-ghost btn-icon mobile-menu-btn" style="display:none;">☰</button>
+        <h1 class="header-title">{{template "page-title" .}}</h1>
+    </div>
+
+    <div class="header-search">
+        <span class="header-search-icon">🔍</span>
+        <input type="text" placeholder="Search sessions, users, servers…" id="global-search" autocomplete="off">
+    </div>
+
+    <div class="header-right">
+        <button class="header-icon-btn" id="theme-toggle" title="Toggle dark mode">🌙</button>
+
+        <div class="dropdown">
+            <button class="header-icon-btn" data-dropdown-toggle="notif-dropdown" title="Notifications">
+                🔔
+                {{if and .NotificationCount (gt .NotificationCount 0)}}
+                <span class="header-badge">{{.NotificationCount}}</span>
+                {{end}}
+            </button>
+            <div class="dropdown-menu" id="notif-dropdown">
+                <div style="padding:12px 16px;font-size:13px;color:var(--color-text-secondary);">
+                    No new notifications
+                </div>
+            </div>
+        </div>
+
+        <div class="dropdown">
+            <div class="header-user" data-dropdown-toggle="user-dropdown">
+                <div class="header-avatar">{{if .User}}{{slice .User.Username 0 1}}{{else}}A{{end}}</div>
+                <span class="header-username">{{if .User}}{{.User.Username}}{{else}}Admin{{end}}</span>
+            </div>
+            <div class="dropdown-menu" id="user-dropdown">
+                <a href="/settings" class="dropdown-item">⚙️ Settings</a>
+                <div class="dropdown-divider"></div>
+                <a href="/logout" class="dropdown-item" style="color:var(--color-danger);">🚪 Sign Out</a>
+            </div>
+        </div>
+    </div>
+</header>
+{{end}}
+
+{{define "page-title"}}Dashboard{{end}}

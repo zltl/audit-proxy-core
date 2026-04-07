@@ -1,0 +1,322 @@
+{{template "base" .}}
+
+{{define "title"}}Users{{end}}
+
+{{define "page-title"}}Users{{end}}
+
+{{define "content"}}
+<!-- Toolbar -->
+<div class="toolbar">
+    <div class="toolbar-left">
+        <div class="search-input">
+            <input type="text" id="user-search" placeholder="Search users…" oninput="filterUsers()">
+        </div>
+    </div>
+    <div class="toolbar-right">
+        <button class="btn btn-secondary btn-sm" onclick="showImportModal()">📥 Bulk Import</button>
+        <button class="btn btn-primary btn-sm" onclick="showUserModal()">+ Add User</button>
+    </div>
+</div>
+
+<!-- Users Table -->
+<div class="card">
+    <div class="table-wrapper">
+        <table id="users-table">
+            <thead>
+                <tr>
+                    <th class="sortable">Username <span class="sort-icon">↕</span></th>
+                    <th class="sortable">Display Name <span class="sort-icon">↕</span></th>
+                    <th>Email</th>
+                    <th>Role</th>
+                    <th>MFA</th>
+                    <th>Status</th>
+                    <th class="sortable">Last Login <span class="sort-icon">↕</span></th>
+                    <th class="col-actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="users-body">
+                <tr><td colspan="8" class="table-empty">
+                    <div class="skeleton skeleton-row"></div>
+                    <div class="skeleton skeleton-row"></div>
+                    <div class="skeleton skeleton-row"></div>
+                </td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Create/Edit User Modal -->
+<div class="modal-overlay" id="user-modal-overlay">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title" id="user-modal-title">Add User</h3>
+            <button class="modal-close" onclick="closeUserModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <form id="user-form">
+                <input type="hidden" id="user-edit-id" name="id">
+                <div class="form-group">
+                    <label class="form-label">Username <span class="required">*</span></label>
+                    <input type="text" class="form-control" id="user-username" name="username" required placeholder="e.g. john">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Display Name</label>
+                    <input type="text" class="form-control" id="user-display-name" name="display_name" placeholder="e.g. John Doe">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Email</label>
+                    <input type="email" class="form-control" id="user-email" name="email" placeholder="john@example.com">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Password <span class="required">*</span></label>
+                        <input type="password" class="form-control" id="user-password" name="password" placeholder="Min 8 characters">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Role</label>
+                        <select class="form-control" id="user-role" name="role">
+                            <option value="user">User</option>
+                            <option value="operator">Operator</option>
+                            <option value="auditor">Auditor</option>
+                            <option value="admin">Admin</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-check">
+                        <input type="checkbox" id="user-enabled" name="enabled" checked>
+                        <span>Account enabled</span>
+                    </label>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeUserModal()">Cancel</button>
+            <button class="btn btn-primary" id="user-save-btn" onclick="saveUser()">Save User</button>
+        </div>
+    </div>
+</div>
+
+<!-- MFA Setup Modal -->
+<div class="modal-overlay" id="mfa-modal-overlay">
+    <div class="modal modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">MFA Setup</h3>
+            <button class="modal-close" onclick="closeMfaModal()">✕</button>
+        </div>
+        <div class="modal-body text-center" id="mfa-modal-body">
+            <p class="mb-md text-muted">Scan this QR code with your authenticator app.</p>
+            <div id="mfa-qr" style="padding:20px;background:#fff;display:inline-block;border-radius:var(--radius-md);">
+                <div class="skeleton" style="width:200px;height:200px;"></div>
+            </div>
+            <div class="mt-md">
+                <label class="form-label">Or enter this key manually:</label>
+                <code id="mfa-secret" style="font-size:14px;letter-spacing:2px;">—</code>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-primary" onclick="closeMfaModal()">Done</button>
+        </div>
+    </div>
+</div>
+
+<!-- Bulk Import Modal -->
+<div class="modal-overlay" id="import-modal-overlay">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">Bulk Import Users</h3>
+            <button class="modal-close" onclick="closeImportModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <p class="mb-md text-muted">Upload a CSV file with columns: username, password, display_name, email, role</p>
+            <div class="form-group">
+                <input type="file" class="form-control" id="import-file" accept=".csv">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeImportModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="importUsers()">Import</button>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+(function() {
+    var allUsers = [];
+
+    window.loadUsers = function() {
+        App.api('GET', '/api/v1/users').then(function(data) {
+            allUsers = data.users || data.items || data || [];
+            renderUsers(allUsers);
+            App.table('#users-table');
+        }).catch(function(e) {
+            document.getElementById('users-body').innerHTML =
+                '<tr><td colspan="8" class="table-empty">Failed to load: ' + App.escapeHtml(e.message) + '</td></tr>';
+        });
+    };
+
+    function renderUsers(users) {
+        var tbody = document.getElementById('users-body');
+        if (!users.length) {
+            tbody.innerHTML = '<tr><td colspan="8" class="table-empty"><div class="table-empty-icon">👥</div>No users found</td></tr>';
+            return;
+        }
+        tbody.innerHTML = users.map(function(u) {
+            var roleCls = u.role === 'admin' ? 'badge-danger' : u.role === 'operator' ? 'badge-warning' : u.role === 'auditor' ? 'badge-info' : 'badge-neutral';
+            var mfaHtml = u.mfa_enabled
+                ? '<span class="badge badge-success">Enabled</span>'
+                : '<button class="btn btn-ghost btn-sm" onclick="setupMfa(\'' + App.escapeHtml(u.username) + '\')">Setup</button>';
+            var statusHtml = u.enabled !== false
+                ? '<span class="badge badge-success"><span class="badge-dot green"></span>Active</span>'
+                : '<span class="badge badge-neutral"><span class="badge-dot gray"></span>Disabled</span>';
+
+            return '<tr data-id="' + App.escapeHtml(u.username) + '">' +
+                '<td><strong>' + App.escapeHtml(u.username) + '</strong></td>' +
+                '<td>' + App.escapeHtml(u.display_name || '—') + '</td>' +
+                '<td>' + App.escapeHtml(u.email || '—') + '</td>' +
+                '<td><span class="badge ' + roleCls + '">' + App.escapeHtml(u.role || 'user') + '</span></td>' +
+                '<td>' + mfaHtml + '</td>' +
+                '<td>' + statusHtml + '</td>' +
+                '<td>' + App.formatTime(u.last_login) + '</td>' +
+                '<td class="col-actions">' +
+                    '<button class="btn btn-ghost btn-sm" onclick="editUser(\'' + App.escapeHtml(u.username) + '\')" title="Edit">✏️</button> ' +
+                    '<button class="btn btn-ghost btn-sm" onclick="toggleUser(\'' + App.escapeHtml(u.username) + '\', ' + (u.enabled !== false) + ')" title="Toggle">' + (u.enabled !== false ? '🔒' : '🔓') + '</button>' +
+                '</td></tr>';
+        }).join('');
+    }
+
+    window.filterUsers = function() {
+        var q = document.getElementById('user-search').value.toLowerCase();
+        var filtered = allUsers.filter(function(u) {
+            return (u.username || '').toLowerCase().includes(q) ||
+                   (u.display_name || '').toLowerCase().includes(q) ||
+                   (u.email || '').toLowerCase().includes(q);
+        });
+        renderUsers(filtered);
+    };
+
+    window.showUserModal = function(user) {
+        document.getElementById('user-modal-title').textContent = user ? 'Edit User' : 'Add User';
+        document.getElementById('user-edit-id').value = user ? user.username : '';
+        document.getElementById('user-username').value = user ? user.username : '';
+        document.getElementById('user-username').disabled = !!user;
+        document.getElementById('user-display-name').value = user ? (user.display_name || '') : '';
+        document.getElementById('user-email').value = user ? (user.email || '') : '';
+        document.getElementById('user-password').value = '';
+        document.getElementById('user-password').required = !user;
+        document.getElementById('user-role').value = user ? (user.role || 'user') : 'user';
+        document.getElementById('user-enabled').checked = user ? user.enabled !== false : true;
+        document.getElementById('user-modal-overlay').classList.add('show');
+    };
+
+    window.closeUserModal = function() {
+        document.getElementById('user-modal-overlay').classList.remove('show');
+    };
+
+    window.editUser = function(username) {
+        var user = allUsers.find(function(u) { return u.username === username; });
+        if (user) showUserModal(user);
+    };
+
+    window.saveUser = async function() {
+        var form = document.getElementById('user-form');
+        if (!form.checkValidity()) { form.reportValidity(); return; }
+
+        var id = document.getElementById('user-edit-id').value;
+        var payload = {
+            username: document.getElementById('user-username').value,
+            display_name: document.getElementById('user-display-name').value,
+            email: document.getElementById('user-email').value,
+            role: document.getElementById('user-role').value,
+            enabled: document.getElementById('user-enabled').checked,
+        };
+        var pass = document.getElementById('user-password').value;
+        if (pass) payload.password = pass;
+
+        App.btnLoading('#user-save-btn', true);
+        try {
+            if (id) {
+                await App.api('PUT', '/api/v1/users/' + encodeURIComponent(id), payload);
+            } else {
+                await App.api('POST', '/api/v1/users', payload);
+            }
+            App.notify('User saved successfully', 'success');
+            closeUserModal();
+            loadUsers();
+        } catch(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+        App.btnLoading('#user-save-btn', false);
+    };
+
+    window.toggleUser = async function(username, currentlyEnabled) {
+        var action = currentlyEnabled ? 'disable' : 'enable';
+        var ok = await App.confirm(action.charAt(0).toUpperCase() + action.slice(1) + ' user "' + username + '"?');
+        if (!ok) return;
+        try {
+            await App.api('POST', '/api/v1/users/' + encodeURIComponent(username) + '/' + action);
+            App.notify('User ' + action + 'd', 'success');
+            loadUsers();
+        } catch(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    window.setupMfa = function(username) {
+        document.getElementById('mfa-modal-overlay').classList.add('show');
+        document.getElementById('mfa-qr').innerHTML = '<div class="skeleton" style="width:200px;height:200px;"></div>';
+        document.getElementById('mfa-secret').textContent = '—';
+
+        App.api('POST', '/api/v1/users/' + encodeURIComponent(username) + '/mfa/setup').then(function(data) {
+            if (data.qr_url) {
+                document.getElementById('mfa-qr').innerHTML = '<img src="' + App.escapeHtml(data.qr_url) + '" width="200" height="200" alt="QR Code">';
+            }
+            document.getElementById('mfa-secret').textContent = data.secret || '—';
+        }).catch(function(e) {
+            document.getElementById('mfa-qr').innerHTML = '<p class="text-danger">Failed: ' + App.escapeHtml(e.message) + '</p>';
+        });
+    };
+
+    window.closeMfaModal = function() {
+        document.getElementById('mfa-modal-overlay').classList.remove('show');
+    };
+
+    window.showImportModal = function() {
+        document.getElementById('import-modal-overlay').classList.add('show');
+    };
+
+    window.closeImportModal = function() {
+        document.getElementById('import-modal-overlay').classList.remove('show');
+    };
+
+    window.importUsers = async function() {
+        var fileInput = document.getElementById('import-file');
+        if (!fileInput.files.length) {
+            App.notify('Please select a CSV file', 'warning');
+            return;
+        }
+        var formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+        try {
+            var res = await fetch('/api/v1/users/import', {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': App.csrfToken() },
+                credentials: 'same-origin',
+                body: formData,
+            });
+            if (!res.ok) throw { message: res.statusText };
+            var data = await res.json();
+            App.notify('Imported ' + (data.count || 0) + ' user(s)', 'success');
+            closeImportModal();
+            loadUsers();
+        } catch(e) {
+            App.notify('Import failed: ' + e.message, 'error');
+        }
+    };
+
+    loadUsers();
+})();
+</script>
+{{end}}
