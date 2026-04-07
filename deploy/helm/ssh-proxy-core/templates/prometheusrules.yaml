@@ -1,0 +1,50 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRules }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "ssh-proxy-core.fullname" . }}
+  labels:
+    {{- include "ssh-proxy-core.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: ssh-proxy-core.rules
+      rules:
+        - alert: SSHProxyDown
+          expr: up{job="{{ include "ssh-proxy-core.fullname" . }}-data-plane"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "SSH Proxy data-plane is down"
+            description: "SSH Proxy data-plane instance {{`{{ $labels.instance }}`}} has been unreachable for more than 5 minutes."
+
+        - alert: SSHProxyHighErrorRate
+          expr: |
+            rate(ssh_proxy_errors_total{job="{{ include "ssh-proxy-core.fullname" . }}-data-plane"}[5m]) > 0.1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "SSH Proxy high error rate"
+            description: "SSH Proxy error rate is above 0.1/s for more than 10 minutes on {{`{{ $labels.instance }}`}}."
+
+        - alert: SSHProxyCertificateExpiry
+          expr: |
+            ssh_proxy_tls_cert_expiry_seconds < 604800
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "SSH Proxy TLS certificate expiring soon"
+            description: "TLS certificate on {{`{{ $labels.instance }}`}} expires in less than 7 days."
+
+        - alert: SSHProxyClusterNodeOffline
+          expr: |
+            ssh_proxy_cluster_nodes_healthy < ssh_proxy_cluster_nodes_total
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "SSH Proxy cluster node offline"
+            description: "One or more cluster nodes are offline. Healthy: {{`{{ $value }}`}}."
+{{- end }}

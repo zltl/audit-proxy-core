@@ -1,0 +1,63 @@
+version: "3.8"
+
+services:
+  data-plane:
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+    container_name: ssh-proxy-data-plane
+    ports:
+      - "2222:2222"
+      - "9090:9090"
+    volumes:
+      - config:/etc/ssh-proxy
+      - audit:/data/audit
+      - recordings:/data/recordings
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 2222 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - ssh-proxy
+
+  control-plane:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.control-plane
+    container_name: ssh-proxy-control-plane
+    ports:
+      - "8443:8443"
+    environment:
+      - SSH_PROXY_ADMIN_TOKEN=${ADMIN_TOKEN:-changeme}
+      - SSH_PROXY_DATA_PLANE_ADDR=data-plane:2222
+    volumes:
+      - config:/etc/ssh-proxy:ro
+      - audit:/data/audit:ro
+      - recordings:/data/recordings:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8443/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      data-plane:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ssh-proxy
+
+volumes:
+  config:
+    driver: local
+  audit:
+    driver: local
+  recordings:
+    driver: local
+
+networks:
+  ssh-proxy:
+    driver: bridge

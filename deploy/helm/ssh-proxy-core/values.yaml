@@ -1,0 +1,88 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/ssh-proxy-core/ssh-proxy-core
+  tag: ""  # defaults to chart appVersion
+  pullPolicy: IfNotPresent
+
+dataPlane:
+  enabled: true
+  port: 2222
+  replicas: 2
+  resources:
+    limits:
+      cpu: "1"
+      memory: "512Mi"
+    requests:
+      cpu: "250m"
+      memory: "128Mi"
+
+controlPlane:
+  enabled: true
+  port: 8443
+  replicas: 2
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+    requests:
+      cpu: "100m"
+      memory: "64Mi"
+
+service:
+  type: LoadBalancer
+  sshPort: 2222
+  httpPort: 443
+
+ingress:
+  enabled: false
+  className: nginx
+  hosts: []
+  tls: []
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 10Gi
+  accessMode: ReadWriteOnce
+
+config:
+  logLevel: info
+  adminToken: ""  # generate if empty
+  auditEnabled: true
+  ldap:
+    enabled: false
+    uri: ""
+  oidc:
+    enabled: false
+    issuer: ""
+    clientID: ""
+
+tls:
+  enabled: true
+  certManager: false
+  secretName: ""
+
+cluster:
+  enabled: true
+  seeds: []
+
+monitoring:
+  enabled: true
+  serviceMonitor: true
+  prometheusRules: true
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  fsGroup: 65534
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]

@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "ssh-proxy-core.fullname" . }}-test-connection
+  labels:
+    {{- include "ssh-proxy-core.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    {{- if .Values.dataPlane.enabled }}
+    - name: test-ssh
+      image: busybox:1.36
+      command: ['sh', '-c']
+      args:
+        - |
+          echo "Testing SSH data-plane connectivity..."
+          if nc -z -w 5 {{ include "ssh-proxy-core.fullname" . }}-data-plane.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.service.sshPort }}; then
+            echo "SUCCESS: SSH data-plane is reachable on port {{ .Values.service.sshPort }}"
+          else
+            echo "FAIL: SSH data-plane is not reachable"
+            exit 1
+          fi
+    {{- end }}
+    {{- if .Values.controlPlane.enabled }}
+    - name: test-control-plane
+      image: busybox:1.36
+      command: ['sh', '-c']
+      args:
+        - |
+          echo "Testing control-plane connectivity..."
+          if nc -z -w 5 {{ include "ssh-proxy-core.fullname" . }}-control-plane.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.service.httpPort }}; then
+            echo "SUCCESS: Control-plane is reachable on port {{ .Values.service.httpPort }}"
+          else
+            echo "FAIL: Control-plane is not reachable"
+            exit 1
+          fi
+    {{- end }}

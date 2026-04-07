@@ -1,0 +1,24 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.serviceMonitor }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "ssh-proxy-core.fullname" . }}
+  labels:
+    {{- include "ssh-proxy-core.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ssh-proxy-core.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+    - port: https
+      interval: 30s
+      path: /metrics
+      {{- if .Values.tls.enabled }}
+      scheme: https
+      tlsConfig:
+        insecureSkipVerify: true
+      {{- end }}
+{{- end }}

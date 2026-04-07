@@ -1,0 +1,69 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ssh-proxy-core.fullname" . }}
+  labels:
+    {{- include "ssh-proxy-core.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ssh-proxy-core.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow SSH traffic to data-plane
+    - ports:
+        - port: {{ .Values.dataPlane.port }}
+          protocol: TCP
+      from: []
+    # Allow HTTPS traffic to control-plane
+    - ports:
+        - port: {{ .Values.controlPlane.port }}
+          protocol: TCP
+      from: []
+    # Allow metrics scraping
+    - ports:
+        - port: 9090
+          protocol: TCP
+      from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+  egress:
+    # Allow DNS resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+      to: []
+    # Allow upstream SSH connections
+    - ports:
+        - port: 22
+          protocol: TCP
+      to: []
+    # Allow cluster-internal communication
+    - ports:
+        - port: {{ .Values.controlPlane.port }}
+          protocol: TCP
+      to:
+        - podSelector:
+            matchLabels:
+              {{- include "ssh-proxy-core.selectorLabels" . | nindent 14 }}
+    {{- if .Values.config.ldap.enabled }}
+    # Allow LDAP traffic
+    - ports:
+        - port: 389
+          protocol: TCP
+        - port: 636
+          protocol: TCP
+      to: []
+    {{- end }}
+    {{- if .Values.config.oidc.enabled }}
+    # Allow OIDC provider traffic
+    - ports:
+        - port: 443
+          protocol: TCP
+      to: []
+    {{- end }}

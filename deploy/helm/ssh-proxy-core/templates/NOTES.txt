@@ -1,0 +1,48 @@
+
+=======================================================
+  SSH Proxy Core {{ .Chart.AppVersion }}
+=======================================================
+
+{{- if .Values.dataPlane.enabled }}
+
+SSH Data Plane:
+{{- if eq .Values.service.type "LoadBalancer" }}
+  NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+  Watch status with:
+    kubectl get svc {{ include "ssh-proxy-core.fullname" . }}-data-plane -n {{ .Release.Namespace }} -w
+
+  Once available, connect with:
+    ssh -p {{ .Values.service.sshPort }} <user>@<EXTERNAL-IP>
+{{- else if eq .Values.service.type "NodePort" }}
+  export NODE_PORT=$(kubectl get svc {{ include "ssh-proxy-core.fullname" . }}-data-plane -n {{ .Release.Namespace }} -o jsonpath='{.spec.ports[0].nodePort}')
+  export NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[0].address}')
+  ssh -p $NODE_PORT <user>@$NODE_IP
+{{- else }}
+  kubectl port-forward svc/{{ include "ssh-proxy-core.fullname" . }}-data-plane -n {{ .Release.Namespace }} {{ .Values.service.sshPort }}:{{ .Values.service.sshPort }}
+  ssh -p {{ .Values.service.sshPort }} <user>@127.0.0.1
+{{- end }}
+{{- end }}
+
+{{- if .Values.controlPlane.enabled }}
+
+Control Plane (Web UI / API):
+  kubectl port-forward svc/{{ include "ssh-proxy-core.fullname" . }}-control-plane -n {{ .Release.Namespace }} {{ .Values.service.httpPort }}:{{ .Values.service.httpPort }}
+  {{- if .Values.tls.enabled }}
+  Open: https://127.0.0.1:{{ .Values.service.httpPort }}
+  {{- else }}
+  Open: http://127.0.0.1:{{ .Values.service.httpPort }}
+  {{- end }}
+
+  Admin token:
+    kubectl get secret {{ include "ssh-proxy-core.fullname" . }}-secret -n {{ .Release.Namespace }} -o jsonpath='{.data.admin-token}' | base64 -d
+{{- end }}
+
+{{- if .Values.monitoring.enabled }}
+
+Monitoring:
+  ServiceMonitor and PrometheusRules are enabled.
+  Ensure the Prometheus Operator is installed in your cluster.
+{{- end }}
+
+For more information, visit:
+  https://github.com/ssh-proxy-core/ssh-proxy-core

@@ -1,0 +1,122 @@
+{{- if .Values.controlPlane.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ssh-proxy-core.fullname" . }}-control-plane
+  labels:
+    {{- include "ssh-proxy-core.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  replicas: {{ .Values.controlPlane.replicas }}
+  selector:
+    matchLabels:
+      {{- include "ssh-proxy-core.controlPlane.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ssh-proxy-core.controlPlane.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "ssh-proxy-core.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "ssh-proxy-core.controlPlane.selectorLabels" . | nindent 20 }}
+                topologyKey: kubernetes.io/hostname
+        {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: control-plane
+          image: {{ include "ssh-proxy-core.image" . }}-control-plane
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "-addr"
+            - ":{{ .Values.controlPlane.port }}"
+          ports:
+            - name: https
+              containerPort: {{ .Values.controlPlane.port }}
+              protocol: TCP
+          env:
+            - name: SSH_PROXY_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ssh-proxy-core.fullname" . }}-secret
+                  key: admin-token
+            {{- if .Values.config.oidc.enabled }}
+            - name: SSH_PROXY_OIDC_ISSUER
+              value: {{ .Values.config.oidc.issuer | quote }}
+            - name: SSH_PROXY_OIDC_CLIENT_ID
+              value: {{ .Values.config.oidc.clientID | quote }}
+            - name: SSH_PROXY_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ssh-proxy-core.fullname" . }}-secret
+                  key: oidc-client-secret
+            {{- end }}
+            {{- if .Values.cluster.enabled }}
+            - name: SSH_PROXY_CLUSTER_ENABLED
+              value: "true"
+            - name: SSH_PROXY_CLUSTER_SEEDS
+              value: {{ include "ssh-proxy-core.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: https
+              {{- if .Values.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: https
+              {{- if .Values.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ssh-proxy
+              readOnly: true
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "ssh-proxy-core.fullname" . }}-config
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "ssh-proxy-core.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}

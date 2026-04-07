@@ -1,0 +1,18 @@
+{{- if .Values.controlPlane.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ssh-proxy-core.fullname" . }}-control-plane
+  labels:
+    {{- include "ssh-proxy-core.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  type: ClusterIP
+  ports:
+    - name: https
+      port: {{ .Values.service.httpPort }}
+      targetPort: https
+      protocol: TCP
+  selector:
+    {{- include "ssh-proxy-core.controlPlane.selectorLabels" . | nindent 4 }}
+{{- end }}
