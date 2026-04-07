@@ -15,15 +15,14 @@ CFLAGS += $(LIBSSH_CFLAGS)
 LIBS += $(LIBSSH_LIBS)
 
 # pthread and crypt for session/auth
-LIBS += -lpthread -lcrypt -lssl -lcrypto
+LIBS += -lpthread -lcrypt
 
-# Optional OpenSSL/TLS support
+# Optional TLS/OpenSSL support (build with TLS_ENABLED=1)
 TLS_ENABLED ?= 0
 ifeq ($(TLS_ENABLED),1)
-    CFLAGS += -DTLS_ENABLED
     OPENSSL_CFLAGS := $(shell pkg-config --cflags openssl 2>/dev/null)
     OPENSSL_LIBS := $(shell pkg-config --libs openssl 2>/dev/null)
-    CFLAGS += $(OPENSSL_CFLAGS)
+    CFLAGS += $(OPENSSL_CFLAGS) -DTLS_ENABLED
     LIBS += $(OPENSSL_LIBS)
 endif
 
@@ -130,6 +129,15 @@ check-deps:
 		echo "  Or build from source: https://www.libssh.org/get-it/"; \
 		exit 1; \
 	}
+ifeq ($(TLS_ENABLED),1)
+	@pkg-config --exists openssl || { \
+		echo "Error: OpenSSL not found (required for TLS_ENABLED=1). Please install:"; \
+		echo "  Ubuntu/Debian: sudo apt-get install libssl-dev"; \
+		echo "  RHEL/CentOS:   sudo yum install openssl-devel"; \
+		echo "  macOS:         brew install openssl"; \
+		exit 1; \
+	}
+endif
 
 # Debug build
 debug:
