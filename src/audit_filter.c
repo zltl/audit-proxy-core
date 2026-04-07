@@ -4,6 +4,7 @@
  */
 
 #include "audit_filter.h"
+#include "audit_sign.h"
 #include "session.h"
 #include "logger.h"
 
@@ -33,6 +34,8 @@ typedef struct recording_session {
 typedef struct audit_filter_state {
     recording_session_t recordings[MAX_RECORDINGS];
     size_t recording_count;
+    uint8_t event_prev_hash[SHA256_DIGEST_SIZE];   /* chain hash for event log */
+    uint8_t cmd_prev_hash[SHA256_DIGEST_SIZE];     /* chain hash for command log */
 } audit_filter_state_t;
 
 /* Event type names */
@@ -84,6 +87,7 @@ static void get_timestamp(char *buf, size_t len)
 
 /* Write event to file */
 static void write_event_file(const audit_filter_config_t *config,
+                             audit_filter_state_t *state,
                              const audit_event_t *event)
 {
     if (config->log_dir == NULL) {
@@ -108,7 +112,12 @@ static void write_event_file(const audit_filter_config_t *config,
     char timestamp[32];
     get_timestamp(timestamp, sizeof(timestamp));
 
-    fprintf(f, "%s [%s] session=%lu user=%s client=%s target=%s",
+    if (config->signing_key != NULL) {
+        /* JSON format with HMAC signing */
+        char json_buf[4096];
+        int jlen = snprintf(json_buf, sizeof(json_buf),
+            "{\"timestamp\":\"%s\",\"type\":\"%s\",\"session\":%lu,"
+            "\"user\":\"%s\",\"client\":\"%s\",\"target\":\"%s\"}",
             timestamp,
             audit_event_type_name(event->type),
             event->session_id,
@@ -116,18 +125,45 @@ static void write_event_file(const audit_filter_config_t *config,
             event->client_addr ? event->client_addr : "-",
             event->target_addr ? event->target_addr : "-");
 
-    if (event->data != NULL && event->data_len > 0) {
-        /* Truncate long data */
-        size_t print_len = event->data_len;
-        if (print_len > 128) {
-            print_len = 128;
+        if (jlen > 0 && (size_t)jlen < sizeof(json_buf)) {
+            char signed_buf[8192];
+            int slen = audit_sign_line(
+                json_buf, config->signing_key,
+                state ? state->event_prev_hash : NULL,
+                config->enable_chain_hash ? 1 : 0,
+                signed_buf, sizeof(signed_buf));
+
+            if (slen > 0) {
+                fprintf(f, "%s\n", signed_buf);
+            } else {
+                LOG_WARN("Failed to sign audit event, writing unsigned");
+                fprintf(f, "%s\n", json_buf);
+            }
         }
-        fprintf(f, " data=\"%.*s%s\"",
-                (int)print_len, event->data,
-                event->data_len > 128 ? "..." : "");
+    } else {
+        /* Legacy plain-text format */
+        fprintf(f, "%s [%s] session=%lu user=%s client=%s target=%s",
+                timestamp,
+                audit_event_type_name(event->type),
+                event->session_id,
+                event->username ? event->username : "-",
+                event->client_addr ? event->client_addr : "-",
+                event->target_addr ? event->target_addr : "-");
+
+        if (event->data != NULL && event->data_len > 0) {
+            /* Truncate long data */
+            size_t print_len = event->data_len;
+            if (print_len > 128) {
+                print_len = 128;
+            }
+            fprintf(f, " data=\"%.*s%s\"",
+                    (int)print_len, event->data,
+                    event->data_len > 128 ? "..." : "");
+        }
+
+        fprintf(f, "\n");
     }
 
-    fprintf(f, "\n");
     fclose(f);
 }
 
@@ -153,9 +189,11 @@ static void internal_write_event(filter_t *filter, const audit_event_t *event)
         return;
     }
 
+    audit_filter_state_t *state = (audit_filter_state_t *)filter->state;
+
     switch (config->storage) {
     case AUDIT_STORAGE_FILE:
-        write_event_file(config, event);
+        write_event_file(config, state, event);
         break;
     case AUDIT_STORAGE_SYSLOG:
         write_event_syslog(event);
@@ -411,7 +449,9 @@ static void audit_destroy(filter_t *filter)
     /* Free config - it was allocated in audit_filter_create */
     if (filter->config != NULL) {
         audit_filter_config_t *config = (audit_filter_config_t *)filter->config;
-        /* Note: log_dir and log_prefix point to original strings, not strdup'd */
+        free((void *)config->log_dir);
+        free((void *)config->log_prefix);
+        free((void *)config->signing_key);
         free(config);
         filter->config = NULL;
     }
@@ -439,12 +479,20 @@ filter_t *audit_filter_create(const audit_filter_config_t *config)
     if (config->log_prefix != NULL) {
         cfg_copy->log_prefix = strdup(config->log_prefix);
     }
+    if (config->signing_key != NULL) {
+        cfg_copy->signing_key = strdup(config->signing_key);
+        /* Default: enable chain hash when signing is active */
+        if (!config->enable_chain_hash) {
+            cfg_copy->enable_chain_hash = true;
+        }
+    }
 
     filter_t *filter = filter_create("audit", FILTER_TYPE_AUDIT,
                                      &audit_callbacks, cfg_copy);
     if (filter == NULL) {
         free((void *)cfg_copy->log_dir);
         free((void *)cfg_copy->log_prefix);
+        free((void *)cfg_copy->signing_key);
         free(cfg_copy);
         return NULL;
     }
@@ -452,9 +500,9 @@ filter_t *audit_filter_create(const audit_filter_config_t *config)
     /* Create state */
     audit_filter_state_t *state = calloc(1, sizeof(audit_filter_state_t));
     if (state == NULL) {
-        filter_chain_destroy(NULL); /* This won't work, need proper cleanup */
         free((void *)cfg_copy->log_dir);
         free((void *)cfg_copy->log_prefix);
+        free((void *)cfg_copy->signing_key);
         free(cfg_copy);
         free(filter);
         return NULL;
@@ -631,6 +679,8 @@ void audit_log_command(filter_t *filter, uint64_t session_id,
     audit_filter_config_t *config = (audit_filter_config_t *)filter->config;
     if (config == NULL || config->log_dir == NULL) return;
 
+    audit_filter_state_t *state = (audit_filter_state_t *)filter->state;
+
     /* Build command log file path */
     char path[512];
     time_t now = time(NULL);
@@ -650,30 +700,54 @@ void audit_log_command(filter_t *filter, uint64_t session_id,
     strncpy(sanitized, command, sizeof(sanitized) - 1);
     sanitized[sizeof(sanitized) - 1] = '\0';
 
-    /* Write JSON log entry */
-    fprintf(f, "{\"timestamp\":%ld,\"session\":%lu,\"user\":\"%s\","
-               "\"upstream\":\"%s\",\"type\":\"command\",\"command\":\"",
-            (long)now, session_id,
-            username ? username : "-",
-            upstream ? upstream : "-");
+    /* Build the JSON body with escaped command into a buffer */
+    char json_buf[8192];
+    int pos = snprintf(json_buf, sizeof(json_buf),
+        "{\"timestamp\":%ld,\"session\":%lu,\"user\":\"%s\","
+        "\"upstream\":\"%s\",\"type\":\"command\",\"command\":\"",
+        (long)now, session_id,
+        username ? username : "-",
+        upstream ? upstream : "-");
 
-    /* JSON-escape the command string */
-    for (const char *p = sanitized; *p != '\0'; p++) {
+    /* JSON-escape the command string into json_buf */
+    for (const char *p = sanitized; *p != '\0' && (size_t)pos < sizeof(json_buf) - 3; p++) {
         switch (*p) {
-        case '"':  fprintf(f, "\\\""); break;
-        case '\\': fprintf(f, "\\\\"); break;
-        case '\n': fprintf(f, "\\n"); break;
-        case '\r': fprintf(f, "\\r"); break;
-        case '\t': fprintf(f, "\\t"); break;
+        case '"':  pos += snprintf(json_buf + pos, sizeof(json_buf) - (size_t)pos, "\\\""); break;
+        case '\\': pos += snprintf(json_buf + pos, sizeof(json_buf) - (size_t)pos, "\\\\"); break;
+        case '\n': pos += snprintf(json_buf + pos, sizeof(json_buf) - (size_t)pos, "\\n"); break;
+        case '\r': pos += snprintf(json_buf + pos, sizeof(json_buf) - (size_t)pos, "\\r"); break;
+        case '\t': pos += snprintf(json_buf + pos, sizeof(json_buf) - (size_t)pos, "\\t"); break;
         default:
-            if ((unsigned char)*p >= 32) {
-                fputc(*p, f);
+            if ((unsigned char)*p >= 32 && (size_t)pos < sizeof(json_buf) - 1) {
+                json_buf[pos++] = *p;
             }
             break;
         }
     }
+    if ((size_t)pos < sizeof(json_buf) - 2) {
+        json_buf[pos++] = '"';
+        json_buf[pos++] = '}';
+        json_buf[pos] = '\0';
+    }
 
-    fprintf(f, "\"}\n");
+    if (config->signing_key != NULL) {
+        char signed_buf[8192];
+        int slen = audit_sign_line(
+            json_buf, config->signing_key,
+            state ? state->cmd_prev_hash : NULL,
+            config->enable_chain_hash ? 1 : 0,
+            signed_buf, sizeof(signed_buf));
+
+        if (slen > 0) {
+            fprintf(f, "%s\n", signed_buf);
+        } else {
+            LOG_WARN("Failed to sign command log, writing unsigned");
+            fprintf(f, "%s\n", json_buf);
+        }
+    } else {
+        fprintf(f, "%s\n", json_buf);
+    }
+
     fclose(f);
 }
 

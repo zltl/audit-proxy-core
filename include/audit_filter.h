@@ -72,6 +72,10 @@ struct audit_filter_config {
     /* Custom callback */
     audit_event_cb event_cb;
     void *cb_user_data;
+
+    /* Audit log signing (HMAC-SHA256) */
+    const char *signing_key;    /* Hex-encoded HMAC key (NULL = no signing) */
+    bool enable_chain_hash;     /* Enable chain hashing (default true when signing) */
 };
 
 /* Asciicast header (v2 format) */
