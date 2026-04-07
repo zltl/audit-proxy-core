@@ -4,9 +4,10 @@
  *
  * Implements just enough LDAP protocol to perform Simple Bind operations
  * for password authentication. Uses raw TCP sockets - no libldap dependency.
+ * Supports optional TLS via LDAPS (ldaps://) and StartTLS extension.
  *
  * Protocol: RFC 4511 (LDAPv3)
- * Only supports: BindRequest/BindResponse with Simple authentication
+ * Supports: BindRequest/BindResponse, ExtendedRequest/ExtendedResponse (StartTLS)
  */
 
 #include "auth_filter.h"
@@ -23,23 +24,34 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
+#ifdef TLS_ENABLED
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#endif
+
 /* BER/ASN.1 tag constants */
 #define BER_TAG_SEQUENCE     0x30
 #define BER_TAG_INTEGER      0x02
 #define BER_TAG_OCTET_STRING 0x04
-#define BER_TAG_CONTEXT_0    0x80  /* Simple auth in BindRequest */
+#define BER_TAG_CONTEXT_0    0x80  /* Simple auth in BindRequest / requestName */
 #define BER_TAG_ENUM         0x0a
 
 /* LDAP operation constants */
-#define LDAP_BIND_REQUEST    0x60  /* [APPLICATION 0] SEQUENCE */
-#define LDAP_BIND_RESPONSE   0x61  /* [APPLICATION 1] SEQUENCE */
-#define LDAP_VERSION_3       3
-#define LDAP_SUCCESS         0
+#define LDAP_BIND_REQUEST       0x60  /* [APPLICATION 0] SEQUENCE */
+#define LDAP_BIND_RESPONSE      0x61  /* [APPLICATION 1] SEQUENCE */
+#define LDAP_EXTENDED_REQUEST   0x77  /* [APPLICATION 23] SEQUENCE */
+#define LDAP_EXTENDED_RESPONSE  0x78  /* [APPLICATION 24] SEQUENCE */
+#define LDAP_VERSION_3          3
+#define LDAP_SUCCESS            0
 
 /* Maximum buffer sizes */
 #define LDAP_MAX_BUF         4096
 #define LDAP_DEFAULT_PORT    389
+#define LDAPS_DEFAULT_PORT   636
 #define LDAP_DEFAULT_TIMEOUT 5
+
+/* StartTLS OID */
+#define STARTTLS_OID "1.3.6.1.4.1.1466.20037"
 
 /* Write BER length encoding */
 static size_t ber_write_length(uint8_t *buf, size_t len)
@@ -153,6 +165,64 @@ static size_t build_bind_request(uint8_t *buf, size_t buf_size,
     return pos;
 }
 
+/* Build LDAP StartTLS Extended Request message */
+size_t build_starttls_request(uint8_t *buf, size_t buf_size, int message_id)
+{
+    /*
+     * ExtendedRequest ::= [APPLICATION 23] SEQUENCE {
+     *     requestName  [0] LDAPOID  -- "1.3.6.1.4.1.1466.20037"
+     * }
+     *
+     * Wrapped in LDAPMessage:
+     *   SEQUENCE {
+     *     INTEGER messageID,
+     *     ExtendedRequest { [0] OID }
+     *   }
+     */
+    size_t oid_len = strlen(STARTTLS_OID);
+
+    /* requestName: [0] tag + length + OID string */
+    size_t req_name_len = 1 + ber_length_size(oid_len) + oid_len;
+
+    /* ExtendedRequest: APPLICATION 23 tag + length + requestName */
+    size_t ext_req_content_len = req_name_len;
+
+    /* Message ID */
+    uint8_t msg_id_buf[8];
+    size_t msg_id_len = ber_write_integer(msg_id_buf, message_id);
+
+    /* Envelope content = messageID + ExtendedRequest */
+    size_t ext_req_total = 1 + ber_length_size(ext_req_content_len) +
+                           ext_req_content_len;
+    size_t envelope_content_len = msg_id_len + ext_req_total;
+    size_t total_len = 1 + ber_length_size(envelope_content_len) +
+                       envelope_content_len;
+
+    if (total_len > buf_size) {
+        return 0;
+    }
+
+    size_t pos = 0;
+
+    /* SEQUENCE envelope */
+    buf[pos++] = BER_TAG_SEQUENCE;
+    pos += ber_write_length(buf + pos, envelope_content_len);
+
+    /* Message ID */
+    memcpy(buf + pos, msg_id_buf, msg_id_len);
+    pos += msg_id_len;
+
+    /* ExtendedRequest [APPLICATION 23] */
+    buf[pos++] = LDAP_EXTENDED_REQUEST;
+    pos += ber_write_length(buf + pos, ext_req_content_len);
+
+    /* requestName [0] (context-specific, primitive) */
+    pos += ber_write_octet_string(buf + pos, BER_TAG_CONTEXT_0,
+                                   STARTTLS_OID, oid_len);
+
+    return pos;
+}
+
 /* Parse BER length */
 static size_t ber_read_length(const uint8_t *buf, size_t buf_len, size_t *value)
 {
@@ -173,8 +243,9 @@ static size_t ber_read_length(const uint8_t *buf, size_t buf_len, size_t *value)
     return 1 + num_bytes;
 }
 
-/* Parse LDAP BindResponse and return result code (-1 on parse error) */
-static int parse_bind_response(const uint8_t *buf, size_t buf_len)
+/* Parse an LDAP response result code given a specific APPLICATION tag */
+static int parse_ldap_response(const uint8_t *buf, size_t buf_len,
+                                uint8_t expected_tag)
 {
     size_t pos = 0;
 
@@ -195,8 +266,8 @@ static int parse_bind_response(const uint8_t *buf, size_t buf_len)
     pos += adv;
     pos += id_len; /* Skip message ID value */
 
-    /* BindResponse APPLICATION 1 */
-    if (pos >= buf_len || buf[pos] != LDAP_BIND_RESPONSE) return -1;
+    /* Expected APPLICATION tag */
+    if (pos >= buf_len || buf[pos] != expected_tag) return -1;
     pos++;
     size_t resp_len;
     adv = ber_read_length(buf + pos, buf_len - pos, &resp_len);
@@ -221,20 +292,34 @@ static int parse_bind_response(const uint8_t *buf, size_t buf_len)
     return result_code;
 }
 
-/* Parse LDAP URI to extract host and port */
-static int parse_ldap_uri(const char *uri, char *host, size_t host_len,
-                           uint16_t *port)
+/* Parse LDAP BindResponse and return result code (-1 on parse error) */
+static int parse_bind_response(const uint8_t *buf, size_t buf_len)
+{
+    return parse_ldap_response(buf, buf_len, LDAP_BIND_RESPONSE);
+}
+
+/* Parse LDAP ExtendedResponse and return result code (-1 on parse error) */
+int parse_extended_response(const uint8_t *buf, size_t buf_len)
+{
+    return parse_ldap_response(buf, buf_len, LDAP_EXTENDED_RESPONSE);
+}
+
+/* Parse LDAP URI to extract host, port, and TLS mode */
+int parse_ldap_uri(const char *uri, char *host, size_t host_len,
+                    uint16_t *port, ldap_tls_mode_t *tls_mode)
 {
     if (uri == NULL) return -1;
 
     *port = LDAP_DEFAULT_PORT;
+    *tls_mode = LDAP_TLS_NONE;
 
     const char *p = uri;
-    if (strncmp(p, "ldap://", 7) == 0) {
+    if (strncmp(p, "ldaps://", 8) == 0) {
+        *port = LDAPS_DEFAULT_PORT;
+        *tls_mode = LDAP_TLS_LDAPS;
+        p += 8;
+    } else if (strncmp(p, "ldap://", 7) == 0) {
         p += 7;
-    } else if (strncmp(p, "ldaps://", 8) == 0) {
-        LOG_WARN("LDAPS not supported, use ldap:// with StartTLS");
-        return -1;
     }
 
     const char *colon = strchr(p, ':');
@@ -261,8 +346,67 @@ static int parse_ldap_uri(const char *uri, char *host, size_t host_len,
     return 0;
 }
 
-auth_result_t ldap_simple_bind(const char *uri, const char *bind_dn,
-                                const char *password, int timeout_sec)
+#ifdef TLS_ENABLED
+/* Create an OpenSSL TLS context */
+static SSL_CTX *create_tls_context(bool verify_cert, const char *ca_path)
+{
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) {
+        LOG_ERROR("LDAP: Failed to create SSL context");
+        return NULL;
+    }
+
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+
+    if (verify_cert) {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+        if (ca_path) {
+            if (SSL_CTX_load_verify_locations(ctx, ca_path, NULL) != 1) {
+                LOG_ERROR("LDAP: Failed to load CA certificates from %s",
+                          ca_path);
+                SSL_CTX_free(ctx);
+                return NULL;
+            }
+        } else {
+            SSL_CTX_set_default_verify_paths(ctx);
+        }
+    } else {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+    }
+
+    return ctx;
+}
+
+/* Upgrade a TCP socket to TLS */
+static SSL *setup_tls_connection(SSL_CTX *ctx, int fd, const char *host)
+{
+    SSL *ssl = SSL_new(ctx);
+    if (!ssl) {
+        LOG_ERROR("LDAP: Failed to create SSL object");
+        return NULL;
+    }
+
+    SSL_set_fd(ssl, fd);
+    SSL_set_tlsext_host_name(ssl, host);
+
+    if (SSL_connect(ssl) != 1) {
+        unsigned long err = ERR_get_error();
+        LOG_ERROR("LDAP: TLS handshake failed: %s",
+                  ERR_error_string(err, NULL));
+        SSL_free(ssl);
+        return NULL;
+    }
+
+    LOG_DEBUG("LDAP: TLS handshake completed (protocol: %s, cipher: %s)",
+              SSL_get_version(ssl), SSL_get_cipher_name(ssl));
+    return ssl;
+}
+#endif /* TLS_ENABLED */
+
+auth_result_t ldap_simple_bind_tls(const char *uri, const char *bind_dn,
+                                    const char *password, int timeout_sec,
+                                    bool starttls, bool verify_cert,
+                                    const char *ca_path)
 {
     if (uri == NULL || bind_dn == NULL || password == NULL) {
         return AUTH_RESULT_FAILURE;
@@ -270,10 +414,29 @@ auth_result_t ldap_simple_bind(const char *uri, const char *bind_dn,
 
     char host[256];
     uint16_t port;
-    if (parse_ldap_uri(uri, host, sizeof(host), &port) != 0) {
+    ldap_tls_mode_t tls_mode;
+    if (parse_ldap_uri(uri, host, sizeof(host), &port, &tls_mode) != 0) {
         LOG_ERROR("LDAP: Failed to parse URI: %s", uri);
         return AUTH_RESULT_DENIED;
     }
+
+    /* Apply StartTLS if requested on plain ldap:// */
+    if (starttls && tls_mode == LDAP_TLS_NONE) {
+        tls_mode = LDAP_TLS_STARTTLS;
+    } else if (starttls && tls_mode == LDAP_TLS_LDAPS) {
+        LOG_WARN("LDAP: StartTLS ignored for ldaps:// URI (already using TLS)");
+    }
+
+#ifndef TLS_ENABLED
+    (void)verify_cert;
+    (void)ca_path;
+    if (tls_mode != LDAP_TLS_NONE) {
+        LOG_ERROR("LDAP: TLS support not compiled in (need TLS_ENABLED); "
+                  "cannot use %s",
+                  tls_mode == LDAP_TLS_LDAPS ? "ldaps://" : "StartTLS");
+        return AUTH_RESULT_DENIED;
+    }
+#endif
 
     if (timeout_sec <= 0) timeout_sec = LDAP_DEFAULT_TIMEOUT;
 
@@ -318,26 +481,136 @@ auth_result_t ldap_simple_bind(const char *uri, const char *bind_dn,
 
     LOG_DEBUG("LDAP: Connected to %s:%u", host, port);
 
+#ifdef TLS_ENABLED
+    SSL_CTX *ssl_ctx = NULL;
+    SSL *ssl = NULL;
+
+    /* LDAPS: establish TLS immediately after TCP connect */
+    if (tls_mode == LDAP_TLS_LDAPS) {
+        ssl_ctx = create_tls_context(verify_cert, ca_path);
+        if (!ssl_ctx) {
+            close(fd);
+            return AUTH_RESULT_DENIED;
+        }
+        ssl = setup_tls_connection(ssl_ctx, fd, host);
+        if (!ssl) {
+            SSL_CTX_free(ssl_ctx);
+            close(fd);
+            return AUTH_RESULT_DENIED;
+        }
+        LOG_DEBUG("LDAP: LDAPS TLS connection established");
+    }
+
+    /* StartTLS: send Extended Request, then upgrade to TLS */
+    if (tls_mode == LDAP_TLS_STARTTLS) {
+        uint8_t starttls_buf[LDAP_MAX_BUF];
+        size_t starttls_len = build_starttls_request(starttls_buf,
+                                                      sizeof(starttls_buf), 1);
+        if (starttls_len == 0) {
+            LOG_ERROR("LDAP: Failed to build StartTLS request");
+            close(fd);
+            return AUTH_RESULT_DENIED;
+        }
+
+        ssize_t sent = write(fd, starttls_buf, starttls_len);
+        if (sent != (ssize_t)starttls_len) {
+            LOG_ERROR("LDAP: Failed to send StartTLS request: %s",
+                      strerror(errno));
+            close(fd);
+            return AUTH_RESULT_DENIED;
+        }
+
+        uint8_t resp_buf[LDAP_MAX_BUF];
+        ssize_t received = read(fd, resp_buf, sizeof(resp_buf));
+        if (received <= 0) {
+            LOG_ERROR("LDAP: Failed to read StartTLS response: %s",
+                      received == 0 ? "connection closed" : strerror(errno));
+            close(fd);
+            return AUTH_RESULT_DENIED;
+        }
+
+        int ext_result = parse_extended_response(resp_buf, (size_t)received);
+        if (ext_result != LDAP_SUCCESS) {
+            LOG_ERROR("LDAP: StartTLS failed (result code: %d)", ext_result);
+            close(fd);
+            return AUTH_RESULT_DENIED;
+        }
+
+        LOG_DEBUG("LDAP: StartTLS accepted, upgrading to TLS");
+
+        ssl_ctx = create_tls_context(verify_cert, ca_path);
+        if (!ssl_ctx) {
+            close(fd);
+            return AUTH_RESULT_DENIED;
+        }
+        ssl = setup_tls_connection(ssl_ctx, fd, host);
+        if (!ssl) {
+            SSL_CTX_free(ssl_ctx);
+            close(fd);
+            return AUTH_RESULT_DENIED;
+        }
+        LOG_DEBUG("LDAP: StartTLS TLS connection established");
+    }
+#endif /* TLS_ENABLED */
+
     /* Build and send BindRequest */
     uint8_t req_buf[LDAP_MAX_BUF];
+    int bind_msg_id = (tls_mode == LDAP_TLS_STARTTLS) ? 2 : 1;
     size_t req_len = build_bind_request(req_buf, sizeof(req_buf),
-                                         1, bind_dn, password);
+                                         bind_msg_id, bind_dn, password);
     if (req_len == 0) {
         LOG_ERROR("LDAP: Failed to build BindRequest");
+#ifdef TLS_ENABLED
+        if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
+        if (ssl_ctx) SSL_CTX_free(ssl_ctx);
+#endif
         close(fd);
         return AUTH_RESULT_DENIED;
     }
 
-    ssize_t sent = write(fd, req_buf, req_len);
+    ssize_t sent;
+    ssize_t received;
+
+#ifdef TLS_ENABLED
+    if (ssl) {
+        int ssl_sent = SSL_write(ssl, req_buf, (int)req_len);
+        sent = (ssl_sent > 0) ? ssl_sent : -1;
+    } else {
+        sent = write(fd, req_buf, req_len);
+    }
+#else
+    sent = write(fd, req_buf, req_len);
+#endif
+
     if (sent != (ssize_t)req_len) {
         LOG_ERROR("LDAP: Failed to send BindRequest: %s", strerror(errno));
+#ifdef TLS_ENABLED
+        if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
+        if (ssl_ctx) SSL_CTX_free(ssl_ctx);
+#endif
         close(fd);
         return AUTH_RESULT_DENIED;
     }
 
     /* Read BindResponse */
     uint8_t resp_buf[LDAP_MAX_BUF];
-    ssize_t received = read(fd, resp_buf, sizeof(resp_buf));
+
+#ifdef TLS_ENABLED
+    if (ssl) {
+        int ssl_recv = SSL_read(ssl, resp_buf, sizeof(resp_buf));
+        received = (ssl_recv > 0) ? ssl_recv : (ssl_recv == 0 ? 0 : -1);
+    } else {
+        received = read(fd, resp_buf, sizeof(resp_buf));
+    }
+#else
+    received = read(fd, resp_buf, sizeof(resp_buf));
+#endif
+
+    /* Cleanup TLS and socket */
+#ifdef TLS_ENABLED
+    if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
+    if (ssl_ctx) SSL_CTX_free(ssl_ctx);
+#endif
     close(fd);
 
     if (received <= 0) {
@@ -360,4 +633,11 @@ auth_result_t ldap_simple_bind(const char *uri, const char *bind_dn,
     LOG_WARN("LDAP: Bind failed for DN: %s (result code: %d)",
              bind_dn, result_code);
     return AUTH_RESULT_FAILURE;
+}
+
+auth_result_t ldap_simple_bind(const char *uri, const char *bind_dn,
+                                const char *password, int timeout_sec)
+{
+    return ldap_simple_bind_tls(uri, bind_dn, password, timeout_sec,
+                                 false, true, NULL);
 }

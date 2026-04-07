@@ -4,7 +4,7 @@
 # Compiler and flags
 CC := gcc
 CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror
-CFLAGS += -D_POSIX_C_SOURCE=200809L
+CFLAGS += -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
 LDFLAGS :=
 LIBS :=
 
@@ -15,7 +15,17 @@ CFLAGS += $(LIBSSH_CFLAGS)
 LIBS += $(LIBSSH_LIBS)
 
 # pthread and crypt for session/auth
-LIBS += -lpthread -lcrypt
+LIBS += -lpthread -lcrypt -lssl -lcrypto
+
+# Optional OpenSSL/TLS support
+TLS_ENABLED ?= 0
+ifeq ($(TLS_ENABLED),1)
+    CFLAGS += -DTLS_ENABLED
+    OPENSSL_CFLAGS := $(shell pkg-config --cflags openssl 2>/dev/null)
+    OPENSSL_LIBS := $(shell pkg-config --libs openssl 2>/dev/null)
+    CFLAGS += $(OPENSSL_CFLAGS)
+    LIBS += $(OPENSSL_LIBS)
+endif
 
 # Directories
 SRC_DIR := src

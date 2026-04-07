@@ -23,6 +23,13 @@ typedef enum {
     AUTH_RESULT_DENIED
 } auth_result_t;
 
+/* LDAP TLS mode */
+typedef enum {
+    LDAP_TLS_NONE = 0,       /* Plain TCP (ldap://) */
+    LDAP_TLS_LDAPS,          /* TLS from start (ldaps://) */
+    LDAP_TLS_STARTTLS        /* Upgrade via StartTLS extension */
+} ldap_tls_mode_t;
+
 /* Authentication backend type */
 typedef enum {
     AUTH_BACKEND_LOCAL = 0,     /* Local user database */
@@ -94,6 +101,11 @@ struct auth_filter_config {
     /* LDAP extended settings */
     const char *ldap_user_filter;   /* User search filter, e.g. "uid=%s" */
     int ldap_timeout;               /* Connection timeout in seconds (default: 5) */
+
+    /* LDAP TLS settings */
+    bool ldap_starttls;             /* Use StartTLS (ldap:// only) */
+    const char *ldap_ca_path;      /* CA certificate path for verification (optional) */
+    bool ldap_verify_cert;         /* Verify server certificate (default true) */
 };
 
 /**
@@ -135,6 +147,51 @@ int auth_filter_remove_user(auth_filter_config_t *config,
  */
 auth_result_t ldap_simple_bind(const char *uri, const char *bind_dn,
                                 const char *password, int timeout_sec);
+
+/**
+ * @brief Perform LDAP Simple Bind authentication with TLS support
+ * @param uri LDAP URI (ldap:// or ldaps://host:port)
+ * @param bind_dn Bind DN
+ * @param password Password
+ * @param timeout_sec Timeout in seconds
+ * @param starttls Use StartTLS upgrade (ldap:// only)
+ * @param verify_cert Verify server certificate
+ * @param ca_path CA certificate path (NULL for system default)
+ * @return Authentication result
+ */
+auth_result_t ldap_simple_bind_tls(const char *uri, const char *bind_dn,
+                                    const char *password, int timeout_sec,
+                                    bool starttls, bool verify_cert,
+                                    const char *ca_path);
+
+/**
+ * @brief Parse LDAP URI to extract host, port, and TLS mode
+ * @param uri LDAP URI (ldap:// or ldaps://)
+ * @param host Output buffer for hostname
+ * @param host_len Size of host buffer
+ * @param port Output port number
+ * @param tls_mode Output TLS mode detected from URI
+ * @return 0 on success, -1 on error
+ */
+int parse_ldap_uri(const char *uri, char *host, size_t host_len,
+                    uint16_t *port, ldap_tls_mode_t *tls_mode);
+
+/**
+ * @brief Build LDAP StartTLS Extended Request message
+ * @param buf Output buffer
+ * @param buf_size Size of output buffer
+ * @param message_id LDAP message ID
+ * @return Number of bytes written, 0 on error
+ */
+size_t build_starttls_request(uint8_t *buf, size_t buf_size, int message_id);
+
+/**
+ * @brief Parse LDAP Extended Response and return result code
+ * @param buf Response buffer
+ * @param buf_len Response length
+ * @return Result code (0=success), -1 on parse error
+ */
+int parse_extended_response(const uint8_t *buf, size_t buf_len);
 
 /**
  * @brief Hash a password using bcrypt (simple implementation)
