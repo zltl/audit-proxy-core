@@ -46,6 +46,7 @@ type API struct {
 	threat     *threat.Detector
 	compliance *complianceState
 	siemState  *siemState
+	discovery  *discoveryState
 }
 
 // userStore holds the in-memory user list backed by a JSON file.
@@ -120,4 +121,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 
 	// SSH CA
 	a.RegisterCARoutes(mux)
+
+	// Discovery
+	a.RegisterDiscoveryRoutes(mux)
 }
