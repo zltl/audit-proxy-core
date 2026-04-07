@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/api"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cmdctrl"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/collab"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dataplane"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
@@ -262,6 +264,29 @@ func (s *Server) routes() {
 	}
 	apiHandler := api.New(s.dp, apiCfg)
 	apiHandler.RegisterRoutes(s.mux)
+
+	// Command control — policy engine + real-time approvals.
+	dataDir := apiCfg.DataDir
+	if dataDir == "" {
+		dataDir = "."
+	}
+	policyEngine := cmdctrl.NewPolicyEngine(dataDir)
+	if err := policyEngine.LoadRules(); err != nil {
+		log.Printf("cmdctrl: load rules: %v (starting with defaults)", err)
+	}
+	if len(policyEngine.ListRules()) == 0 {
+		for _, r := range cmdctrl.DefaultRules() {
+			_ = policyEngine.AddRule(r)
+		}
+	}
+	approvalMgr := cmdctrl.NewApprovalManager(5*time.Minute, "")
+	apiHandler.SetCmdCtrl(policyEngine, approvalMgr)
+	apiHandler.RegisterCmdCtrlRoutes(s.mux)
+
+	// Session collaboration.
+	collabMgr := collab.NewManager()
+	apiHandler.SetCollab(collabMgr)
+	apiHandler.RegisterCollabRoutes(s.mux)
 
 	// Page routes.
 	s.mux.HandleFunc("GET /dashboard", s.handlePage("pages/dashboard.html", "Dashboard"))

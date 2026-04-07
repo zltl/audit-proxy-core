@@ -133,6 +133,8 @@ func (am *ApprovalManager) WaitForDecision(id string, timeout time.Duration) (*A
 		return nil, fmt.Errorf("approval request %s not found", id)
 	}
 	ch, chOk := am.channels[id]
+	// Copy status while holding the lock to avoid data race
+	status := req.Status
 	am.mu.RUnlock()
 
 	if !chOk {
@@ -140,7 +142,7 @@ func (am *ApprovalManager) WaitForDecision(id string, timeout time.Duration) (*A
 	}
 
 	// If already decided, return immediately.
-	if req.Status != "pending" {
+	if status != "pending" {
 		return req, nil
 	}
 

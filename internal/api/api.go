@@ -49,6 +49,7 @@ type API struct {
 	siemState  *siemState
 	discovery        *discoveryState
 	collab           *collab.Manager
+	collabMu         sync.RWMutex
 	collabChats      map[string]*collab.ChatRoom
 	collabRecordings map[string]*collab.Recorder
 	cmdCtrl          *cmdCtrlState

@@ -346,7 +346,7 @@ func (a *API) handleGetChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chatRoom := a.collabChats[id]
+	chatRoom := a.getOrCreateChatRoom(id, false)
 	if chatRoom == nil {
 		writeJSON(w, http.StatusOK, APIResponse{
 			Success: true,
@@ -410,15 +410,8 @@ func (a *API) handleSendChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Lazy-init chat room
-	if a.collabChats == nil {
-		a.collabChats = make(map[string]*collab.ChatRoom)
-	}
-	chatRoom := a.collabChats[id]
-	if chatRoom == nil {
-		chatRoom = collab.NewChatRoom(id, 1000)
-		a.collabChats[id] = chatRoom
-	}
+	// Lazy-init chat room (thread-safe)
+	chatRoom := a.getOrCreateChatRoom(id, true)
 
 	msg := chatRoom.SendMessage(username, req.Message)
 
@@ -439,7 +432,9 @@ func (a *API) handleGetCollabRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.collabMu.RLock()
 	rec := a.collabRecordings[id]
+	a.collabMu.RUnlock()
 	if rec == nil {
 		writeJSON(w, http.StatusOK, APIResponse{
 			Success: true,
@@ -469,4 +464,28 @@ func (a *API) handleGetCollabRecording(w http.ResponseWriter, r *http.Request) {
 		Data:    events,
 		Total:   len(events),
 	})
+}
+
+// getOrCreateChatRoom returns a chat room for the given session ID.
+// If create is true and no room exists, one is created.
+func (a *API) getOrCreateChatRoom(sessionID string, create bool) *collab.ChatRoom {
+	if !create {
+		a.collabMu.RLock()
+		defer a.collabMu.RUnlock()
+		if a.collabChats == nil {
+			return nil
+		}
+		return a.collabChats[sessionID]
+	}
+	a.collabMu.Lock()
+	defer a.collabMu.Unlock()
+	if a.collabChats == nil {
+		a.collabChats = make(map[string]*collab.ChatRoom)
+	}
+	room := a.collabChats[sessionID]
+	if room == nil {
+		room = collab.NewChatRoom(sessionID, 1000)
+		a.collabChats[sessionID] = room
+	}
+	return room
 }

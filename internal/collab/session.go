@@ -209,8 +209,13 @@ func (m *Manager) LeaveSession(sessionID, username string) error {
 	s.Participants = filtered
 
 	if ch, ok := s.subscribers[username]; ok {
-		close(ch)
 		delete(s.subscribers, username)
+		select {
+		case <-ch:
+			// already closed
+		default:
+			close(ch)
+		}
 	}
 
 	return nil
@@ -226,8 +231,13 @@ func (m *Manager) EndSession(id string) error {
 	s.mu.Lock()
 	s.Status = "ended"
 	for username, ch := range s.subscribers {
-		close(ch)
 		delete(s.subscribers, username)
+		select {
+		case <-ch:
+			// already closed
+		default:
+			close(ch)
+		}
 	}
 	s.mu.Unlock()
 
