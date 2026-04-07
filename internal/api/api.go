@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cluster"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
@@ -40,6 +41,7 @@ type API struct {
 	servers  *serverStore
 	jitStore *jit.Store
 	ca       *sshca.CA
+	cluster  *cluster.Manager
 }
 
 // userStore holds the in-memory user list backed by a JSON file.
