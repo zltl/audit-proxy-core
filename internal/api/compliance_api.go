@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
@@ -12,9 +11,13 @@ import (
 
 // complianceState holds report generator and cached reports.
 type complianceState struct {
-	gen     *compliance.ReportGenerator
-	mu      sync.RWMutex
-	reports []*compliance.Report
+	gen         *compliance.ReportGenerator
+	mu          sync.RWMutex
+	reports     []*compliance.Report
+	gdprReports []*compliance.GDPRDataReport
+	templates   *reportTemplateStore
+	schedules   *reportScheduleStore
+	scheduler   *reportScheduler
 }
 
 // siemState holds the SIEM forwarder and its config.
@@ -30,6 +33,12 @@ func (a *API) SetCompliance(gen *compliance.ReportGenerator) {
 		a.compliance = &complianceState{}
 	}
 	a.compliance.gen = gen
+	if a.compliance.templates == nil {
+		a.compliance.templates = newReportTemplateStore(dataFilePath(a.config.DataDir, "report_templates.json"))
+	}
+	if a.compliance.schedules == nil {
+		a.compliance.schedules = newReportScheduleStore(dataFilePath(a.config.DataDir, "report_schedules.json"))
+	}
 }
 
 // SetSIEM attaches a SIEM forwarder to the API.
@@ -49,6 +58,22 @@ func (a *API) RegisterComplianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v2/compliance/reports", a.handleListReports)
 	mux.HandleFunc("GET /api/v2/compliance/reports/{id}", a.handleGetReport)
 	mux.HandleFunc("GET /api/v2/compliance/reports/{id}/export", a.handleExportReport)
+	mux.HandleFunc("POST /api/v2/compliance/gdpr/reports", a.handleGenerateGDPRDataReport)
+	mux.HandleFunc("GET /api/v2/compliance/gdpr/reports", a.handleListGDPRDataReports)
+	mux.HandleFunc("GET /api/v2/compliance/gdpr/reports/{id}", a.handleGetGDPRDataReport)
+	mux.HandleFunc("GET /api/v2/compliance/gdpr/reports/{id}/export", a.handleExportGDPRDataReport)
+	mux.HandleFunc("GET /api/v2/compliance/templates", a.handleListReportTemplates)
+	mux.HandleFunc("POST /api/v2/compliance/templates", a.handleCreateReportTemplate)
+	mux.HandleFunc("GET /api/v2/compliance/templates/{id}", a.handleGetReportTemplate)
+	mux.HandleFunc("PUT /api/v2/compliance/templates/{id}", a.handleUpdateReportTemplate)
+	mux.HandleFunc("DELETE /api/v2/compliance/templates/{id}", a.handleDeleteReportTemplate)
+	mux.HandleFunc("GET /api/v2/compliance/templates/{id}/export", a.handleExportReportTemplate)
+	mux.HandleFunc("GET /api/v2/compliance/schedules", a.handleListReportSchedules)
+	mux.HandleFunc("POST /api/v2/compliance/schedules", a.handleCreateReportSchedule)
+	mux.HandleFunc("GET /api/v2/compliance/schedules/{id}", a.handleGetReportSchedule)
+	mux.HandleFunc("PUT /api/v2/compliance/schedules/{id}", a.handleUpdateReportSchedule)
+	mux.HandleFunc("DELETE /api/v2/compliance/schedules/{id}", a.handleDeleteReportSchedule)
+	mux.HandleFunc("POST /api/v2/compliance/schedules/{id}/run", a.handleRunReportSchedule)
 	mux.HandleFunc("GET /api/v2/compliance/score", a.handleComplianceScore)
 
 	// SIEM
@@ -91,6 +116,8 @@ func (a *API) handleListFrameworks(w http.ResponseWriter, r *http.Request) {
 		{ID: "gdpr", Name: "GDPR", Description: "General Data Protection Regulation"},
 		{ID: "pci-dss", Name: "PCI DSS", Description: "Payment Card Industry Data Security Standard"},
 		{ID: "iso27001", Name: "ISO 27001", Description: "Information Security Management System"},
+		{ID: "mlps-2.0", Name: "MLPS 2.0", Description: "Chinese Multi-Level Protection Scheme 2.0 baseline audit report"},
+		{ID: "mlps-3.0", Name: "MLPS 3.0", Description: "Chinese Multi-Level Protection Scheme 3.0 enhanced audit report"},
 	}
 
 	writeJSON(w, http.StatusOK, APIResponse{
@@ -275,6 +302,152 @@ func (a *API) handleComplianceScore(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *API) handleGenerateGDPRDataReport(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCompliance(w) {
+		return
+	}
+
+	var req struct {
+		Type    string `json:"type"`
+		Subject string `json:"subject"`
+		Start   string `json:"start"`
+		End     string `json:"end"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Subject == "" {
+		writeError(w, http.StatusBadRequest, "subject is required")
+		return
+	}
+
+	start := time.Now().AddDate(-1, 0, 0)
+	end := time.Now()
+	if req.Start != "" {
+		if t, err := time.Parse(time.RFC3339, req.Start); err == nil {
+			start = t
+		}
+	}
+	if req.End != "" {
+		if t, err := time.Parse(time.RFC3339, req.End); err == nil {
+			end = t
+		}
+	}
+
+	generatedBy := r.Header.Get("X-User")
+	if generatedBy == "" {
+		generatedBy = "system"
+	}
+
+	report, err := a.compliance.gen.GenerateGDPRDataReport(compliance.GDPRDataReportKind(req.Type), req.Subject, start, end, generatedBy)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	a.compliance.mu.Lock()
+	a.compliance.gdprReports = append(a.compliance.gdprReports, report)
+	a.compliance.mu.Unlock()
+
+	writeJSON(w, http.StatusCreated, APIResponse{
+		Success: true,
+		Data:    report,
+	})
+}
+
+func (a *API) handleListGDPRDataReports(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCompliance(w) {
+		return
+	}
+
+	a.compliance.mu.RLock()
+	reports := a.compliance.gdprReports
+	a.compliance.mu.RUnlock()
+
+	if reports == nil {
+		reports = []*compliance.GDPRDataReport{}
+	}
+
+	page, perPage := parsePagination(r)
+	total := len(reports)
+	start, end := paginate(total, page, perPage)
+
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    reports[start:end],
+		Total:   total,
+		Page:    page,
+		PerPage: perPage,
+	})
+}
+
+func (a *API) handleGetGDPRDataReport(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCompliance(w) {
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing report id")
+		return
+	}
+
+	a.compliance.mu.RLock()
+	defer a.compliance.mu.RUnlock()
+
+	for _, rpt := range a.compliance.gdprReports {
+		if rpt.ID == id {
+			writeJSON(w, http.StatusOK, APIResponse{Success: true, Data: rpt})
+			return
+		}
+	}
+
+	writeError(w, http.StatusNotFound, "report not found")
+}
+
+func (a *API) handleExportGDPRDataReport(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCompliance(w) {
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing report id")
+		return
+	}
+
+	a.compliance.mu.RLock()
+	var report *compliance.GDPRDataReport
+	for _, rpt := range a.compliance.gdprReports {
+		if rpt.ID == id {
+			report = rpt
+			break
+		}
+	}
+	a.compliance.mu.RUnlock()
+
+	if report == nil {
+		writeError(w, http.StatusNotFound, "report not found")
+		return
+	}
+
+	switch r.URL.Query().Get("format") {
+	case "csv":
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", "attachment; filename=gdpr_report_"+id+".csv")
+		if err := a.compliance.gen.ExportGDPRDataCSV(report, w); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", "attachment; filename=gdpr_report_"+id+".json")
+		if err := a.compliance.gen.ExportGDPRDataJSON(report, w); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // SIEM endpoints
 // ---------------------------------------------------------------------------
@@ -301,10 +474,6 @@ func (a *API) handleGetSIEMConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleUpdateSIEMConfig(w http.ResponseWriter, r *http.Request) {
-	if !a.requireSIEM(w) {
-		return
-	}
-
 	var newCfg siem.SIEMConfig
 	if err := readJSON(r, &newCfg); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -320,6 +489,10 @@ func (a *API) handleUpdateSIEMConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	if a.siemState == nil {
+		a.siemState = &siemState{}
 	}
 
 	a.siemState.mu.Lock()
@@ -399,18 +572,4 @@ func (a *API) handleSIEMStatus(w http.ResponseWriter, r *http.Request) {
 			"events_sent": status.EventsSent,
 		},
 	})
-}
-
-// marshalSIEMConfig is a helper for JSON serialization of SIEMConfig with
-// the flush interval as a string.
-func marshalSIEMConfig(cfg *siem.SIEMConfig) json.RawMessage {
-	type alias siem.SIEMConfig
-	raw, _ := json.Marshal(&struct {
-		*alias
-		FlushInterval string `json:"flush_interval"`
-	}{
-		alias:         (*alias)(cfg),
-		FlushInterval: cfg.FlushInterval.String(),
-	})
-	return raw
 }

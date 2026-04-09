@@ -599,6 +599,39 @@ func TestRevokeNonexistentCert(t *testing.T) {
 	}
 }
 
+func TestRevocationListPersistsAcrossReload(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := New(&CAConfig{RevocationPath: filepath.Join(dir, "revocations.json")})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	userKey, err := GenerateED25519Key()
+	if err != nil {
+		t.Fatalf("generate user key: %v", err)
+	}
+
+	cert, err := ca.SignUserCert(userKey.PublicKey(), "testuser", []string{"testuser"}, time.Hour)
+	if err != nil {
+		t.Fatalf("SignUserCert() error: %v", err)
+	}
+	if err := ca.RevokeCert(cert.Serial); err != nil {
+		t.Fatalf("RevokeCert() error: %v", err)
+	}
+
+	reloaded, err := New(&CAConfig{RevocationPath: filepath.Join(dir, "revocations.json")})
+	if err != nil {
+		t.Fatalf("New(reloaded) error: %v", err)
+	}
+	if !reloaded.IsRevoked(cert.Serial) {
+		t.Fatalf("expected serial %d to remain revoked after reload", cert.Serial)
+	}
+	serials := reloaded.ListRevokedSerials()
+	if len(serials) != 1 || serials[0] != cert.Serial {
+		t.Fatalf("ListRevokedSerials() = %v, want [%d]", serials, cert.Serial)
+	}
+}
+
 func TestDefaultTTL(t *testing.T) {
 	ca := testCA(t)
 

@@ -4,14 +4,17 @@
 package middleware
 
 import (
+	"bufio"
 	"compress/gzip"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"strconv"
@@ -56,6 +59,14 @@ func (w *statusWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
 
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("hijack not supported")
+	}
+	return hj.Hijack()
+}
+
 // Logger logs every request: method, path, status code, and duration.
 func Logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,12 +95,52 @@ func Recovery(next http.Handler) http.Handler {
 	})
 }
 
+// HSTS adds a Strict-Transport-Security header on HTTPS responses when enabled.
+func HSTS(enabled, includeSubdomains, preload bool) func(http.Handler) http.Handler {
+	value := "max-age=31536000"
+	if includeSubdomains {
+		value += "; includeSubDomains"
+	}
+	if preload {
+		value += "; preload"
+	}
+
+	return func(next http.Handler) http.Handler {
+		if !enabled {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.TLS != nil {
+				w.Header().Set("Strict-Transport-Security", value)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // --------------------------------------------------------------------------
 // Auth
 // --------------------------------------------------------------------------
 
 // publicPrefixes are paths that do not require authentication.
-var publicPrefixes = []string{"/login", "/static/", "/api/v1/health", "/auth/oidc/login", "/auth/callback"}
+var publicPrefixes = []string{
+	"/login",
+	"/static/",
+	"/api/v1/health",
+	"/auth/oidc/login",
+	"/auth/callback",
+	"/auth/saml/",
+	"/api/v2/cli/login/",
+	"/api/v3/cli/login/",
+	"/api/v2/threats/ingest",
+	"/api/v3/threats/ingest",
+}
+
+// SessionPrincipal is the authenticated user extracted from the session cookie.
+type SessionPrincipal struct {
+	Username string
+	Role     string
+}
 
 // Auth validates the HMAC-signed session cookie.  Unauthenticated requests
 // are redirected to /login (HTML) or receive a 401 (API).
@@ -104,7 +155,7 @@ func Auth(secret string) func(http.Handler) http.Handler {
 				}
 			}
 
-			username, ok := ValidateSession(r, secret)
+			principal, ok := ValidateSessionClaims(r, secret)
 			if !ok {
 				if strings.HasPrefix(r.URL.Path, "/api/") {
 					http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
@@ -114,8 +165,15 @@ func Auth(secret string) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Propagate username via header so handlers can read it.
-			r.Header.Set("X-Auth-User", username)
+			// Propagate username via both legacy and current headers so API
+			// handlers can read a consistent authenticated principal.
+			r.Header.Set("X-Auth-User", principal.Username)
+			r.Header.Set("X-User", principal.Username)
+			if principal.Role != "" {
+				r.Header.Set("X-Auth-Role", principal.Role)
+				r.Header.Set("X-Role", principal.Role)
+				r.Header.Set("X-User-Role", principal.Role)
+			}
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -123,31 +181,50 @@ func Auth(secret string) func(http.Handler) http.Handler {
 
 // ValidateSession checks the session cookie and returns the username if valid.
 func ValidateSession(r *http.Request, secret string) (string, bool) {
+	principal, ok := ValidateSessionClaims(r, secret)
+	return principal.Username, ok
+}
+
+// ValidateSessionClaims checks the session cookie and returns the username/role if valid.
+func ValidateSessionClaims(r *http.Request, secret string) (SessionPrincipal, bool) {
 	c, err := r.Cookie("session")
 	if err != nil {
-		return "", false
+		return SessionPrincipal{}, false
 	}
-	parts := strings.SplitN(c.Value, "|", 3)
-	if len(parts) != 3 {
-		return "", false
+	parts := strings.Split(c.Value, "|")
+	switch len(parts) {
+	case 3:
+		username, expiryStr, sig := parts[0], parts[1], parts[2]
+		expiry, err := strconv.ParseInt(expiryStr, 10, 64)
+		if err != nil || time.Now().Unix() > expiry {
+			return SessionPrincipal{}, false
+		}
+		expected := signLegacySession(username, expiryStr, secret)
+		if !hmac.Equal([]byte(sig), []byte(expected)) {
+			return SessionPrincipal{}, false
+		}
+		return SessionPrincipal{Username: username}, true
+	case 4:
+		username, role, expiryStr, sig := parts[0], parts[1], parts[2], parts[3]
+		expiry, err := strconv.ParseInt(expiryStr, 10, 64)
+		if err != nil || time.Now().Unix() > expiry {
+			return SessionPrincipal{}, false
+		}
+		expected := signSession(username, role, expiryStr, secret)
+		if !hmac.Equal([]byte(sig), []byte(expected)) {
+			return SessionPrincipal{}, false
+		}
+		return SessionPrincipal{Username: username, Role: role}, true
+	default:
+		return SessionPrincipal{}, false
 	}
-	username, expiryStr, sig := parts[0], parts[1], parts[2]
-	expiry, err := strconv.ParseInt(expiryStr, 10, 64)
-	if err != nil || time.Now().Unix() > expiry {
-		return "", false
-	}
-	expected := signSession(username, expiryStr, secret)
-	if !hmac.Equal([]byte(sig), []byte(expected)) {
-		return "", false
-	}
-	return username, true
 }
 
 // CreateSessionCookie builds an HMAC-signed session cookie value.
 // Format: username|expiry_unix|hmac_hex
 func CreateSessionCookie(username, secret string, ttl time.Duration) *http.Cookie {
 	expiry := strconv.FormatInt(time.Now().Add(ttl).Unix(), 10)
-	sig := signSession(username, expiry, secret)
+	sig := signLegacySession(username, expiry, secret)
 	return &http.Cookie{
 		Name:     "session",
 		Value:    username + "|" + expiry + "|" + sig,
@@ -158,8 +235,29 @@ func CreateSessionCookie(username, secret string, ttl time.Duration) *http.Cooki
 	}
 }
 
-// signSession computes the HMAC-SHA256 hex digest of "username|expiry".
-func signSession(username, expiry, secret string) string {
+// CreateSessionCookieWithRole builds an HMAC-signed session cookie that also carries the mapped role.
+// Format: username|role|expiry_unix|hmac_hex
+func CreateSessionCookieWithRole(username, role, secret string, ttl time.Duration) *http.Cookie {
+	expiry := strconv.FormatInt(time.Now().Add(ttl).Unix(), 10)
+	sig := signSession(username, role, expiry, secret)
+	return &http.Cookie{
+		Name:     "session",
+		Value:    username + "|" + role + "|" + expiry + "|" + sig,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   int(ttl.Seconds()),
+	}
+}
+
+// signSession computes the HMAC-SHA256 hex digest of "username|role|expiry".
+func signSession(username, role, expiry, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(username + "|" + role + "|" + expiry))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func signLegacySession(username, expiry, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(username + "|" + expiry))
 	return hex.EncodeToString(mac.Sum(nil))
@@ -191,7 +289,12 @@ func CSRF(secret string) func(http.Handler) http.Handler {
 			}
 
 			// Skip CSRF for public API endpoints.
-			if strings.HasPrefix(r.URL.Path, "/api/v1/health") {
+			if strings.HasPrefix(r.URL.Path, "/api/v1/health") ||
+				strings.HasPrefix(r.URL.Path, "/api/v2/cli/login/") ||
+				strings.HasPrefix(r.URL.Path, "/api/v3/cli/login/") ||
+				r.URL.Path == "/api/v2/threats/ingest" ||
+				r.URL.Path == "/api/v3/threats/ingest" ||
+				r.URL.Path == "/auth/saml/acs" {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -305,6 +408,14 @@ func (g *gzipWriter) Write(b []byte) (int, error) {
 // Unwrap allows http.ResponseController to reach the underlying writer.
 func (g *gzipWriter) Unwrap() http.ResponseWriter {
 	return g.ResponseWriter
+}
+
+func (g *gzipWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := g.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("hijack not supported")
+	}
+	return hj.Hijack()
 }
 
 func (g *gzipWriter) close() {

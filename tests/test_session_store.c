@@ -7,6 +7,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 #include <unistd.h>
 
 static int test_create_local(void)
@@ -228,6 +229,43 @@ static int test_file_sync(void)
     return 0;
 }
 
+static int test_file_sync_prunes_stale_remote_records(void)
+{
+    const char *path = "/tmp/test_session_store_stale.json";
+    unlink(path);
+
+    FILE *f = fopen(path, "w");
+    ASSERT_NOT_NULL(f);
+    time_t now = time(NULL);
+    fprintf(f,
+            "{\"id\":99,\"user\":\"ghost\",\"client\":\"10.0.0.9\",\"client_port\":40022,"
+            "\"target\":\"db.internal\",\"target_port\":22,\"instance\":\"node-1\","
+            "\"client_version\":\"OpenSSH_9.7p1\",\"client_os\":\"Linux\","
+            "\"device_fingerprint\":\"sshfp-ghost\",\"created\":%ld,\"last_active\":%ld,"
+            "\"synced_at\":%ld,\"state\":6,\"bytes_sent\":1,\"bytes_received\":2,\"active\":true}\n",
+            (long)(now - 30), (long)(now - 30), (long)(now - 10));
+    fclose(f);
+
+    session_store_config_t config = {
+        .type = SESSION_STORE_FILE,
+        .max_records = 100,
+        .sync_interval_sec = 1,
+        .instance_id = "node-2"
+    };
+    strncpy(config.store_path, path, sizeof(config.store_path) - 1);
+
+    session_store_t *store = session_store_create(&config);
+    ASSERT_NOT_NULL(store);
+    ASSERT_EQ(session_store_count(store), 0);
+
+    session_record_t records[2];
+    ASSERT_EQ(session_store_list(store, records, 2), 0);
+
+    session_store_destroy(store);
+    unlink(path);
+    return 0;
+}
+
 static int test_null_operations(void)
 {
     ASSERT_EQ(session_store_put(NULL, NULL), -1);
@@ -252,6 +290,7 @@ int main(void)
     RUN_TEST(test_count_user);
     RUN_TEST(test_full_store);
     RUN_TEST(test_file_sync);
+    RUN_TEST(test_file_sync_prunes_stale_remote_records);
     RUN_TEST(test_null_operations);
 
     TEST_END();

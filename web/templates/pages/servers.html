@@ -24,6 +24,41 @@
     </div>
 </div>
 
+<div class="stats-grid" id="server-summary-grid">
+    <div class="stat-card">
+        <div class="stat-icon blue">🖧</div>
+        <div class="stat-info">
+            <div class="stat-label">Total Servers</div>
+            <div class="stat-value" id="server-summary-total">—</div>
+            <div class="stat-sub">Managed inventory</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon green">✅</div>
+        <div class="stat-info">
+            <div class="stat-label">Healthy</div>
+            <div class="stat-value" id="server-summary-healthy">—</div>
+            <div class="stat-sub">Serving traffic</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon red">⚠️</div>
+        <div class="stat-info">
+            <div class="stat-label">Unhealthy</div>
+            <div class="stat-value" id="server-summary-unhealthy">—</div>
+            <div class="stat-sub">Needs attention</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon amber">🛠️</div>
+        <div class="stat-info">
+            <div class="stat-label">Maintenance</div>
+            <div class="stat-value" id="server-summary-maintenance">—</div>
+            <div class="stat-sub">Draining / paused</div>
+        </div>
+    </div>
+</div>
+
 <!-- Grid View -->
 <div id="server-grid-view">
     <div class="grid grid-auto" id="server-cards">
@@ -43,8 +78,8 @@
                         <th class="sortable">Host <span class="sort-icon">↕</span></th>
                         <th>Port</th>
                         <th>Status</th>
-                        <th class="sortable">Connections <span class="sort-icon">↕</span></th>
-                        <th class="sortable">Latency <span class="sort-icon">↕</span></th>
+                        <th class="sortable">Sessions <span class="sort-icon">↕</span></th>
+                        <th class="sortable">Weight <span class="sort-icon">↕</span></th>
                         <th>Group/Tags</th>
                         <th>Last Check</th>
                         <th>Maintenance</th>
@@ -79,25 +114,32 @@
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label class="form-label">SSH User</label>
-                        <input type="text" class="form-control" id="server-user" name="user" placeholder="e.g. ubuntu">
+                        <label class="form-label">Name</label>
+                        <input type="text" class="form-control" id="server-name" name="name" placeholder="e.g. prod-web-01">
                     </div>
                     <div class="form-group">
                         <label class="form-label">Group / Tag</label>
                         <input type="text" class="form-control" id="server-group" name="group" placeholder="e.g. production">
                     </div>
                 </div>
-                <div class="form-group">
-                    <label class="form-label">Private Key Path</label>
-                    <input type="text" class="form-control" id="server-privkey" name="privkey" placeholder="e.g. ~/.ssh/id_rsa">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Weight</label>
+                        <input type="number" class="form-control" id="server-weight" name="weight" value="1" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Max Sessions</label>
+                        <input type="number" class="form-control" id="server-max-sessions" name="max_sessions" min="0" placeholder="0 = default">
+                    </div>
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Description</label>
-                    <textarea class="form-control" id="server-description" name="description" rows="2" placeholder="Optional description"></textarea>
+                    <label class="form-label">Tags</label>
+                    <input type="text" class="form-control" id="server-tags" name="tags" placeholder="env=prod,team=ops">
                 </div>
             </form>
         </div>
         <div class="modal-footer">
+            <button class="btn btn-danger hidden" id="server-delete-btn" onclick="deleteServerFromModal()">Delete Server</button>
             <button class="btn btn-secondary" onclick="closeServerModal()">Cancel</button>
             <button class="btn btn-primary" id="server-save-btn" onclick="saveServer()">Save Server</button>
         </div>
@@ -111,14 +153,53 @@
     var allServers = [];
     var currentView = 'grid';
 
+    function renderServerSummary(summary) {
+        summary = summary || {};
+        document.getElementById('server-summary-total').textContent = summary.total || 0;
+        document.getElementById('server-summary-healthy').textContent = summary.healthy || 0;
+        document.getElementById('server-summary-unhealthy').textContent = summary.unhealthy || 0;
+        document.getElementById('server-summary-maintenance').textContent = summary.maintenance || 0;
+    }
+
+    function formatTags(tags) {
+        if (!tags) return '—';
+        return Object.keys(tags).sort().map(function(key) {
+            return key + '=' + tags[key];
+        }).join(', ') || '—';
+    }
+
+    function parseTags(input) {
+        if (!input) return {};
+        return input.split(',').reduce(function(tags, entry) {
+            var part = entry.trim();
+            if (!part) return tags;
+            var idx = part.indexOf('=');
+            if (idx === -1) {
+                tags[part] = '';
+                return tags;
+            }
+            var key = part.substring(0, idx).trim();
+            var value = part.substring(idx + 1).trim();
+            if (key) tags[key] = value;
+            return tags;
+        }, {});
+    }
+
     window.loadServers = function() {
-        App.api('GET', '/api/v1/upstreams').then(function(data) {
-            allServers = data.upstreams || data.servers || data || [];
+        Promise.all([
+            App.apiPage('GET', '/api/v2/servers?per_page=200'),
+            App.apiData('GET', '/api/v2/servers/health')
+        ]).then(function(results) {
+            var page = results[0];
+            var health = results[1];
+            allServers = page.items || [];
             populateGroupFilter();
             renderServers(allServers);
+            renderServerSummary(health || {});
         }).catch(function(e) {
             document.getElementById('server-cards').innerHTML =
                 '<p class="text-muted">Failed to load: ' + App.escapeHtml(e.message) + '</p>';
+            renderServerSummary({});
         });
     };
 
@@ -141,15 +222,15 @@
             cards.innerHTML = servers.map(function(s) {
                 var dot = s.healthy !== false && !s.maintenance ? 'online' : (s.maintenance ? 'warning' : 'offline');
                 var statusLabel = s.maintenance ? 'Maintenance' : (s.healthy !== false ? 'Healthy' : 'Offline');
-                return '<div class="server-card" onclick="editServer(\'' + App.escapeHtml(s.host || s.address || s.name || '') + '\')">' +
+                return '<div class="server-card" onclick="editServer(\'' + App.escapeHtml(s.id || '') + '\')">' +
                     '<div class="server-card-header">' +
-                        '<span class="server-card-name">' + App.escapeHtml(s.host || s.address || s.name || '—') + '</span>' +
+                        '<span class="server-card-name">' + App.escapeHtml(s.name || s.host || '—') + '</span>' +
                         '<span class="status-indicator"><span class="status-dot ' + dot + '"></span> ' + statusLabel + '</span>' +
                     '</div>' +
-                    (s.description ? '<p class="text-muted text-sm mb-sm">' + App.escapeHtml(s.description) + '</p>' : '') +
+                    '<p class="text-muted text-sm mb-sm">' + App.escapeHtml(s.host || '—') + ':' + (s.port || 22) + '</p>' +
                     '<div class="server-card-stats">' +
-                        '<div><div class="server-card-stat-value">' + (s.connections || 0) + '</div><div class="server-card-stat-label">Conns</div></div>' +
-                        '<div><div class="server-card-stat-value">' + (s.latency_ms != null ? s.latency_ms + 'ms' : '—') + '</div><div class="server-card-stat-label">Latency</div></div>' +
+                        '<div><div class="server-card-stat-value">' + (s.sessions || 0) + '</div><div class="server-card-stat-label">Sessions</div></div>' +
+                        '<div><div class="server-card-stat-value">' + (s.weight || 1) + '</div><div class="server-card-stat-label">Weight</div></div>' +
                         '<div><div class="server-card-stat-value">' + (s.port || 22) + '</div><div class="server-card-stat-label">Port</div></div>' +
                     '</div></div>';
             }).join('');
@@ -163,20 +244,21 @@
             tbody.innerHTML = servers.map(function(s) {
                 var dot = s.healthy !== false && !s.maintenance ? 'online' : (s.maintenance ? 'warning' : 'offline');
                 return '<tr>' +
-                    '<td><strong>' + App.escapeHtml(s.host || s.address || s.name || '—') + '</strong></td>' +
+                    '<td><strong>' + App.escapeHtml(s.name || s.host || '—') + '</strong><div class="text-muted text-sm">' + App.escapeHtml(s.host || '—') + '</div></td>' +
                     '<td>' + (s.port || 22) + '</td>' +
                     '<td><span class="status-indicator"><span class="status-dot ' + dot + '"></span></span></td>' +
-                    '<td>' + (s.connections || 0) + '</td>' +
-                    '<td>' + (s.latency_ms != null ? s.latency_ms + 'ms' : '—') + '</td>' +
-                    '<td>' + App.escapeHtml(s.group || '—') + '</td>' +
-                    '<td>' + App.timeAgo(s.last_check) + '</td>' +
+                    '<td>' + (s.sessions || 0) + '</td>' +
+                    '<td>' + (s.weight || 1) + '</td>' +
+                    '<td>' + App.escapeHtml((s.group || '—') + (s.tags ? ' · ' + formatTags(s.tags) : '')) + '</td>' +
+                    '<td>' + App.timeAgo(s.checked_at) + '</td>' +
                     '<td>' +
                         '<label class="toggle"><input type="checkbox" ' + (s.maintenance ? 'checked' : '') +
-                        ' onchange="toggleMaintenance(\'' + App.escapeHtml(s.host || s.address || s.name || '') + '\', this.checked)">' +
+                        ' onchange="toggleMaintenance(\'' + App.escapeHtml(s.id || '') + '\', this.checked)">' +
                         '<span class="toggle-slider"></span></label>' +
                     '</td>' +
                     '<td class="col-actions">' +
-                        '<button class="btn btn-ghost btn-sm" onclick="editServer(\'' + App.escapeHtml(s.host || s.address || s.name || '') + '\')" title="Edit">✏️</button>' +
+                        '<button class="btn btn-ghost btn-sm" onclick="editServer(\'' + App.escapeHtml(s.id || '') + '\')" title="Edit">✏️</button>' +
+                        '<button class="btn btn-ghost btn-sm text-danger" onclick="deleteServer(\'' + App.escapeHtml(s.id || '') + '\')" title="Delete">🗑️</button>' +
                     '</td></tr>';
             }).join('');
             App.table('#servers-table');
@@ -187,7 +269,7 @@
         var q = document.getElementById('server-search').value.toLowerCase();
         var group = document.getElementById('server-group-filter').value;
         var filtered = allServers.filter(function(s) {
-            var matchQ = !q || (s.host || s.address || s.name || '').toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q);
+            var matchQ = !q || (s.host || '').toLowerCase().includes(q) || (s.name || '').toLowerCase().includes(q);
             var matchG = !group || s.group === group;
             return matchQ && matchG;
         });
@@ -204,13 +286,15 @@
 
     window.showServerModal = function(server) {
         document.getElementById('server-modal-title').textContent = server ? 'Edit Server' : 'Add Server';
-        document.getElementById('server-edit-id').value = server ? (server.host || server.address || server.name || '') : '';
-        document.getElementById('server-host').value = server ? (server.host || server.address || '') : '';
+        document.getElementById('server-edit-id').value = server ? (server.id || '') : '';
+        document.getElementById('server-host').value = server ? (server.host || '') : '';
         document.getElementById('server-port').value = server ? (server.port || 22) : 22;
-        document.getElementById('server-user').value = server ? (server.user || '') : '';
+        document.getElementById('server-name').value = server ? (server.name || '') : '';
         document.getElementById('server-group').value = server ? (server.group || '') : '';
-        document.getElementById('server-privkey').value = server ? (server.privkey || '') : '';
-        document.getElementById('server-description').value = server ? (server.description || '') : '';
+        document.getElementById('server-weight').value = server ? (server.weight || 1) : 1;
+        document.getElementById('server-max-sessions').value = server ? (server.max_sessions || '') : '';
+        document.getElementById('server-tags').value = server ? formatTags(server.tags) : '';
+        document.getElementById('server-delete-btn').classList.toggle('hidden', !server);
         document.getElementById('server-modal-overlay').classList.add('show');
     };
 
@@ -218,8 +302,8 @@
         document.getElementById('server-modal-overlay').classList.remove('show');
     };
 
-    window.editServer = function(host) {
-        var srv = allServers.find(function(s) { return (s.host || s.address || s.name) === host; });
+    window.editServer = function(id) {
+        var srv = allServers.find(function(s) { return s.id === id; });
         if (srv) showServerModal(srv);
     };
 
@@ -229,20 +313,21 @@
 
         var id = document.getElementById('server-edit-id').value;
         var payload = {
+            name: document.getElementById('server-name').value,
             host: document.getElementById('server-host').value,
             port: parseInt(document.getElementById('server-port').value) || 22,
-            user: document.getElementById('server-user').value,
             group: document.getElementById('server-group').value,
-            privkey: document.getElementById('server-privkey').value,
-            description: document.getElementById('server-description').value,
+            weight: parseInt(document.getElementById('server-weight').value) || 1,
+            max_sessions: parseInt(document.getElementById('server-max-sessions').value) || 0,
+            tags: parseTags(document.getElementById('server-tags').value),
         };
 
         App.btnLoading('#server-save-btn', true);
         try {
             if (id) {
-                await App.api('PUT', '/api/v1/upstreams/' + encodeURIComponent(id), payload);
+                await App.api('PUT', '/api/v2/servers/' + encodeURIComponent(id), payload);
             } else {
-                await App.api('POST', '/api/v1/upstreams', payload);
+                await App.api('POST', '/api/v2/servers', payload);
             }
             App.notify('Server saved', 'success');
             closeServerModal();
@@ -253,9 +338,28 @@
         App.btnLoading('#server-save-btn', false);
     };
 
-    window.toggleMaintenance = async function(host, enabled) {
+    window.deleteServer = async function(id) {
+        if (!id) return;
+        var ok = await App.confirm('Delete this server from managed inventory?');
+        if (!ok) return;
         try {
-            await App.api('POST', '/api/v1/upstreams/' + encodeURIComponent(host) + '/maintenance', { enabled: enabled });
+            await App.api('DELETE', '/api/v2/servers/' + encodeURIComponent(id));
+            App.notify('Server deleted', 'success');
+            closeServerModal();
+            loadServers();
+        } catch(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    window.deleteServerFromModal = function() {
+        var id = document.getElementById('server-edit-id').value;
+        return window.deleteServer(id);
+    };
+
+    window.toggleMaintenance = async function(id, enabled) {
+        try {
+            await App.api('PUT', '/api/v2/servers/' + encodeURIComponent(id) + '/maintenance', { maintenance: enabled });
             App.notify('Maintenance mode ' + (enabled ? 'enabled' : 'disabled'), 'success');
         } catch(e) {
             App.notify('Failed: ' + e.message, 'error');

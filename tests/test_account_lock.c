@@ -209,6 +209,62 @@ static int test_disabled_lockout(void)
     TEST_PASS();
 }
 
+/* Test: IP ban after N failures */
+static int test_ip_ban_after_threshold(void)
+{
+    TEST_START();
+
+    account_lock_config_t cfg = {
+        .lockout_enabled = false,
+        .lockout_threshold = 3,
+        .lockout_duration_sec = 60,
+        .ip_ban_enabled = true,
+        .ip_ban_threshold = 2,
+        .ip_ban_duration_sec = 60
+    };
+
+    ASSERT_EQ(account_lock_init(&cfg), 0);
+
+    account_ip_record_failure("10.0.0.8");
+    ASSERT_FALSE(account_ip_is_blocked("10.0.0.8"));
+    ASSERT_EQ(account_ip_get_failures("10.0.0.8"), 1);
+
+    account_ip_record_failure("10.0.0.8");
+    ASSERT_TRUE(account_ip_is_blocked("10.0.0.8"));
+    ASSERT_EQ(account_ip_get_failures("10.0.0.8"), 2);
+
+    account_lock_cleanup();
+    TEST_PASS();
+}
+
+/* Test: IP ban resets on success */
+static int test_ip_ban_reset_on_success(void)
+{
+    TEST_START();
+
+    account_lock_config_t cfg = {
+        .lockout_enabled = false,
+        .lockout_threshold = 3,
+        .lockout_duration_sec = 60,
+        .ip_ban_enabled = true,
+        .ip_ban_threshold = 3,
+        .ip_ban_duration_sec = 60
+    };
+
+    ASSERT_EQ(account_lock_init(&cfg), 0);
+
+    account_ip_record_failure("10.0.0.9");
+    account_ip_record_failure("10.0.0.9");
+    ASSERT_EQ(account_ip_get_failures("10.0.0.9"), 2);
+
+    account_ip_record_success("10.0.0.9");
+    ASSERT_EQ(account_ip_get_failures("10.0.0.9"), 0);
+    ASSERT_FALSE(account_ip_is_blocked("10.0.0.9"));
+
+    account_lock_cleanup();
+    TEST_PASS();
+}
+
 /* Concurrent access test */
 #define THREAD_COUNT 4
 #define ITER_COUNT 50
@@ -275,6 +331,8 @@ int main(void)
     RUN_TEST(test_independent_users);
     RUN_TEST(test_null_handling);
     RUN_TEST(test_disabled_lockout);
+    RUN_TEST(test_ip_ban_after_threshold);
+    RUN_TEST(test_ip_ban_reset_on_success);
     RUN_TEST(test_concurrent_access);
 
     log_shutdown();

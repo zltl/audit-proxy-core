@@ -8,8 +8,11 @@
 #include "logger.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
+
+#define ROUTER_HASH_VIRTUAL_NODES 32
 
 /* Router structure */
 struct router {
@@ -21,6 +24,140 @@ struct router {
     size_t round_robin_index;   /* For round-robin LB */
     connection_pool_t pool;     /* Upstream connection pool */
 };
+
+typedef struct hash_ring_entry {
+    uint64_t point;
+    int upstream_index;
+} hash_ring_entry_t;
+
+static uint64_t router_hash64(const char *value)
+{
+    uint64_t hash = 1469598103934665603ULL;
+    if (value == NULL) {
+        return hash;
+    }
+    for (const unsigned char *p = (const unsigned char *)value; *p != '\0'; p++) {
+        hash ^= (uint64_t)(*p);
+        hash *= 1099511628211ULL;
+    }
+    /* Finalize with an avalanche step so nearby labels/usernames still spread evenly. */
+    hash ^= (hash >> 33);
+    hash *= 0xff51afd7ed558ccdULL;
+    hash ^= (hash >> 33);
+    hash *= 0xc4ceb9fe1a85ec53ULL;
+    hash ^= (hash >> 33);
+    return hash;
+}
+
+static int compare_hash_ring_entries(const void *a, const void *b)
+{
+    const hash_ring_entry_t *left = (const hash_ring_entry_t *)a;
+    const hash_ring_entry_t *right = (const hash_ring_entry_t *)b;
+    if (left->point < right->point) {
+        return -1;
+    }
+    if (left->point > right->point) {
+        return 1;
+    }
+    return left->upstream_index - right->upstream_index;
+}
+
+static size_t build_hash_ring(router_t *router, const int *healthy_indices,
+                              size_t healthy_count, hash_ring_entry_t *ring,
+                              size_t ring_capacity)
+{
+    if (router == NULL || healthy_indices == NULL || ring == NULL || ring_capacity == 0) {
+        return 0;
+    }
+
+    size_t ring_count = 0;
+    char label[ROUTER_MAX_HOST + 32];
+    for (size_t i = 0; i < healthy_count; i++) {
+        int upstream_index = healthy_indices[i];
+        upstream_t *upstream = &router->upstreams[upstream_index];
+        for (size_t vnode = 0; vnode < ROUTER_HASH_VIRTUAL_NODES &&
+                                ring_count < ring_capacity; vnode++) {
+            snprintf(label, sizeof(label), "%s:%u#%zu", upstream->config.host,
+                     (unsigned int)upstream->config.port, vnode);
+            ring[ring_count].point = router_hash64(label);
+            ring[ring_count].upstream_index = upstream_index;
+            ring_count++;
+        }
+    }
+
+    qsort(ring, ring_count, sizeof(ring[0]), compare_hash_ring_entries);
+    return ring_count;
+}
+
+static int upstream_weight(const upstream_t *upstream)
+{
+    if (upstream == NULL || upstream->config.weight <= 0) {
+        return 1;
+    }
+    return upstream->config.weight;
+}
+
+static int select_upstream_consistent_hash(router_t *router, const char *key,
+                                           const int *healthy_indices, size_t healthy_count)
+{
+    if (router == NULL || healthy_indices == NULL || healthy_count == 0) {
+        return -1;
+    }
+    if (key == NULL || *key == '\0') {
+        return healthy_indices[0];
+    }
+
+    hash_ring_entry_t ring[ROUTER_MAX_UPSTREAMS * ROUTER_HASH_VIRTUAL_NODES];
+    size_t ring_count = build_hash_ring(router, healthy_indices, healthy_count,
+                                        ring, sizeof(ring) / sizeof(ring[0]));
+    if (ring_count == 0) {
+        return healthy_indices[0];
+    }
+
+    uint64_t point = router_hash64(key);
+    size_t left = 0;
+    size_t right = ring_count;
+    while (left < right) {
+        size_t mid = left + (right - left) / 2;
+        if (ring[mid].point < point) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    if (left >= ring_count) {
+        return ring[0].upstream_index;
+    }
+    return ring[left].upstream_index;
+}
+
+static int select_upstream_weighted(router_t *router, const int *healthy_indices,
+                                    size_t healthy_count)
+{
+    if (router == NULL || healthy_indices == NULL || healthy_count == 0) {
+        return -1;
+    }
+
+    int selected = healthy_indices[0];
+    int best_weight = 0;
+    int total_weight = 0;
+    bool have_best = false;
+
+    for (size_t i = 0; i < healthy_count; i++) {
+        upstream_t *upstream = &router->upstreams[healthy_indices[i]];
+        int weight = upstream_weight(upstream);
+        upstream->current_weight += weight;
+        total_weight += weight;
+        if (!have_best || upstream->current_weight > best_weight) {
+            best_weight = upstream->current_weight;
+            selected = healthy_indices[i];
+            have_best = true;
+        }
+    }
+
+    router->upstreams[selected].current_weight -= total_weight;
+    return selected;
+}
 
 /* Simple glob pattern matching */
 bool router_glob_match(const char *pattern, const char *str)
@@ -131,6 +268,7 @@ int router_add_upstream(router_t *router, const upstream_config_t *config)
     upstream->last_check = 0;
     upstream->last_failure = 0;
     upstream->consecutive_failures = 0;
+    upstream->current_weight = 0;
 
     router->upstream_count++;
 
@@ -153,6 +291,7 @@ int router_remove_upstream(router_t *router, int index)
 
     /* Mark as disabled instead of removing to preserve indices */
     router->upstreams[index].config.enabled = false;
+    router->upstreams[index].current_weight = 0;
 
     LOG_INFO("Upstream %d disabled: %s:%d",
              index,
@@ -253,6 +392,8 @@ static int select_upstream_lb(router_t *router, const char *username)
         if (u->config.enabled &&
             u->health != UPSTREAM_HEALTH_UNHEALTHY) {
             healthy_indices[healthy_count++] = (int)i;
+        } else {
+            u->current_weight = 0;
         }
     }
 
@@ -290,17 +431,12 @@ static int select_upstream_lb(router_t *router, const char *username)
     }
 
     case LB_POLICY_HASH:
-        if (username != NULL && *username != '\0') {
-            /* Simple hash of username */
-            unsigned long hash = 5381;
-            const char *p = username;
-            while (*p) {
-                hash = ((hash << 5) + hash) + (unsigned char)*p++;
-            }
-            selected = healthy_indices[hash % healthy_count];
-        } else {
-            selected = healthy_indices[0];
-        }
+        selected = select_upstream_consistent_hash(router, username, healthy_indices,
+                                                   healthy_count);
+        break;
+
+    case LB_POLICY_WEIGHTED:
+        selected = select_upstream_weighted(router, healthy_indices, healthy_count);
         break;
 
     default:

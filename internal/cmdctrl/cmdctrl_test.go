@@ -237,6 +237,32 @@ func TestTargetBasedFiltering(t *testing.T) {
 	}
 }
 
+func TestRewriteActionTemplatesCommand(t *testing.T) {
+	pe := NewPolicyEngine(t.TempDir())
+	err := pe.AddRule(&CommandRule{
+		ID:       "rewrite-audit-flag",
+		Name:     "Rewrite command with audit flag",
+		Pattern:  `^kubectl\s+exec\b`,
+		Action:   ActionRewrite,
+		Rewrite:  `audit-wrapper --user {{username}} --target {{target}} -- {{command}}`,
+		Severity: "medium",
+		Message:  "command rewritten with audit wrapper",
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d := pe.Evaluate("kubectl exec deploy/api -- bash", "alice", "operator", "prod-cluster")
+	if d.Action != ActionRewrite {
+		t.Fatalf("expected rewrite, got %s", d.Action)
+	}
+	expected := "audit-wrapper --user alice --target prod-cluster -- kubectl exec deploy/api -- bash"
+	if d.RewrittenCommand != expected {
+		t.Fatalf("expected rewritten command %q, got %q", expected, d.RewrittenCommand)
+	}
+}
+
 // --- CRUD operations ---
 
 func TestAddRule(t *testing.T) {
@@ -646,6 +672,20 @@ func TestAddRuleInvalidRegex(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid regex")
+	}
+}
+
+func TestAddRewriteRuleRequiresTemplate(t *testing.T) {
+	pe := NewPolicyEngine(t.TempDir())
+	err := pe.AddRule(&CommandRule{
+		ID:      "rewrite-missing-template",
+		Name:    "Rewrite missing template",
+		Pattern: `^ssh\b`,
+		Action:  ActionRewrite,
+		Enabled: true,
+	})
+	if err == nil {
+		t.Fatal("expected error for rewrite rule without template")
 	}
 }
 

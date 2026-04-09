@@ -30,7 +30,7 @@
             <span class="sidebar-nav-label">Servers</span>
         </a>
 
-        <a href="/policies" class="sidebar-nav-item{{if eq .ActivePage "policies"}} active{{end}}">
+        <a href="/settings" class="sidebar-nav-item{{if eq .ActivePage "settings"}} active{{end}}">
             <span class="sidebar-nav-icon">🔑</span>
             <span class="sidebar-nav-label">Routes &amp; Policies</span>
         </a>
@@ -40,6 +40,11 @@
         <a href="/audit" class="sidebar-nav-item{{if eq .ActivePage "audit"}} active{{end}}">
             <span class="sidebar-nav-icon">📋</span>
             <span class="sidebar-nav-label">Audit Log</span>
+        </a>
+
+        <a href="/webhooks" class="sidebar-nav-item{{if eq .ActivePage "webhooks"}} active{{end}}">
+            <span class="sidebar-nav-icon">🪝</span>
+            <span class="sidebar-nav-label">Webhooks</span>
         </a>
 
         <a href="/settings" class="sidebar-nav-item{{if eq .ActivePage "settings"}} active{{end}}">

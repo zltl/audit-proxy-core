@@ -24,6 +24,12 @@ typedef enum {
 /* Forward declaration */
 typedef struct rate_limit_filter_config rate_limit_filter_config_t;
 
+typedef void (*rate_limit_event_cb)(const char *username,
+                                    const char *client_addr,
+                                    rate_limit_result_t result,
+                                    void *user_data);
+typedef int (*rate_limit_user_count_cb)(const char *username, void *user_data);
+
 /* Rate limit rule */
 typedef struct rate_limit_rule {
     char name[64];              /* Rule name */
@@ -43,6 +49,10 @@ struct rate_limit_filter_config {
     rate_limit_rule_t *rules;       /* Per-pattern rules */
     int per_user_max_sessions;              /* Default per-user max concurrent sessions (0 = unlimited) */
     rate_limit_rule_t *user_session_rules;  /* Per-user session limit rules */
+    rate_limit_user_count_cb count_user_cb; /* Optional cluster-aware session counter */
+    void *count_user_user_data;             /* User data for count_user_cb */
+    rate_limit_event_cb event_cb;           /* Optional runtime event callback */
+    void *event_user_data;                  /* User data for event callback */
 };
 
 /**

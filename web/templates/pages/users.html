@@ -13,7 +13,7 @@
         </div>
     </div>
     <div class="toolbar-right">
-        <button class="btn btn-secondary btn-sm" onclick="showImportModal()">📥 Bulk Import</button>
+        <button class="btn btn-secondary btn-sm" disabled title="Bulk import is not wired to the current API yet">📥 Bulk Import</button>
         <button class="btn btn-primary btn-sm" onclick="showUserModal()">+ Add User</button>
     </div>
 </div>
@@ -75,7 +75,7 @@
                     <div class="form-group">
                         <label class="form-label">Role</label>
                         <select class="form-control" id="user-role" name="role">
-                            <option value="user">User</option>
+                            <option value="viewer">Viewer</option>
                             <option value="operator">Operator</option>
                             <option value="auditor">Auditor</option>
                             <option value="admin">Admin</option>
@@ -89,8 +89,15 @@
                     </label>
                 </div>
             </form>
+            <div class="mt-lg hidden" id="user-activity-panel">
+                <h4 class="mb-sm">Recent Activity</h4>
+                <div class="timeline" id="user-activity-list">
+                    <div class="text-muted">Select an existing user to load activity.</div>
+                </div>
+            </div>
         </div>
         <div class="modal-footer">
+            <button class="btn btn-danger hidden" id="user-delete-btn" onclick="deleteUserFromModal()">Delete User</button>
             <button class="btn btn-secondary" onclick="closeUserModal()">Cancel</button>
             <button class="btn btn-primary" id="user-save-btn" onclick="saveUser()">Save User</button>
         </div>
@@ -105,13 +112,17 @@
             <button class="modal-close" onclick="closeMfaModal()">✕</button>
         </div>
         <div class="modal-body text-center" id="mfa-modal-body">
-            <p class="mb-md text-muted">Scan this QR code with your authenticator app.</p>
+            <p class="mb-md text-muted">Use the secret or otpauth URI below in your authenticator app.</p>
             <div id="mfa-qr" style="padding:20px;background:#fff;display:inline-block;border-radius:var(--radius-md);">
-                <div class="skeleton" style="width:200px;height:200px;"></div>
+                <div class="text-muted" style="max-width:240px;">QR rendering is not bundled in this build.</div>
             </div>
             <div class="mt-md">
-                <label class="form-label">Or enter this key manually:</label>
+                <label class="form-label">Manual setup secret:</label>
                 <code id="mfa-secret" style="font-size:14px;letter-spacing:2px;">—</code>
+            </div>
+            <div class="mt-md">
+                <label class="form-label">OTPAuth URI:</label>
+                <code id="mfa-uri" style="display:block;font-size:12px;word-break:break-all;">—</code>
             </div>
         </div>
         <div class="modal-footer">
@@ -145,10 +156,83 @@
 <script>
 (function() {
     var allUsers = [];
+    var qriousLoader = null;
+
+    function ensureQRious() {
+        if (window.QRious) {
+            return Promise.resolve(window.QRious);
+        }
+        if (qriousLoader) {
+            return qriousLoader;
+        }
+        qriousLoader = new Promise(function(resolve, reject) {
+            var script = document.createElement('script');
+            script.src = 'https://unpkg.com/qrious@4.0.2/dist/qrious.min.js';
+            script.onload = function() {
+                if (window.QRious) {
+                    resolve(window.QRious);
+                    return;
+                }
+                reject(new Error('QRious did not initialize'));
+            };
+            script.onerror = function() {
+                reject(new Error('Failed to load QR renderer'));
+            };
+            document.head.appendChild(script);
+        });
+        return qriousLoader;
+    }
+
+    function renderMfaQRCode(uri) {
+        var container = document.getElementById('mfa-qr');
+        container.innerHTML = '';
+        return ensureQRious().then(function(QRious) {
+            var canvas = document.createElement('canvas');
+            new QRious({
+                element: canvas,
+                value: uri,
+                size: 220,
+                background: '#ffffff',
+                foreground: '#111827',
+                level: 'M'
+            });
+            container.appendChild(canvas);
+        }).catch(function() {
+            container.innerHTML = '<div class="text-muted" style="max-width:240px;">QR rendering unavailable. Use the secret or URI below.</div>';
+        });
+    }
+
+    function renderUserActivity(events) {
+        var container = document.getElementById('user-activity-list');
+        if (!events.length) {
+            container.innerHTML = '<div class="text-muted">No recent activity found for this user.</div>';
+            return;
+        }
+        container.innerHTML = events.map(function(ev) {
+            return '<div class="timeline-item">' +
+                '<div class="timeline-dot info"></div>' +
+                '<div class="timeline-time">' + App.timeAgo(ev.timestamp) + '</div>' +
+                '<div class="timeline-content"><strong>' + App.escapeHtml(ev.event_type || 'event') + '</strong> — ' +
+                App.escapeHtml(ev.details || 'No details') + '</div>' +
+            '</div>';
+        }).join('');
+    }
+
+    function loadUserActivity(username) {
+        document.getElementById('user-activity-list').innerHTML = '<div class="text-muted">Loading activity…</div>';
+        return App.apiPage('GET', '/api/v2/audit/events?user=' + encodeURIComponent(username) + '&per_page=8')
+            .then(function(page) {
+                renderUserActivity(page.items || []);
+            })
+            .catch(function(e) {
+                document.getElementById('user-activity-list').innerHTML =
+                    '<div class="text-danger">Failed to load activity: ' + App.escapeHtml(e.message) + '</div>';
+            });
+    }
 
     window.loadUsers = function() {
-        App.api('GET', '/api/v1/users').then(function(data) {
-            allUsers = data.users || data.items || data || [];
+        App.apiPage('GET', '/api/v2/users?per_page=200').then(function(page) {
+            allUsers = page.items || [];
             renderUsers(allUsers);
             App.table('#users-table');
         }).catch(function(e) {
@@ -166,7 +250,7 @@
         tbody.innerHTML = users.map(function(u) {
             var roleCls = u.role === 'admin' ? 'badge-danger' : u.role === 'operator' ? 'badge-warning' : u.role === 'auditor' ? 'badge-info' : 'badge-neutral';
             var mfaHtml = u.mfa_enabled
-                ? '<span class="badge badge-success">Enabled</span>'
+                ? '<span class="badge badge-success">Enabled</span> <button class="btn btn-ghost btn-sm" onclick="setupMfa(\'' + App.escapeHtml(u.username) + '\')">View QR</button>'
                 : '<button class="btn btn-ghost btn-sm" onclick="setupMfa(\'' + App.escapeHtml(u.username) + '\')">Setup</button>';
             var statusHtml = u.enabled !== false
                 ? '<span class="badge badge-success"><span class="badge-dot green"></span>Active</span>'
@@ -182,7 +266,8 @@
                 '<td>' + App.formatTime(u.last_login) + '</td>' +
                 '<td class="col-actions">' +
                     '<button class="btn btn-ghost btn-sm" onclick="editUser(\'' + App.escapeHtml(u.username) + '\')" title="Edit">✏️</button> ' +
-                    '<button class="btn btn-ghost btn-sm" onclick="toggleUser(\'' + App.escapeHtml(u.username) + '\', ' + (u.enabled !== false) + ')" title="Toggle">' + (u.enabled !== false ? '🔒' : '🔓') + '</button>' +
+                    '<button class="btn btn-ghost btn-sm" onclick="toggleUser(\'' + App.escapeHtml(u.username) + '\', ' + (u.enabled !== false) + ')" title="Toggle">' + (u.enabled !== false ? '🔒' : '🔓') + '</button> ' +
+                    '<button class="btn btn-ghost btn-sm text-danger" onclick="deleteUser(\'' + App.escapeHtml(u.username) + '\')" title="Delete">🗑️</button>' +
                 '</td></tr>';
         }).join('');
     }
@@ -206,8 +291,15 @@
         document.getElementById('user-email').value = user ? (user.email || '') : '';
         document.getElementById('user-password').value = '';
         document.getElementById('user-password').required = !user;
-        document.getElementById('user-role').value = user ? (user.role || 'user') : 'user';
+        document.getElementById('user-role').value = user ? (user.role || 'viewer') : 'viewer';
         document.getElementById('user-enabled').checked = user ? user.enabled !== false : true;
+        document.getElementById('user-delete-btn').classList.toggle('hidden', !user);
+        document.getElementById('user-activity-panel').classList.toggle('hidden', !user);
+        if (user) {
+            loadUserActivity(user.username);
+        } else {
+            document.getElementById('user-activity-list').innerHTML = '<div class="text-muted">Select an existing user to load activity.</div>';
+        }
         document.getElementById('user-modal-overlay').classList.add('show');
     };
 
@@ -233,14 +325,19 @@
             enabled: document.getElementById('user-enabled').checked,
         };
         var pass = document.getElementById('user-password').value;
-        if (pass) payload.password = pass;
 
         App.btnLoading('#user-save-btn', true);
         try {
             if (id) {
-                await App.api('PUT', '/api/v1/users/' + encodeURIComponent(id), payload);
+                await App.api('PUT', '/api/v2/users/' + encodeURIComponent(id), payload);
+                if (pass) {
+                    await App.api('PUT', '/api/v2/users/' + encodeURIComponent(id) + '/password', {
+                        new_password: pass,
+                    });
+                }
             } else {
-                await App.api('POST', '/api/v1/users', payload);
+                payload.password = pass;
+                await App.api('POST', '/api/v2/users', payload);
             }
             App.notify('User saved successfully', 'success');
             closeUserModal();
@@ -251,12 +348,32 @@
         App.btnLoading('#user-save-btn', false);
     };
 
+    window.deleteUser = async function(username) {
+        if (!username) return;
+        var ok = await App.confirm('Delete user "' + username + '"?');
+        if (!ok) return;
+        try {
+            await App.api('DELETE', '/api/v2/users/' + encodeURIComponent(username));
+            App.notify('User deleted', 'success');
+            closeUserModal();
+            loadUsers();
+        } catch(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    window.deleteUserFromModal = function() {
+        var username = document.getElementById('user-edit-id').value;
+        return window.deleteUser(username);
+    };
+
     window.toggleUser = async function(username, currentlyEnabled) {
-        var action = currentlyEnabled ? 'disable' : 'enable';
+        var nextEnabled = !currentlyEnabled;
+        var action = nextEnabled ? 'enable' : 'disable';
         var ok = await App.confirm(action.charAt(0).toUpperCase() + action.slice(1) + ' user "' + username + '"?');
         if (!ok) return;
         try {
-            await App.api('POST', '/api/v1/users/' + encodeURIComponent(username) + '/' + action);
+            await App.api('PUT', '/api/v2/users/' + encodeURIComponent(username), { enabled: nextEnabled });
             App.notify('User ' + action + 'd', 'success');
             loadUsers();
         } catch(e) {
@@ -266,14 +383,16 @@
 
     window.setupMfa = function(username) {
         document.getElementById('mfa-modal-overlay').classList.add('show');
-        document.getElementById('mfa-qr').innerHTML = '<div class="skeleton" style="width:200px;height:200px;"></div>';
+        document.getElementById('mfa-qr').innerHTML = '<div class="text-muted" style="max-width:240px;">Preparing MFA details…</div>';
         document.getElementById('mfa-secret').textContent = '—';
+        document.getElementById('mfa-uri').textContent = '—';
 
-        App.api('POST', '/api/v1/users/' + encodeURIComponent(username) + '/mfa/setup').then(function(data) {
-            if (data.qr_url) {
-                document.getElementById('mfa-qr').innerHTML = '<img src="' + App.escapeHtml(data.qr_url) + '" width="200" height="200" alt="QR Code">';
-            }
+        App.api('PUT', '/api/v2/users/' + encodeURIComponent(username) + '/mfa', { enabled: true }).then(function() {
+            return App.apiData('GET', '/api/v2/users/' + encodeURIComponent(username) + '/mfa/qrcode');
+        }).then(function(data) {
+            renderMfaQRCode(data.otpauth_uri || '');
             document.getElementById('mfa-secret').textContent = data.secret || '—';
+            document.getElementById('mfa-uri').textContent = data.otpauth_uri || '—';
         }).catch(function(e) {
             document.getElementById('mfa-qr').innerHTML = '<p class="text-danger">Failed: ' + App.escapeHtml(e.message) + '</p>';
         });
@@ -292,28 +411,7 @@
     };
 
     window.importUsers = async function() {
-        var fileInput = document.getElementById('import-file');
-        if (!fileInput.files.length) {
-            App.notify('Please select a CSV file', 'warning');
-            return;
-        }
-        var formData = new FormData();
-        formData.append('file', fileInput.files[0]);
-        try {
-            var res = await fetch('/api/v1/users/import', {
-                method: 'POST',
-                headers: { 'X-CSRF-Token': App.csrfToken() },
-                credentials: 'same-origin',
-                body: formData,
-            });
-            if (!res.ok) throw { message: res.statusText };
-            var data = await res.json();
-            App.notify('Imported ' + (data.count || 0) + ' user(s)', 'success');
-            closeImportModal();
-            loadUsers();
-        } catch(e) {
-            App.notify('Import failed: ' + e.message, 'error');
-        }
+        App.notify('Bulk import is not available in the current API yet', 'info');
     };
 
     loadUsers();

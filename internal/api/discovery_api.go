@@ -1,13 +1,13 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
-	"strconv"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/discovery"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
 )
 
 // discoveryState holds the runtime state for asset discovery endpoints.
@@ -35,6 +35,107 @@ func (a *API) initDiscovery() *discoveryState {
 		},
 	}
 	return a.discovery
+}
+
+func discoveryManagedServerID(assetID string) string {
+	replacer := strings.NewReplacer(":", "-", "/", "-", "\\", "-", " ", "-")
+	return "discovery-" + replacer.Replace(strings.ToLower(assetID))
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func (a *API) syncDiscoveryAssetServer(asset *discovery.Asset) bool {
+	if asset == nil || asset.Status != "registered" {
+		return false
+	}
+
+	now := time.Now().UTC()
+	checkedAt := asset.LastSeen.UTC()
+	if checkedAt.IsZero() {
+		checkedAt = now
+	}
+
+	tags := cloneStringMap(asset.Tags)
+	if tags == nil {
+		tags = make(map[string]string)
+	}
+	tags["source"] = "discovery"
+	tags["discovery_asset_id"] = asset.ID
+	if asset.SSHVersion != "" {
+		tags["ssh_version"] = asset.SSHVersion
+	}
+	if asset.OS != "" {
+		tags["os"] = asset.OS
+	}
+
+	serverID := discoveryManagedServerID(asset.ID)
+
+	a.servers.mu.Lock()
+	defer a.servers.mu.Unlock()
+
+	existing, ok := a.servers.servers[serverID]
+	server := models.Server{
+		ID:          serverID,
+		Host:        asset.Host,
+		Port:        asset.Port,
+		Name:        asset.Name,
+		Group:       "discovery",
+		Status:      "online",
+		Healthy:     true,
+		Weight:      1,
+		MaxSessions: existing.MaxSessions,
+		Maintenance: existing.Maintenance,
+		Sessions:    existing.Sessions,
+		Tags:        tags,
+		CheckedAt:   checkedAt,
+	}
+	if server.Name == "" {
+		server.Name = asset.Host
+	}
+	if existing.Group != "" {
+		server.Group = existing.Group
+	}
+	if group := tags["group"]; group != "" {
+		server.Group = group
+	}
+	if existing.Weight > 0 {
+		server.Weight = existing.Weight
+	}
+	if len(existing.Tags) > 0 {
+		mergedTags := cloneStringMap(existing.Tags)
+		for k, v := range tags {
+			mergedTags[k] = v
+		}
+		server.Tags = mergedTags
+	}
+
+	if ok && reflect.DeepEqual(existing, server) {
+		return false
+	}
+	a.servers.servers[server.ID] = server
+	return true
+}
+
+func (a *API) removeDiscoveryAssetServer(assetID string) bool {
+	serverID := discoveryManagedServerID(assetID)
+
+	a.servers.mu.Lock()
+	defer a.servers.mu.Unlock()
+
+	if _, ok := a.servers.servers[serverID]; !ok {
+		return false
+	}
+	delete(a.servers.servers, serverID)
+	return true
 }
 
 // RegisterDiscoveryRoutes adds the /api/v2/discovery/* endpoints to mux.
@@ -176,6 +277,19 @@ func (a *API) handleUpdateDiscoveryAsset(w http.ResponseWriter, r *http.Request)
 	_ = ds.inventory.Save()
 
 	asset, _ := ds.inventory.Get(id)
+	serverChanged := false
+	if asset != nil && asset.Status == "registered" {
+		serverChanged = a.syncDiscoveryAssetServer(asset)
+	} else {
+		serverChanged = a.removeDiscoveryAssetServer(id)
+	}
+	if serverChanged {
+		if err := a.servers.save(); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to save servers: "+err.Error())
+			return
+		}
+	}
+
 	writeJSON(w, http.StatusOK, APIResponse{
 		Success: true,
 		Data:    asset,
@@ -196,6 +310,12 @@ func (a *API) handleDeleteDiscoveryAsset(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	_ = ds.inventory.Save()
+	if a.removeDiscoveryAssetServer(id) {
+		if err := a.servers.save(); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to save servers: "+err.Error())
+			return
+		}
+	}
 
 	writeJSON(w, http.StatusOK, APIResponse{
 		Success: true,
@@ -216,10 +336,14 @@ func (a *API) handleDiscoveryRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	registered := 0
+	serverChanged := false
 	if len(req.IDs) > 0 {
 		for _, id := range req.IDs {
 			status := "registered"
 			if err := ds.inventory.Update(id, discovery.AssetUpdate{Status: &status}); err == nil {
+				if asset, getErr := ds.inventory.Get(id); getErr == nil && a.syncDiscoveryAssetServer(asset) {
+					serverChanged = true
+				}
 				registered++
 			}
 		}
@@ -230,8 +354,19 @@ func (a *API) handleDiscoveryRegister(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		registered = count
+		for _, asset := range ds.inventory.List(discovery.AssetFilter{Status: "registered"}) {
+			if a.syncDiscoveryAssetServer(asset) {
+				serverChanged = true
+			}
+		}
 	}
 	_ = ds.inventory.Save()
+	if serverChanged {
+		if err := a.servers.save(); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to save servers: "+err.Error())
+			return
+		}
+	}
 
 	writeJSON(w, http.StatusOK, APIResponse{
 		Success: true,
@@ -295,37 +430,4 @@ func (a *API) handleUpdateDiscoveryConfig(w http.ResponseWriter, r *http.Request
 			"ssh_banner":  ds.scanConfig.SSHBanner,
 		},
 	})
-}
-
-// --- helpers for discovery ID decoding ---
-
-// decodeAssetID converts a URL-safe asset ID back to the "host:port" format.
-// The HTTP router may deliver "{id}" as "10.0.0.1:22" directly when the path
-// uses a wildcard.  This helper also supports the older underscore-separated
-// form "10.0.0.1_22".
-func decodeAssetID(raw string) string {
-	if strings.Contains(raw, ":") {
-		return raw
-	}
-	idx := strings.LastIndex(raw, "_")
-	if idx < 0 {
-		return raw
-	}
-	host := raw[:idx]
-	portStr := raw[idx+1:]
-	if _, err := strconv.Atoi(portStr); err != nil {
-		return raw
-	}
-	return host + ":" + portStr
-}
-
-// marshalScanConfig serialises a ScanConfig to JSON-friendly form.
-func marshalScanConfig(cfg *discovery.ScanConfig) ([]byte, error) {
-	m := map[string]interface{}{
-		"ports":       cfg.Ports,
-		"timeout":     cfg.Timeout.String(),
-		"concurrency": cfg.Concurrency,
-		"ssh_banner":  cfg.SSHBanner,
-	}
-	return json.Marshal(m)
 }

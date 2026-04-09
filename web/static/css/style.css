@@ -1128,6 +1128,7 @@ textarea.form-control { resize: vertical; min-height: 80px; }
 
 /* ---------- Terminal ---------- */
 .terminal-container {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: calc(100vh - var(--header-height));
@@ -1173,6 +1174,62 @@ textarea.form-control { resize: vertical; min-height: 80px; }
 .terminal-status-dot.connected    { background: var(--color-success); }
 .terminal-status-dot.disconnected { background: var(--color-danger);  }
 .terminal-status-dot.connecting   { background: var(--color-warning); animation: pulse 1s infinite; }
+
+.terminal-transfer-status {
+  padding: 8px 16px;
+  background: #0f141b;
+  color: #8b949e;
+  border-bottom: 1px solid #30363d;
+  font-size: 12px;
+}
+
+.terminal-recording-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  background: #111827;
+  color: #8b949e;
+  border-bottom: 1px solid #30363d;
+  font-size: 12px;
+}
+
+.terminal-recording-status a {
+  color: #58a6ff;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.terminal-recording-status a:hover {
+  text-decoration: underline;
+}
+
+.terminal-drop-overlay {
+  position: absolute;
+  inset: 118px 16px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 2px dashed #58a6ff;
+  border-radius: var(--radius-lg);
+  background: rgba(13, 17, 23, 0.92);
+  color: #c9d1d9;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.terminal-drop-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.terminal-drop-subtitle {
+  font-size: 13px;
+  color: #8b949e;
+}
 
 #terminal {
   flex: 1;
@@ -1241,6 +1298,38 @@ textarea.form-control { resize: vertical; min-height: 80px; }
 .login-form .form-group { margin-bottom: 20px; }
 
 .login-form .btn { width: 100%; padding: 10px; font-size: 14px; }
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
+.login-sso-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.login-sso-actions .btn {
+  width: 100%;
+  text-align: center;
+  justify-content: center;
+}
 
 .login-footer {
   text-align: center;

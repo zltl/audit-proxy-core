@@ -8,10 +8,10 @@ import (
 )
 
 type cmdCtrlState struct {
-	engine   *cmdctrl.PolicyEngine
+	engine    *cmdctrl.PolicyEngine
 	approvals *cmdctrl.ApprovalManager
-	mu       sync.RWMutex
-	stats    cmdCtrlStats
+	mu        sync.RWMutex
+	stats     cmdCtrlStats
 }
 
 type cmdCtrlStats struct {
@@ -19,6 +19,7 @@ type cmdCtrlStats struct {
 	Allowed          int64 `json:"allowed"`
 	Denied           int64 `json:"denied"`
 	Audited          int64 `json:"audited"`
+	Rewritten        int64 `json:"rewritten"`
 	ApprovalRequired int64 `json:"approval_required"`
 }
 
@@ -203,6 +204,8 @@ func (a *API) handleEvaluateCommand(w http.ResponseWriter, r *http.Request) {
 		a.cmdCtrl.stats.Denied++
 	case cmdctrl.ActionAudit:
 		a.cmdCtrl.stats.Audited++
+	case cmdctrl.ActionRewrite:
+		a.cmdCtrl.stats.Rewritten++
 	case cmdctrl.ActionApprove:
 		a.cmdCtrl.stats.ApprovalRequired++
 	}

@@ -1,7 +1,6 @@
 package compliance
 
 import (
-	"bufio"
 	"crypto/rand"
 	"encoding/csv"
 	"encoding/hex"
@@ -23,11 +22,21 @@ const (
 	FrameworkGDPR     Framework = "gdpr"
 	FrameworkPCI      Framework = "pci-dss"
 	FrameworkISO27001 Framework = "iso27001"
+	FrameworkMLPS20   Framework = "mlps-2.0"
+	FrameworkMLPS30   Framework = "mlps-3.0"
 )
 
 // AllFrameworks returns every supported framework.
 func AllFrameworks() []Framework {
-	return []Framework{FrameworkSOC2, FrameworkHIPAA, FrameworkGDPR, FrameworkPCI, FrameworkISO27001}
+	return []Framework{
+		FrameworkSOC2,
+		FrameworkHIPAA,
+		FrameworkGDPR,
+		FrameworkPCI,
+		FrameworkISO27001,
+		FrameworkMLPS20,
+		FrameworkMLPS30,
+	}
 }
 
 // ControlStatus represents the result of a single control check.
@@ -75,6 +84,8 @@ type ReportGenerator struct {
 	auditLogDir string
 	configPath  string
 	dataDir     string
+	subjectData SubjectDataProvider
+	queryData   QueryDataProvider
 }
 
 // NewReportGenerator creates a report generator that inspects the given paths.
@@ -105,6 +116,10 @@ func (rg *ReportGenerator) Generate(framework Framework, start, end time.Time, g
 		controls = rg.evaluateGDPR()
 	case FrameworkISO27001:
 		controls = rg.evaluateISO27001()
+	case FrameworkMLPS20:
+		controls = rg.evaluateMLPS20()
+	case FrameworkMLPS30:
+		controls = rg.evaluateMLPS30()
 	default:
 		return nil, fmt.Errorf("unsupported framework: %s", framework)
 	}
@@ -715,6 +730,110 @@ func (rg *ReportGenerator) evaluateISO27001() []Control {
 }
 
 // ---------------------------------------------------------------------------
+// MLPS 2.0 / 3.0 controls
+// ---------------------------------------------------------------------------
+
+func (rg *ReportGenerator) evaluateMLPS20() []Control {
+	return []Control{
+		{
+			ID:          "MLPS2.0-AC-1",
+			Framework:   FrameworkMLPS20,
+			Category:    "Identity",
+			Title:       "身份鉴别与账号管理",
+			Description: "Verify authentication backend and managed user accounts are configured",
+			Status:      boolStatus(rg.configContains("auth") && rg.configContains("user:")),
+			Evidence:    collectEvidence(rg.configContains("auth"), "authentication backend configured", rg.configContains("user:"), "managed user accounts defined"),
+			Remediation: condStr(!rg.configContains("auth") || !rg.configContains("user:"), "Configure authentication backend and managed user accounts"),
+		},
+		{
+			ID:          "MLPS2.0-AC-2",
+			Framework:   FrameworkMLPS20,
+			Category:    "Access Control",
+			Title:       "访问控制策略",
+			Description: "Verify RBAC policies and routing scopes are configured",
+			Status:      boolStatus(rg.configContains("policy:") && rg.configContains("route:")),
+			Evidence:    collectEvidence(rg.configContains("policy:"), "policy rules configured", rg.configContains("route:"), "routing scopes configured"),
+			Remediation: condStr(!rg.configContains("policy:") || !rg.configContains("route:"), "Define both routing scopes and policy rules"),
+		},
+		{
+			ID:          "MLPS2.0-AU-1",
+			Framework:   FrameworkMLPS20,
+			Category:    "Audit",
+			Title:       "安全审计",
+			Description: "Verify audit logging and integrity controls are enabled",
+			Status:      auditStatus(rg.auditLogExists(), rg.auditLogSigningEnabled()),
+			Evidence:    auditEvidence(rg.auditLogExists(), rg.auditLogSigningEnabled()),
+			Remediation: auditRemediation(rg.auditLogExists(), rg.auditLogSigningEnabled()),
+		},
+		{
+			ID:          "MLPS2.0-BP-1",
+			Framework:   FrameworkMLPS20,
+			Category:    "Boundary Protection",
+			Title:       "边界与通信保护",
+			Description: "Verify IP ACL and transport security are configured",
+			Status:      boolStatus(rg.configContains("ip_acl") && (rg.configContains("tls_cert") || rg.configContains("tls_enabled"))),
+			Evidence:    collectEvidence(rg.configContains("ip_acl"), "IP ACL configured", rg.configContains("tls_cert") || rg.configContains("tls_enabled"), "TLS controls configured"),
+			Remediation: condStr(!rg.configContains("ip_acl") || (!rg.configContains("tls_cert") && !rg.configContains("tls_enabled")), "Configure IP ACL and TLS protections"),
+		},
+	}
+}
+
+func (rg *ReportGenerator) evaluateMLPS30() []Control {
+	return []Control{
+		{
+			ID:          "MLPS3.0-AC-1",
+			Framework:   FrameworkMLPS30,
+			Category:    "Identity",
+			Title:       "强化身份鉴别",
+			Description: "Verify authentication and MFA controls are both enabled",
+			Status:      boolStatus(rg.configContains("auth") && rg.configContains("mfa")),
+			Evidence:    collectEvidence(rg.configContains("auth"), "authentication backend configured", rg.configContains("mfa"), "MFA controls configured"),
+			Remediation: condStr(!rg.configContains("auth") || !rg.configContains("mfa"), "Enable MFA on top of the configured authentication backend"),
+		},
+		{
+			ID:          "MLPS3.0-AU-1",
+			Framework:   FrameworkMLPS30,
+			Category:    "Audit",
+			Title:       "审计留痕与完整性",
+			Description: "Verify audit logging and signature files are both present",
+			Status:      auditStatus(rg.auditLogExists(), rg.auditLogSigningEnabled()),
+			Evidence:    auditEvidence(rg.auditLogExists(), rg.auditLogSigningEnabled()),
+			Remediation: auditRemediation(rg.auditLogExists(), rg.auditLogSigningEnabled()),
+		},
+		{
+			ID:          "MLPS3.0-CM-1",
+			Framework:   FrameworkMLPS30,
+			Category:    "Change Management",
+			Title:       "配置版本留痕",
+			Description: "Verify configuration version history is retained",
+			Status:      boolStatus(rg.configVersioningEnabled()),
+			Evidence:    collectEvidence(rg.configVersioningEnabled(), "config_versions directory present"),
+			Remediation: condStr(!rg.configVersioningEnabled(), "Enable configuration version history retention"),
+		},
+		{
+			ID:          "MLPS3.0-OPS-1",
+			Framework:   FrameworkMLPS30,
+			Category:    "Operations",
+			Title:       "会话留痕与追溯",
+			Description: "Verify persisted session metadata is available for historical traceability",
+			Status:      boolStatus(rg.sessionMetadataEnabled()),
+			Evidence:    collectEvidence(rg.sessionMetadataEnabled(), "sessions.db present"),
+			Remediation: condStr(!rg.sessionMetadataEnabled(), "Enable persisted session metadata storage"),
+		},
+		{
+			ID:          "MLPS3.0-BP-1",
+			Framework:   FrameworkMLPS30,
+			Category:    "Boundary Protection",
+			Title:       "纵深防御与边界控制",
+			Description: "Verify route scoping, IP ACL, and TLS controls work together",
+			Status:      boolStatus(rg.configContains("route:") && rg.configContains("ip_acl") && (rg.configContains("tls_cert") || rg.configContains("tls_enabled"))),
+			Evidence:    collectEvidence(rg.configContains("route:"), "routing scopes configured", rg.configContains("ip_acl"), "IP ACL configured", rg.configContains("tls_cert") || rg.configContains("tls_enabled"), "TLS controls configured"),
+			Remediation: condStr(!rg.configContains("route:") || !rg.configContains("ip_acl") || (!rg.configContains("tls_cert") && !rg.configContains("tls_enabled")), "Configure route scoping, IP ACL, and TLS protections together"),
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -777,33 +896,50 @@ func (rg *ReportGenerator) auditLogSigningEnabled() bool {
 	return false
 }
 
-// countAuditEvents counts all NDJSON lines in audit log files.
-func (rg *ReportGenerator) countAuditEvents() int {
-	if rg.auditLogDir == "" {
-		return 0
+func (rg *ReportGenerator) configVersioningEnabled() bool {
+	if rg.dataDir == "" {
+		return false
 	}
-	entries, err := os.ReadDir(rg.auditLogDir)
-	if err != nil {
-		return 0
+	versionDir := filepath.Join(rg.dataDir, "config_versions")
+	info, err := os.Stat(versionDir)
+	return err == nil && info.IsDir()
+}
+
+func (rg *ReportGenerator) sessionMetadataEnabled() bool {
+	if rg.dataDir == "" {
+		return false
 	}
-	count := 0
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		f, err := os.Open(filepath.Join(rg.auditLogDir, e.Name()))
-		if err != nil {
-			continue
-		}
-		s := bufio.NewScanner(f)
-		for s.Scan() {
-			if len(s.Bytes()) > 0 {
-				count++
-			}
-		}
-		f.Close()
+	info, err := os.Stat(filepath.Join(rg.dataDir, "sessions.db"))
+	return err == nil && !info.IsDir()
+}
+
+func auditStatus(auditOK, sigOK bool) ControlStatus {
+	switch {
+	case auditOK && sigOK:
+		return ControlPass
+	case auditOK:
+		return ControlPartial
+	default:
+		return ControlFail
 	}
-	return count
+}
+
+func auditEvidence(auditOK, sigOK bool) []string {
+	return collectEvidence(
+		auditOK, "audit log files present",
+		sigOK, "audit log signatures present",
+	)
+}
+
+func auditRemediation(auditOK, sigOK bool) string {
+	switch {
+	case auditOK && !sigOK:
+		return "Enable audit log signing for integrity verification"
+	case !auditOK:
+		return "Enable comprehensive audit logging and integrity protection"
+	default:
+		return ""
+	}
 }
 
 func boolStatus(ok bool) ControlStatus {

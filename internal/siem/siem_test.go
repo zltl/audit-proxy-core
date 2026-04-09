@@ -192,6 +192,59 @@ func TestSplunkHECFormatFunction(t *testing.T) {
 	}
 }
 
+func TestDatadogFormat(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("DD-API-KEY") != "dd-api-key" {
+			t.Errorf("DD-API-KEY = %q", r.Header.Get("DD-API-KEY"))
+		}
+		if r.Header.Get("DD-Source") != "ssh-proxy-test" {
+			t.Errorf("DD-Source = %q", r.Header.Get("DD-Source"))
+		}
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	fwd, _ := NewForwarder(&SIEMConfig{
+		Type:     SIEMDatadog,
+		Endpoint: srv.URL,
+		Token:    "dd-api-key",
+		Source:   "ssh-proxy-test",
+	})
+
+	fwd.Send(testEvent("warning"))
+	fwd.Flush()
+
+	var payload []map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal datadog body: %v", err)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("datadog logs = %d, want 1", len(payload))
+	}
+	if payload[0]["message"] != "auth.login" {
+		t.Fatalf("datadog message = %v", payload[0]["message"])
+	}
+	if payload[0]["service"] != "ssh-proxy-test" {
+		t.Fatalf("datadog service = %v", payload[0]["service"])
+	}
+}
+
+func TestDatadogFormatFunction(t *testing.T) {
+	data, err := FormatDatadogLogs([]Event{testEvent("error")}, "ssh-proxy-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload []map[string]interface{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal datadog payload: %v", err)
+	}
+	if payload[0]["status"] != "error" {
+		t.Fatalf("datadog status = %v", payload[0]["status"])
+	}
+}
+
 func TestElasticFormat(t *testing.T) {
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -239,6 +292,132 @@ func TestElasticBulkFormatFunction(t *testing.T) {
 	}
 }
 
+func TestSumoFormat(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sumo-Category") != "ssh-proxy-test" {
+			t.Errorf("X-Sumo-Category = %q", r.Header.Get("X-Sumo-Category"))
+		}
+		if r.Header.Get("X-Sumo-Host") != "ssh-proxy" {
+			t.Errorf("X-Sumo-Host = %q", r.Header.Get("X-Sumo-Host"))
+		}
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	fwd, _ := NewForwarder(&SIEMConfig{
+		Type:     SIEMSumo,
+		Endpoint: srv.URL,
+		Source:   "ssh-proxy-test",
+	})
+
+	fwd.Send(testEvent("info"))
+	fwd.Flush()
+
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("sumo body lines = %d, want 1", len(lines))
+	}
+	if !strings.Contains(lines[0], `"event_type":"auth.login"`) {
+		t.Fatalf("sumo payload = %q", lines[0])
+	}
+}
+
+func TestSumoFormatFunction(t *testing.T) {
+	data, err := FormatSumoPayload([]Event{testEvent("info"), testEvent("warning")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("sumo lines = %d, want 2", len(lines))
+	}
+}
+
+func TestLogstashFormat(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Content-Type") != "application/x-ndjson" {
+			t.Errorf("content-type = %q", r.Header.Get("Content-Type"))
+		}
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	fwd, _ := NewForwarder(&SIEMConfig{
+		Type:     SIEMLogstash,
+		Endpoint: srv.URL,
+	})
+
+	fwd.Send(testEvent("info"))
+	fwd.Flush()
+
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("logstash body lines = %d, want 1", len(lines))
+	}
+	if !strings.Contains(lines[0], `"event_type":"auth.login"`) || !strings.Contains(lines[0], `"@timestamp"`) {
+		t.Fatalf("logstash payload = %q", lines[0])
+	}
+}
+
+func TestLogstashFormatFunction(t *testing.T) {
+	data, err := FormatLogstashPayload([]Event{testEvent("info"), testEvent("warning")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("logstash lines = %d, want 2", len(lines))
+	}
+}
+
+func TestWazuhUsesJSONSyslog(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	var received []byte
+	done := make(chan struct{})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		received, _ = io.ReadAll(conn)
+		close(done)
+	}()
+
+	fwd, _ := NewForwarder(&SIEMConfig{
+		Type:     SIEMWazuh,
+		Endpoint: ln.Addr().String(),
+	})
+
+	fwd.Send(testEvent("warning"))
+	if err := fwd.Flush(); err != nil {
+		t.Fatalf("wazuh flush: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for wazuh data")
+	}
+
+	payload := string(received)
+	if !strings.HasPrefix(payload, "<") {
+		t.Fatalf("wazuh payload missing PRI prefix: %q", payload)
+	}
+	if !strings.Contains(payload, `"event_type":"auth.login"`) || !strings.Contains(payload, `"@timestamp"`) {
+		t.Fatalf("wazuh payload = %q", payload)
+	}
+}
+
 func TestSyslogFormat(t *testing.T) {
 	msgs := FormatSyslog([]Event{testEvent("critical")}, "myapp")
 	if len(msgs) != 1 {
@@ -254,6 +433,34 @@ func TestSyslogFormat(t *testing.T) {
 	}
 	if !strings.Contains(msg, "auth.login") {
 		t.Error("syslog msg should contain event type")
+	}
+}
+
+func TestCEFFormat(t *testing.T) {
+	msgs := FormatCEF([]Event{testEvent("info")}, "myapp")
+	if len(msgs) != 1 {
+		t.Fatalf("msgs = %d, want 1", len(msgs))
+	}
+	msg := msgs[0]
+	if !strings.Contains(msg, "CEF:0|SSH Proxy|Core|2.0.0|auth.login|auth.login|3|") {
+		t.Fatalf("CEF payload = %q", msg)
+	}
+	if !strings.Contains(msg, "user=admin") || !strings.Contains(msg, "ip=10.0.0.1") {
+		t.Fatalf("CEF payload missing fields: %q", msg)
+	}
+}
+
+func TestLEEFFormat(t *testing.T) {
+	msgs := FormatLEEF([]Event{testEvent("warning")}, "myapp")
+	if len(msgs) != 1 {
+		t.Fatalf("msgs = %d, want 1", len(msgs))
+	}
+	msg := msgs[0]
+	if !strings.Contains(msg, "LEEF:2.0|SSH Proxy|Core|2.0.0|auth.login") {
+		t.Fatalf("LEEF payload = %q", msg)
+	}
+	if !strings.Contains(msg, "user=admin") || !strings.Contains(msg, "ip=10.0.0.1") {
+		t.Fatalf("LEEF payload missing fields: %q", msg)
 	}
 }
 
@@ -318,6 +525,47 @@ func TestSyslogTCP(t *testing.T) {
 	s := string(received)
 	if !strings.Contains(s, "<36>") {
 		t.Errorf("syslog data = %q, expected PRI <36>", s)
+	}
+}
+
+func TestQRadarUsesLEEF(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	var received []byte
+	done := make(chan struct{})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		received, _ = io.ReadAll(conn)
+		close(done)
+	}()
+
+	fwd, _ := NewForwarder(&SIEMConfig{
+		Type:     SIEMQRadar,
+		Endpoint: ln.Addr().String(),
+	})
+
+	fwd.Send(testEvent("warning"))
+	err = fwd.Flush()
+	if err != nil {
+		t.Fatalf("qradar flush: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for qradar data")
+	}
+
+	if !strings.Contains(string(received), "LEEF:2.0|SSH Proxy|Core|2.0.0|auth.login") {
+		t.Fatalf("qradar payload = %q", string(received))
 	}
 }
 

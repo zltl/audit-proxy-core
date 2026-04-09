@@ -3,10 +3,14 @@ package jit
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/smtp"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -371,6 +375,148 @@ func TestPolicyAutoApproveNoMatch(t *testing.T) {
 	}
 }
 
+func TestPolicyAutoApproveRule(t *testing.T) {
+	s := newTestStore(t, &Policy{
+		MaxDuration: 24 * time.Hour,
+		AutoApproveRules: []AutoApproveRule{{
+			Name:        "viewer-staging",
+			Targets:     []string{"staging-*"},
+			Roles:       []string{"viewer"},
+			MaxDuration: 30 * time.Minute,
+		}},
+		ApproverRoles: []string{"admin"},
+	})
+
+	req := makeRequest("alice", "staging-db-01", "viewer", "quick check", 15*time.Minute)
+	if err := s.CreateRequest(req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.Status != StatusApproved {
+		t.Fatalf("expected auto-approved, got %s", req.Status)
+	}
+	if req.Approver != "system" {
+		t.Fatalf("expected system approver, got %s", req.Approver)
+	}
+}
+
+func TestMultiStageApprovalWorkflow(t *testing.T) {
+	s := newTestStore(t, &Policy{
+		MaxDuration: 24 * time.Hour,
+		ApprovalStages: []ApprovalStage{
+			{Name: "security-review", ApproverRoles: []string{"security"}},
+			{Name: "admin-review", ApproverRoles: []string{"admin"}},
+		},
+		ApproverRoles: []string{"security", "admin"},
+	})
+
+	req := makeRequest("alice", "prod-db-01", "operator", "maintenance", time.Hour)
+	if err := s.CreateRequest(req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(req.CurrentApproverRoles) != 1 || req.CurrentApproverRoles[0] != "security" {
+		t.Fatalf("initial current approver roles = %#v", req.CurrentApproverRoles)
+	}
+
+	if err := s.ApproveRequestWithRole(req.ID, "sec-amy", "security"); err != nil {
+		t.Fatalf("stage 1 approval error: %v", err)
+	}
+	if req.Status != StatusPending {
+		t.Fatalf("expected request to remain pending after stage 1, got %s", req.Status)
+	}
+	if req.CurrentStage != 1 {
+		t.Fatalf("expected current stage 1, got %d", req.CurrentStage)
+	}
+	if len(req.CurrentApproverRoles) != 1 || req.CurrentApproverRoles[0] != "admin" {
+		t.Fatalf("next approver roles = %#v", req.CurrentApproverRoles)
+	}
+
+	if err := s.ApproveRequestWithRole(req.ID, "admin-bob", "admin"); err != nil {
+		t.Fatalf("stage 2 approval error: %v", err)
+	}
+	if req.Status != StatusApproved {
+		t.Fatalf("expected approved after final stage, got %s", req.Status)
+	}
+	if len(req.ApprovalHistory) != 2 {
+		t.Fatalf("expected 2 approval history entries, got %d", len(req.ApprovalHistory))
+	}
+}
+
+func TestMultiStageApprovalRejectsWrongRole(t *testing.T) {
+	s := newTestStore(t, &Policy{
+		MaxDuration: 24 * time.Hour,
+		ApprovalStages: []ApprovalStage{
+			{Name: "security-review", ApproverRoles: []string{"security"}},
+		},
+		ApproverRoles: []string{"security"},
+	})
+
+	req := makeRequest("alice", "prod-db-01", "operator", "maintenance", time.Hour)
+	if err := s.CreateRequest(req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	err := s.ApproveRequestWithRole(req.ID, "admin-bob", "admin")
+	if !errors.Is(err, ErrApproverRoleNotAllowed) {
+		t.Fatalf("ApproveRequestWithRole(wrong role) = %v, want ErrApproverRoleNotAllowed", err)
+	}
+}
+
+func TestBreakGlassRequestActivatesImmediateGrant(t *testing.T) {
+	s := newTestStore(t, &Policy{
+		MaxDuration:           24 * time.Hour,
+		BreakGlassEnabled:     true,
+		BreakGlassMaxDuration: time.Hour,
+		BreakGlassRoles:       []string{"operator"},
+		BreakGlassTargets:     []string{"prod-*"},
+		ApproverRoles:         []string{"admin"},
+	})
+
+	req := makeRequest("alice", "prod-db-01", "operator", "incident response", 30*time.Minute)
+	req.BreakGlass = true
+	req.Ticket = "INC-123"
+	if err := s.CreateRequest(req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.Status != StatusApproved {
+		t.Fatalf("expected break-glass request to be approved, got %s", req.Status)
+	}
+	if !req.ReviewRequired {
+		t.Fatal("expected break-glass request to require review")
+	}
+	if req.Approver != "break-glass" {
+		t.Fatalf("expected break-glass approver, got %s", req.Approver)
+	}
+	if req.BreakGlassActivatedAt.IsZero() {
+		t.Fatal("expected break_glass_activated_at to be set")
+	}
+}
+
+func TestBreakGlassRequiresPolicyAndTicket(t *testing.T) {
+	s := newTestStore(t, &Policy{
+		MaxDuration:   24 * time.Hour,
+		ApproverRoles: []string{"admin"},
+	})
+
+	req := makeRequest("alice", "prod-db-01", "operator", "incident response", 30*time.Minute)
+	req.BreakGlass = true
+	req.Ticket = "INC-123"
+	if err := s.CreateRequest(req); err == nil {
+		t.Fatal("expected break-glass disabled error")
+	}
+
+	s = newTestStore(t, &Policy{
+		MaxDuration:           24 * time.Hour,
+		BreakGlassEnabled:     true,
+		BreakGlassMaxDuration: time.Hour,
+		ApproverRoles:         []string{"admin"},
+	})
+	req = makeRequest("alice", "prod-db-01", "operator", "incident response", 30*time.Minute)
+	req.BreakGlass = true
+	if err := s.CreateRequest(req); err == nil {
+		t.Fatal("expected missing ticket error")
+	}
+}
+
 // --- Test: Concurrent Access ---
 
 func TestConcurrentRequests(t *testing.T) {
@@ -719,7 +865,10 @@ func TestNotifierWebhook(t *testing.T) {
 		NotifyOnApprove: true,
 		ApproverRoles:   []string{"admin"},
 	})
-	n := NewNotifier(srv.URL)
+	n, err := NewNotifier(NotifierConfig{WebhookURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewNotifier() error = %v", err)
+	}
 	s.SetNotifier(n)
 
 	req := makeRequest("alice", "prod-db", "operator", "reason", time.Hour)
@@ -730,6 +879,126 @@ func TestNotifierWebhook(t *testing.T) {
 
 	if received.Load() < 1 {
 		t.Fatal("expected at least 1 webhook call")
+	}
+}
+
+func TestNotifierChannelPayloads(t *testing.T) {
+	type capturedRequest struct {
+		body string
+	}
+	var (
+		slackReq    capturedRequest
+		dingTalkReq capturedRequest
+		weComReq    capturedRequest
+	)
+	newServer := func(target *capturedRequest) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			target.body = string(body)
+			w.WriteHeader(http.StatusOK)
+		}))
+	}
+
+	slackSrv := newServer(&slackReq)
+	defer slackSrv.Close()
+	dingTalkSrv := newServer(&dingTalkReq)
+	defer dingTalkSrv.Close()
+	weComSrv := newServer(&weComReq)
+	defer weComSrv.Close()
+
+	n, err := NewNotifier(NotifierConfig{
+		SlackWebhookURL:    slackSrv.URL,
+		DingTalkWebhookURL: dingTalkSrv.URL,
+		WeComWebhookURL:    weComSrv.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewNotifier() error = %v", err)
+	}
+
+	event := &JITEvent{
+		Type: "request_created",
+		Request: &AccessRequest{
+			ID:        "req-1",
+			Requester: "alice",
+			Target:    "prod-db",
+			Role:      "operator",
+			Status:    StatusPending,
+			Duration:  time.Hour,
+			Reason:    "maintenance",
+		},
+		Actor: "alice",
+	}
+	if err := n.Notify(context.Background(), event); err != nil {
+		t.Fatalf("Notify() error = %v", err)
+	}
+
+	if !strings.Contains(slackReq.body, `"text"`) || !strings.Contains(slackReq.body, `alice`) {
+		t.Fatalf("slack payload = %s", slackReq.body)
+	}
+	if !strings.Contains(dingTalkReq.body, `"msgtype":"text"`) || !strings.Contains(dingTalkReq.body, `prod-db`) {
+		t.Fatalf("dingtalk payload = %s", dingTalkReq.body)
+	}
+	if !strings.Contains(weComReq.body, `"msgtype":"text"`) || !strings.Contains(weComReq.body, `maintenance`) {
+		t.Fatalf("wecom payload = %s", weComReq.body)
+	}
+}
+
+func TestNotifierEmailUsesConfiguredEnvelope(t *testing.T) {
+	n, err := NewNotifier(NotifierConfig{
+		SMTPAddr:  "mail.example.com:587",
+		EmailFrom: "proxy@example.com",
+		EmailTo:   "ops@example.com,security@example.com",
+	})
+	if err != nil {
+		t.Fatalf("NewNotifier() error = %v", err)
+	}
+
+	var (
+		gotAddr string
+		gotFrom string
+		gotTo   []string
+		gotMsg  string
+	)
+	n.sendMail = func(addr string, _ smtp.Auth, from string, to []string, msg []byte) error {
+		gotAddr = addr
+		gotFrom = from
+		gotTo = append([]string(nil), to...)
+		gotMsg = string(msg)
+		return nil
+	}
+
+	event := &JITEvent{
+		Type: "request_approved",
+		Request: &AccessRequest{
+			ID:         "req-1",
+			Requester:  "alice",
+			Target:     "prod-db",
+			Role:       "operator",
+			Status:     StatusApproved,
+			Duration:   time.Hour,
+			ApprovedAt: time.Now().UTC(),
+			ExpiresAt:  time.Now().UTC().Add(time.Hour),
+		},
+		Actor: "admin",
+	}
+	if err := n.Notify(context.Background(), event); err != nil {
+		t.Fatalf("Notify() error = %v", err)
+	}
+
+	if gotAddr != "mail.example.com:587" {
+		t.Fatalf("smtp addr = %q", gotAddr)
+	}
+	if gotFrom != "proxy@example.com" {
+		t.Fatalf("from = %q", gotFrom)
+	}
+	if len(gotTo) != 2 || gotTo[0] != "ops@example.com" || gotTo[1] != "security@example.com" {
+		t.Fatalf("to = %#v", gotTo)
+	}
+	if !strings.Contains(gotMsg, "Subject: [SSH Proxy] JIT request approved for prod-db") {
+		t.Fatalf("email subject/message = %s", gotMsg)
+	}
+	if !strings.Contains(gotMsg, "Actor: admin") {
+		t.Fatalf("email body missing actor: %s", gotMsg)
 	}
 }
 

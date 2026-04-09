@@ -10,6 +10,65 @@
 #include "logger.h"
 #include "test_utils.h"
 
+static size_t write_test_length(uint8_t *buf, size_t len)
+{
+    if (len < 0x80) {
+        buf[0] = (uint8_t)len;
+        return 1;
+    }
+    buf[0] = 0x81;
+    buf[1] = (uint8_t)len;
+    return 2;
+}
+
+static size_t write_test_tlv(uint8_t *buf, uint8_t tag, const uint8_t *value, size_t value_len)
+{
+    size_t pos = 0;
+    buf[pos++] = tag;
+    pos += write_test_length(buf + pos, value_len);
+    if (value != NULL && value_len > 0) {
+        memcpy(buf + pos, value, value_len);
+    }
+    return pos + value_len;
+}
+
+static size_t write_test_string(uint8_t *buf, uint8_t tag, const char *value)
+{
+    return write_test_tlv(buf, tag, (const uint8_t *)value, value != NULL ? strlen(value) : 0);
+}
+
+static size_t build_test_partial_attribute(uint8_t *buf, const char *name, const char *const *values,
+                                           size_t value_count)
+{
+    uint8_t content[512];
+    uint8_t set_content[512];
+    size_t content_len = 0;
+    size_t set_len = 0;
+
+    content_len += write_test_string(content + content_len, 0x04, name);
+    for (size_t i = 0; i < value_count; i++) {
+        set_len += write_test_string(set_content + set_len, 0x04, values[i]);
+    }
+    content_len += write_test_tlv(content + content_len, 0x31, set_content, set_len);
+    return write_test_tlv(buf, 0x30, content, content_len);
+}
+
+static int buffer_contains(const uint8_t *buf, size_t buf_len, const char *needle)
+{
+    size_t needle_len = needle != NULL ? strlen(needle) : 0;
+
+    if (buf == NULL || needle == NULL || needle_len == 0 || needle_len > buf_len) {
+        return 0;
+    }
+
+    for (size_t i = 0; i + needle_len <= buf_len; i++) {
+        if (memcmp(buf + i, needle, needle_len) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* ── URI parsing tests ──────────────────────────────────────────────── */
 
 static int test_parse_ldap_uri_plain(void)
@@ -281,6 +340,108 @@ static int test_build_starttls_request_msg_id(void)
     TEST_PASS();
 }
 
+/* ── Search Request / Response helpers ───────────────────────────────── */
+
+static int test_build_search_request_contains_requested_attrs(void)
+{
+    uint8_t buf[512];
+    const char *attrs[] = {"memberOf", "mail", "department", "manager"};
+    size_t len = build_search_request(buf, sizeof(buf), 2, "uid=alice,dc=example,dc=com", attrs,
+                                      sizeof(attrs) / sizeof(attrs[0]));
+
+    ASSERT_TRUE(len > 0);
+    ASSERT_TRUE(buffer_contains(buf, len, "uid=alice,dc=example,dc=com"));
+    ASSERT_TRUE(buffer_contains(buf, len, "memberOf"));
+    ASSERT_TRUE(buffer_contains(buf, len, "mail"));
+    ASSERT_TRUE(buffer_contains(buf, len, "department"));
+    ASSERT_TRUE(buffer_contains(buf, len, "manager"));
+    TEST_PASS();
+}
+
+static size_t build_test_search_result_entry(uint8_t *buf)
+{
+    const char *group_values[] = {"cn=admins,ou=groups,dc=example,dc=com",
+                                  "cn=ops,ou=groups,dc=example,dc=com"};
+    const char *mail_values[] = {"alice@example.com"};
+    const char *department_values[] = {"Operations"};
+    const char *manager_values[] = {"uid=boss,dc=example,dc=com"};
+    uint8_t attrs[1024];
+    uint8_t entry_content[1400];
+    uint8_t message_content[1500];
+    size_t attrs_len = 0;
+    size_t entry_len = 0;
+    size_t message_len = 0;
+
+    attrs_len += build_test_partial_attribute(attrs + attrs_len, "memberOf", group_values, 2);
+    attrs_len += build_test_partial_attribute(attrs + attrs_len, "mail", mail_values, 1);
+    attrs_len += build_test_partial_attribute(attrs + attrs_len, "department", department_values, 1);
+    attrs_len += build_test_partial_attribute(attrs + attrs_len, "manager", manager_values, 1);
+
+    entry_len += write_test_string(entry_content + entry_len, 0x04, "uid=alice,dc=example,dc=com");
+    entry_len += write_test_tlv(entry_content + entry_len, 0x30, attrs, attrs_len);
+
+    message_len += write_test_tlv(message_content + message_len, 0x02, (const uint8_t *)"\x02", 1);
+    message_len += write_test_tlv(message_content + message_len, 0x64, entry_content, entry_len);
+    return write_test_tlv(buf, 0x30, message_content, message_len);
+}
+
+static size_t build_test_search_result_done(uint8_t *buf, int result_code)
+{
+    uint8_t done_content[32];
+    uint8_t message_content[48];
+    uint8_t rc = (uint8_t)result_code;
+    size_t done_len = 0;
+    size_t message_len = 0;
+
+    done_len += write_test_tlv(done_content + done_len, 0x0a, &rc, 1);
+    done_len += write_test_tlv(done_content + done_len, 0x04, NULL, 0);
+    done_len += write_test_tlv(done_content + done_len, 0x04, NULL, 0);
+
+    message_len += write_test_tlv(message_content + message_len, 0x02, (const uint8_t *)"\x02", 1);
+    message_len += write_test_tlv(message_content + message_len, 0x65, done_content, done_len);
+    return write_test_tlv(buf, 0x30, message_content, message_len);
+}
+
+static int test_parse_search_result_entry_extracts_identity(void)
+{
+    uint8_t buf[1600];
+    auth_ldap_identity_t identity;
+    size_t len = build_test_search_result_entry(buf);
+    ASSERT_TRUE(len > 0);
+
+    memset(&identity, 0, sizeof(identity));
+    ASSERT_EQ(parse_search_result_entry(buf, len, "memberOf", "mail", "department", "manager",
+                                        &identity),
+              0);
+    ASSERT_STR_EQ(identity.user_dn, "uid=alice,dc=example,dc=com");
+    ASSERT_STR_EQ(identity.email, "alice@example.com");
+    ASSERT_STR_EQ(identity.department, "Operations");
+    ASSERT_STR_EQ(identity.manager, "uid=boss,dc=example,dc=com");
+    ASSERT_STR_EQ(identity.groups,
+                  "cn=admins,ou=groups,dc=example,dc=com\ncn=ops,ou=groups,dc=example,dc=com");
+    TEST_PASS();
+}
+
+static int test_parse_search_result_done_success(void)
+{
+    uint8_t buf[128];
+    size_t len = build_test_search_result_done(buf, 0);
+    ASSERT_TRUE(len > 0);
+    ASSERT_EQ(parse_search_result_done(buf, len), 0);
+    TEST_PASS();
+}
+
+static int test_parse_search_result_entry_truncated(void)
+{
+    uint8_t buf[1600];
+    size_t len = build_test_search_result_entry(buf);
+    ASSERT_TRUE(len > 0);
+    ASSERT_EQ(parse_search_result_entry(buf, 8, "memberOf", "mail", "department", "manager",
+                                        &(auth_ldap_identity_t){0}),
+              -1);
+    TEST_PASS();
+}
+
 /* ── Extended Response parsing ──────────────────────────────────────── */
 
 /*
@@ -509,6 +670,12 @@ int main(void)
     RUN_TEST(test_build_starttls_request_structure);
     RUN_TEST(test_build_starttls_request_buffer_too_small);
     RUN_TEST(test_build_starttls_request_msg_id);
+
+    /* Search request / response */
+    RUN_TEST(test_build_search_request_contains_requested_attrs);
+    RUN_TEST(test_parse_search_result_entry_extracts_identity);
+    RUN_TEST(test_parse_search_result_done_success);
+    RUN_TEST(test_parse_search_result_entry_truncated);
 
     /* Extended response parsing */
     RUN_TEST(test_parse_extended_response_success);

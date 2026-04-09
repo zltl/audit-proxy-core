@@ -20,6 +20,18 @@ func (a *API) RegisterClusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v2/cluster/leader", a.handleClusterLeader)
 }
 
+// handleConfigSyncStatus returns the current cluster-wide config sync view.
+func (a *API) handleConfigSyncStatus(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCluster(w) {
+		return
+	}
+
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    a.cluster.GetConfigSyncStatus(),
+	})
+}
+
 func (a *API) requireCluster(w http.ResponseWriter) bool {
 	if a.cluster == nil {
 		writeError(w, http.StatusServiceUnavailable, "clustering is not enabled")
@@ -37,6 +49,8 @@ func (a *API) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	cm := a.cluster
 	self := cm.Self()
 	leader := cm.Leader()
+	nodes := cm.Nodes()
+	topology := buildClusterTopology(self, nodes)
 
 	leaderID := ""
 	if leader != nil {
@@ -52,7 +66,8 @@ func (a *API) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 			"leader":     leaderID,
 			"term":       cm.Term(),
 			"node_count": cm.NodeCount(),
-			"nodes":      cm.Nodes(),
+			"nodes":      nodes,
+			"topology":   topology,
 		},
 	})
 }

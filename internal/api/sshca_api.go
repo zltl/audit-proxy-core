@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -22,6 +23,7 @@ func (a *API) RegisterCARoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v2/ca/sign-host", a.handleSignHostCert)
 	mux.HandleFunc("GET /api/v2/ca/public-keys", a.handleCAPublicKeys)
 	mux.HandleFunc("GET /api/v2/ca/certs", a.handleListCerts)
+	mux.HandleFunc("GET /api/v2/ca/crl", a.handleExportCRL)
 	mux.HandleFunc("POST /api/v2/ca/revoke", a.handleRevokeCert)
 }
 
@@ -48,6 +50,13 @@ type certResponse struct {
 
 type revokeRequest struct {
 	Serial uint64 `json:"serial"`
+}
+
+func clientAddr(remoteAddr string) string {
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
 }
 
 func (a *API) handleSignUserCert(w http.ResponseWriter, r *http.Request) {
@@ -107,9 +116,11 @@ func (a *API) handleSignUserCert(w http.ResponseWriter, r *http.Request) {
 			Certificate: sshca.MarshalCertAuthorizedKeys(cert),
 			Serial:      cert.Serial,
 			KeyID:       cert.KeyId,
-			ExpiresAt:   time.Unix(int64(cert.ValidBefore), 0).UTC().Format(time.RFC3339),
+			ExpiresAt:   sshca.FormatUnixTime(cert.ValidBefore),
 		},
 	})
+	a.emitWebhookEvent("certificate.issued", req.Principals[0], clientAddr(r.RemoteAddr),
+		"issued user certificate principal="+req.Principals[0]+" serial="+strconv.FormatUint(cert.Serial, 10))
 }
 
 func (a *API) handleSignHostCert(w http.ResponseWriter, r *http.Request) {
@@ -161,9 +172,11 @@ func (a *API) handleSignHostCert(w http.ResponseWriter, r *http.Request) {
 			Certificate: sshca.MarshalCertAuthorizedKeys(cert),
 			Serial:      cert.Serial,
 			KeyID:       cert.KeyId,
-			ExpiresAt:   time.Unix(int64(cert.ValidBefore), 0).UTC().Format(time.RFC3339),
+			ExpiresAt:   sshca.FormatUnixTime(cert.ValidBefore),
 		},
 	})
+	a.emitWebhookEvent("certificate.issued", req.Hostname, clientAddr(r.RemoteAddr),
+		"issued host certificate hostname="+req.Hostname+" serial="+strconv.FormatUint(cert.Serial, 10))
 }
 
 func (a *API) handleCAPublicKeys(w http.ResponseWriter, r *http.Request) {
@@ -255,5 +268,33 @@ func (a *API) handleRevokeCert(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, APIResponse{
 		Success: true,
 		Data:    map[string]string{"message": "certificate revoked"},
+	})
+	a.emitWebhookEvent("certificate.revoked", strconv.FormatUint(req.Serial, 10), clientAddr(r.RemoteAddr),
+		"revoked certificate serial="+strconv.FormatUint(req.Serial, 10))
+}
+
+func (a *API) handleExportCRL(w http.ResponseWriter, r *http.Request) {
+	if a.ca == nil {
+		writeError(w, http.StatusServiceUnavailable, "certificate authority not configured")
+		return
+	}
+
+	serials := a.ca.ListRevokedSerials()
+	if r.URL.Query().Get("format") == "text" {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		for _, serial := range serials {
+			_, _ = w.Write([]byte(strconv.FormatUint(serial, 10)))
+			_, _ = w.Write([]byte("\n"))
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"revoked_serials": serials,
+			"count":           len(serials),
+		},
 	})
 }

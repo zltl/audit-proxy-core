@@ -125,91 +125,128 @@
 {{define "scripts"}}
 <script>
 (function() {
+    var dashboardStream = null;
+
+    function renderStats(data) {
+        document.getElementById('stat-sessions').textContent = data.active_sessions || 0;
+        document.getElementById('stat-sessions-sub').textContent = (data.recent_events || []).length + ' recent events';
+        document.getElementById('stat-users').textContent = data.total_users || 0;
+        document.getElementById('stat-users-sub').textContent = 'Control-plane users';
+        document.getElementById('stat-servers').textContent = data.total_servers || 0;
+        document.getElementById('stat-servers-sub').textContent = (data.healthy_servers || 0) + ' healthy';
+        var rate = data.auth_success_rate != null ? data.auth_success_rate.toFixed(1) + '%' : '—';
+        document.getElementById('stat-auth').textContent = rate;
+        document.getElementById('stat-auth-sub').textContent = rate === '—' ? 'No auth ratio available' : 'Observed from audit events';
+    }
+
+    function renderRecentSessions(items) {
+        var tbody = document.getElementById('recent-sessions-body');
+        if (!items.length) {
+            tbody.innerHTML = '<tr><td colspan="4" class="table-empty">No sessions found</td></tr>';
+            return;
+        }
+        tbody.innerHTML = items.slice(0, 10).map(function(s) {
+            var statusCls = s.status === 'active' ? 'badge-success' : 'badge-neutral';
+            return '<tr>' +
+                '<td>' + App.escapeHtml(s.username || '—') + '</td>' +
+                '<td>' + App.escapeHtml(s.target_host || '—') + '</td>' +
+                '<td>' + App.formatDuration(s.duration) + '</td>' +
+                '<td><span class="badge ' + statusCls + '">' + App.escapeHtml(s.status || 'unknown') + '</span></td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    function renderEvents(items) {
+        var container = document.getElementById('events-timeline');
+        if (!items.length) {
+            container.innerHTML = '<p class="text-muted text-center">No events yet</p>';
+            return;
+        }
+        container.innerHTML = items.slice(0, 8).map(function(ev) {
+            var dotCls = 'info';
+            if (ev.event_type === 'auth.failure' || ev.event_type === 'error') dotCls = 'danger';
+            else if (ev.event_type === 'session.open' || ev.event_type === 'session_start') dotCls = 'success';
+            else if (ev.event_type === 'session.close') dotCls = 'warning';
+            return '<div class="timeline-item">' +
+                '<div class="timeline-dot ' + dotCls + '"></div>' +
+                '<div class="timeline-time">' + App.timeAgo(ev.timestamp) + '</div>' +
+                '<div class="timeline-content">' +
+                    '<strong>' + App.escapeHtml(ev.event_type || ev.type || '') + '</strong> — ' +
+                    App.escapeHtml(ev.username || '') + ' ' + App.escapeHtml(ev.details || ev.message || '') +
+                '</div></div>';
+        }).join('');
+    }
+
+    function renderServers(items) {
+        var container = document.getElementById('server-health-items');
+        if (!items.length) {
+            container.innerHTML = '<p class="text-muted">No servers configured</p>';
+            return;
+        }
+        container.innerHTML = items.map(function(srv) {
+            var dot = srv.healthy !== false ? 'online' : 'offline';
+            return '<div class="server-card">' +
+                '<div class="server-card-header">' +
+                    '<span class="server-card-name">' + App.escapeHtml(srv.name || srv.host || '—') + '</span>' +
+                    '<span class="status-dot ' + dot + '"></span>' +
+                '</div>' +
+                '<div class="server-card-stats">' +
+                    '<div><div class="server-card-stat-value">' + (srv.sessions || 0) + '</div><div class="server-card-stat-label">Sessions</div></div>' +
+                    '<div><div class="server-card-stat-value">' + App.timeAgo(srv.checked_at) + '</div><div class="server-card-stat-label">Checked</div></div>' +
+                    '<div><div class="server-card-stat-value">' + (srv.port || '—') + '</div><div class="server-card-stat-label">Port</div></div>' +
+                '</div></div>';
+        }).join('');
+    }
+
+    function renderDashboardSnapshot(snapshot) {
+        renderStats(snapshot.stats || {});
+        renderRecentSessions(snapshot.sessions || []);
+        renderEvents(snapshot.events || snapshot.stats && snapshot.stats.recent_events || []);
+        renderServers(snapshot.servers || []);
+    }
+
     function loadDashboard() {
-        App.api('GET', '/api/v1/dashboard/stats').then(function(data) {
-            document.getElementById('stat-sessions').textContent = data.active_sessions || 0;
-            document.getElementById('stat-sessions-sub').textContent = (data.total_sessions || 0) + ' total today';
-            document.getElementById('stat-users').textContent = data.total_users || 0;
-            document.getElementById('stat-users-sub').textContent = (data.active_users || 0) + ' active now';
-            document.getElementById('stat-servers').textContent = data.total_servers || 0;
-            document.getElementById('stat-servers-sub').textContent = (data.healthy_servers || 0) + ' healthy';
-            var rate = data.auth_success_rate != null ? data.auth_success_rate.toFixed(1) + '%' : '—';
-            document.getElementById('stat-auth').textContent = rate;
-            document.getElementById('stat-auth-sub').textContent = (data.auth_failures_today || 0) + ' failures today';
+        App.apiData('GET', '/api/v2/dashboard/stats').then(function(data) {
+            renderStats(data || {});
         }).catch(function() {
             document.getElementById('stat-sessions').textContent = '0';
             document.getElementById('stat-sessions-sub').textContent = 'Unable to load';
         });
 
-        App.api('GET', '/api/v1/sessions?limit=10&sort=start_time&order=desc').then(function(data) {
-            var tbody = document.getElementById('recent-sessions-body');
-            var items = data.sessions || data.items || data || [];
-            if (!items.length) {
-                tbody.innerHTML = '<tr><td colspan="4" class="table-empty">No sessions found</td></tr>';
-                return;
-            }
-            tbody.innerHTML = items.slice(0, 10).map(function(s) {
-                var statusCls = s.status === 'active' ? 'badge-success' : 'badge-neutral';
-                return '<tr>' +
-                    '<td>' + App.escapeHtml(s.user || s.username || '—') + '</td>' +
-                    '<td>' + App.escapeHtml(s.target || s.upstream || '—') + '</td>' +
-                    '<td>' + App.formatDuration(s.duration) + '</td>' +
-                    '<td><span class="badge ' + statusCls + '">' + App.escapeHtml(s.status || 'unknown') + '</span></td>' +
-                    '</tr>';
-            }).join('');
+        App.apiPage('GET', '/api/v2/sessions?status=active&per_page=10').then(function(page) {
+            renderRecentSessions(page.items || []);
         }).catch(function() {
             document.getElementById('recent-sessions-body').innerHTML =
                 '<tr><td colspan="4" class="table-empty">Failed to load sessions</td></tr>';
         });
 
-        App.api('GET', '/api/v1/audit?limit=8&sort=timestamp&order=desc').then(function(data) {
-            var container = document.getElementById('events-timeline');
-            var items = data.events || data.items || data || [];
-            if (!items.length) {
-                container.innerHTML = '<p class="text-muted text-center">No events yet</p>';
-                return;
-            }
-            container.innerHTML = items.slice(0, 8).map(function(ev) {
-                var dotCls = 'info';
-                if (ev.event_type === 'auth.failure' || ev.event_type === 'error') dotCls = 'danger';
-                else if (ev.event_type === 'session.open') dotCls = 'success';
-                else if (ev.event_type === 'session.close') dotCls = 'warning';
-                return '<div class="timeline-item">' +
-                    '<div class="timeline-dot ' + dotCls + '"></div>' +
-                    '<div class="timeline-time">' + App.timeAgo(ev.timestamp) + '</div>' +
-                    '<div class="timeline-content">' +
-                        '<strong>' + App.escapeHtml(ev.event_type || ev.type || '') + '</strong> — ' +
-                        App.escapeHtml(ev.user || '') + ' ' + App.escapeHtml(ev.details || ev.message || '') +
-                    '</div></div>';
-            }).join('');
+        App.apiPage('GET', '/api/v2/audit/events?per_page=8').then(function(page) {
+            renderEvents(page.items || []);
         }).catch(function() {
             document.getElementById('events-timeline').innerHTML =
                 '<p class="text-muted text-center">Failed to load events</p>';
         });
 
-        App.api('GET', '/api/v1/upstreams').then(function(data) {
-            var container = document.getElementById('server-health-items');
-            var items = data.upstreams || data.servers || data || [];
-            if (!items.length) {
-                container.innerHTML = '<p class="text-muted">No servers configured</p>';
-                return;
-            }
-            container.innerHTML = items.map(function(srv) {
-                var dot = srv.healthy !== false ? 'online' : 'offline';
-                return '<div class="server-card">' +
-                    '<div class="server-card-header">' +
-                        '<span class="server-card-name">' + App.escapeHtml(srv.host || srv.address || srv.name || '—') + '</span>' +
-                        '<span class="status-dot ' + dot + '"></span>' +
-                    '</div>' +
-                    '<div class="server-card-stats">' +
-                        '<div><div class="server-card-stat-value">' + (srv.connections || 0) + '</div><div class="server-card-stat-label">Conns</div></div>' +
-                        '<div><div class="server-card-stat-value">' + (srv.latency_ms != null ? srv.latency_ms + 'ms' : '—') + '</div><div class="server-card-stat-label">Latency</div></div>' +
-                        '<div><div class="server-card-stat-value">' + (srv.port || '—') + '</div><div class="server-card-stat-label">Port</div></div>' +
-                    '</div></div>';
-            }).join('');
+        App.apiPage('GET', '/api/v2/servers?per_page=100').then(function(page) {
+            renderServers(page.items || []);
         }).catch(function() {
             document.getElementById('server-health-items').innerHTML =
                 '<p class="text-muted">Failed to load servers</p>';
+        });
+    }
+
+    function startDashboardStream() {
+        if (dashboardStream) {
+            dashboardStream.close();
+        }
+        dashboardStream = App.ws('/ws/dashboard', {
+            onMessage: function(message) {
+                if (!message || message.type !== 'dashboard.snapshot') {
+                    return;
+                }
+                renderDashboardSnapshot(message.data || {});
+            },
+            maxReconnect: 10
         });
     }
 
@@ -218,8 +255,14 @@
         if (!ok) return;
         App.btnLoading('#btn-kill-all', true);
         try {
-            await App.api('POST', '/api/v1/sessions/kill-all');
-            App.notify('All sessions terminated', 'success');
+            var page = await App.apiPage('GET', '/api/v2/sessions?status=active&per_page=200');
+            var ids = page.items.map(function(s) { return s.id; });
+            if (!ids.length) {
+                App.notify('No active sessions to terminate', 'info');
+            } else {
+                await App.api('POST', '/api/v2/sessions/bulk-kill', { ids: ids });
+                App.notify('All active sessions terminated', 'success');
+            }
             loadDashboard();
         } catch(e) {
             App.notify('Failed: ' + e.message, 'error');
@@ -230,7 +273,7 @@
     window.dashReloadConfig = async function() {
         App.btnLoading('#btn-reload', true);
         try {
-            await App.api('POST', '/api/v1/reload');
+            await App.api('POST', '/api/v2/config/reload');
             App.notify('Configuration reloaded', 'success');
         } catch(e) {
             App.notify('Failed: ' + e.message, 'error');
@@ -238,8 +281,8 @@
         App.btnLoading('#btn-reload', false);
     };
 
-    var refresher = App.autoRefresh(loadDashboard, 30000);
-    refresher.start();
+    loadDashboard();
+    startDashboardStream();
 })();
 </script>
 {{end}}

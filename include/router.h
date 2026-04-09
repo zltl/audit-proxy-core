@@ -37,7 +37,8 @@ typedef enum {
     LB_POLICY_ROUND_ROBIN = 0,  /* Rotate through upstreams */
     LB_POLICY_RANDOM,           /* Random selection */
     LB_POLICY_LEAST_CONN,       /* Least connections */
-    LB_POLICY_HASH              /* Hash-based (by username) */
+    LB_POLICY_HASH,             /* Consistent hash-based routing (by username) */
+    LB_POLICY_WEIGHTED          /* Smooth weighted round-robin */
 } lb_policy_t;
 
 /* Forward declarations */
@@ -62,6 +63,7 @@ struct upstream {
     time_t last_check;              /* Last health check time */
     time_t last_failure;            /* Last failure time */
     int consecutive_failures;       /* Consecutive failure count */
+    int current_weight;             /* Smooth weighted round-robin state */
 };
 
 /* Route rule - matches connections to upstreams */

@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -79,7 +80,7 @@ func generateECKey(t *testing.T) (*ecdsa.PrivateKey, JSONWebKey) {
 func signRS256(priv *rsa.PrivateKey) func([]byte) []byte {
 	return func(data []byte) []byte {
 		h := sha256.Sum256(data)
-		sig, err := rsa.SignPKCS1v15(rand.Reader, priv, 0, h[:])
+		sig, err := rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, h[:])
 		if err != nil {
 			panic(err)
 		}
@@ -537,36 +538,6 @@ func TestRoleMapping_CustomClaim(t *testing.T) {
 // ---------------------------------------------------------------------------
 // OIDC Discovery Tests (using httptest)
 // ---------------------------------------------------------------------------
-
-func setupTestOIDCServer(t *testing.T) (*httptest.Server, *rsa.PrivateKey, JSONWebKey) {
-	t.Helper()
-	priv, jwk := generateRSAKey(t)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
-		// We'll fill in the issuer URL after we know the server address.
-		// Use a placeholder that we'll replace.
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{
-			"issuer": "%s",
-			"authorization_endpoint": "%s/authorize",
-			"token_endpoint": "%s/token",
-			"userinfo_endpoint": "%s/userinfo",
-			"jwks_uri": "%s/jwks",
-			"end_session_endpoint": "%s/logout"
-		}`, r.Header.Get("X-Issuer"), r.Header.Get("X-Issuer"),
-			r.Header.Get("X-Issuer"), r.Header.Get("X-Issuer"),
-			r.Header.Get("X-Issuer"), r.Header.Get("X-Issuer"))
-	})
-	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		jwks := map[string]interface{}{"keys": []JSONWebKey{jwk}}
-		json.NewEncoder(w).Encode(jwks)
-	})
-
-	srv := httptest.NewServer(mux)
-	return srv, priv, jwk
-}
 
 // setupSelfRefOIDCServer creates a test OIDC server whose discovery document
 // correctly references its own URL (no X-Issuer header trick needed).

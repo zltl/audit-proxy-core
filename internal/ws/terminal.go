@@ -4,10 +4,15 @@ package ws
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,14 +23,30 @@ import (
 type TerminalHandler struct {
 	// ProxyAddr is the data plane SSH proxy address (e.g., "127.0.0.1:2222").
 	ProxyAddr string
+	// RecordingDir stores web terminal asciicast recordings when audit sync is enabled.
+	RecordingDir string
+	// RecordingBasePath is the HTTP base path used to download terminal recordings.
+	RecordingBasePath string
 }
 
 // terminalMsg is the JSON message format between browser and server.
 type terminalMsg struct {
-	Type string `json:"type"`           // "data", "resize", "ping"
-	Data string `json:"data,omitempty"` // terminal data (base64 or raw)
-	Cols int    `json:"cols,omitempty"` // terminal columns (for resize)
-	Rows int    `json:"rows,omitempty"` // terminal rows (for resize)
+	Type        string `json:"type"`             // "control"
+	Action      string `json:"action,omitempty"` // "connected", "error", "resize", "ping", "pong"
+	Data        string `json:"data,omitempty"`   // optional control payload
+	Cols        int    `json:"cols,omitempty"`   // terminal columns (for resize)
+	Rows        int    `json:"rows,omitempty"`   // terminal rows (for resize)
+	RecordingID string `json:"recording_id,omitempty"`
+	DownloadURL string `json:"download_url,omitempty"`
+}
+
+type terminalRecording struct {
+	id          string
+	path        string
+	downloadURL string
+	startedAt   time.Time
+	file        *os.File
+	mu          sync.Mutex
 }
 
 // ServeHTTP upgrades to WebSocket and bridges to the SSH proxy.
@@ -39,7 +60,7 @@ func (h *TerminalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	host := r.URL.Query().Get("host")
 	if host == "" {
-		wsConn.WriteText([]byte(`{"type":"error","data":"missing host parameter"}`))
+		_ = writeTerminalControl(wsConn, terminalMsg{Type: "control", Action: "error", Data: "missing host parameter"})
 		return
 	}
 
@@ -51,32 +72,55 @@ func (h *TerminalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	tcpConn, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
 	if err != nil {
-		errMsg, _ := json.Marshal(terminalMsg{
-			Type: "error",
-			Data: "failed to connect to SSH proxy: " + err.Error(),
+		_ = writeTerminalControl(wsConn, terminalMsg{
+			Type:   "control",
+			Action: "error",
+			Data:   "failed to connect to SSH proxy: " + err.Error(),
 		})
-		wsConn.WriteText(errMsg)
 		log.Printf("terminal: connect to proxy %s: %v", proxyAddr, err)
 		return
 	}
 	defer tcpConn.Close()
 
+	recording, err := h.startRecording(host)
+	if err != nil {
+		_ = writeTerminalControl(wsConn, terminalMsg{
+			Type:   "control",
+			Action: "error",
+			Data:   "failed to start audit recording: " + err.Error(),
+		})
+		log.Printf("terminal: start recording for %s: %v", host, err)
+		return
+	}
+	if recording != nil {
+		defer recording.Close()
+	}
+
 	// Send connection metadata (target host) as initial message.
-	connectMsg, _ := json.Marshal(terminalMsg{
-		Type: "data",
-		Data: "Connected to " + host + " via SSH Proxy\r\n",
+	_ = writeTerminalControl(wsConn, terminalMsg{
+		Type:        "control",
+		Action:      "connected",
+		Data:        "Connected to " + host + " via SSH Proxy\r\n",
+		RecordingID: recordingID(recording),
+		DownloadURL: recordingDownloadURL(recording),
 	})
-	wsConn.WriteText(connectMsg)
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
+	var doneOnce sync.Once
+	signalDone := func() {
+		doneOnce.Do(func() {
+			close(done)
+		})
+	}
 
 	// WebSocket → TCP (browser input to SSH).
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer signalDone()
 		for {
-			_, payload, err := wsConn.ReadMessage()
+			opcode, payload, err := wsConn.ReadMessage()
 			if err != nil {
 				if err != io.EOF {
 					log.Printf("terminal: ws read: %v", err)
@@ -85,21 +129,22 @@ func (h *TerminalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			var msg terminalMsg
-			if err := json.Unmarshal(payload, &msg); err != nil {
-				// Raw data fallback.
-				tcpConn.Write(payload)
-				continue
+			if opcode == OpText {
+				var msg terminalMsg
+				if err := json.Unmarshal(payload, &msg); err == nil && msg.Type == "control" {
+					switch msg.Action {
+					case "resize":
+						log.Printf("terminal: resize %dx%d", msg.Cols, msg.Rows)
+					case "ping":
+						_ = writeTerminalControl(wsConn, terminalMsg{Type: "control", Action: "pong"})
+					}
+					continue
+				}
 			}
 
-			switch msg.Type {
-			case "data":
-				tcpConn.Write([]byte(msg.Data))
-			case "resize":
-				// SSH window change would be handled here.
-				log.Printf("terminal: resize %dx%d", msg.Cols, msg.Rows)
-			case "ping":
-				wsConn.WriteText([]byte(`{"type":"pong"}`))
+			if _, err := tcpConn.Write(payload); err != nil {
+				log.Printf("terminal: tcp write: %v", err)
+				return
 			}
 		}
 	}()
@@ -108,6 +153,7 @@ func (h *TerminalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer signalDone()
 		buf := make([]byte, 4096)
 		for {
 			n, err := tcpConn.Read(buf)
@@ -115,20 +161,157 @@ func (h *TerminalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if err != io.EOF {
 					log.Printf("terminal: tcp read: %v", err)
 				}
-				close(done)
 				return
 			}
-			msg, _ := json.Marshal(terminalMsg{
-				Type: "data",
-				Data: string(buf[:n]),
-			})
-			if err := wsConn.WriteText(msg); err != nil {
+			payload := append([]byte(nil), buf[:n]...)
+			if err := wsConn.WriteBinary(payload); err != nil {
 				log.Printf("terminal: ws write: %v", err)
 				return
+			}
+			if recording != nil {
+				if err := recording.AppendOutput(payload); err != nil {
+					log.Printf("terminal: append audit recording: %v", err)
+				}
 			}
 		}
 	}()
 
 	<-done
 	wg.Wait()
+}
+
+func (h *TerminalHandler) startRecording(host string) (*terminalRecording, error) {
+	if strings.TrimSpace(h.RecordingDir) == "" {
+		return nil, nil
+	}
+
+	root := h.recordingRootDir()
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, err
+	}
+
+	recordingID := fmt.Sprintf("term-%d", time.Now().UTC().UnixNano())
+	recordingPath, err := h.RecordingFilePath(recordingID)
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := os.OpenFile(recordingPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, err
+	}
+
+	startedAt := time.Now().UTC()
+	header := map[string]interface{}{
+		"version":   2,
+		"width":     80,
+		"height":    24,
+		"timestamp": startedAt.Unix(),
+		"title":     "Web Terminal — " + host,
+	}
+	headerBytes, err := json.Marshal(header)
+	if err != nil {
+		file.Close()
+		_ = os.Remove(recordingPath)
+		return nil, err
+	}
+	if _, err := file.Write(append(headerBytes, '\n')); err != nil {
+		file.Close()
+		_ = os.Remove(recordingPath)
+		return nil, err
+	}
+
+	return &terminalRecording{
+		id:          recordingID,
+		path:        recordingPath,
+		downloadURL: h.recordingDownloadURL(recordingID),
+		startedAt:   startedAt,
+		file:        file,
+	}, nil
+}
+
+func (h *TerminalHandler) recordingRootDir() string {
+	return filepath.Join(h.RecordingDir, "web-terminal")
+}
+
+func (h *TerminalHandler) recordingDownloadURL(id string) string {
+	basePath := strings.TrimSpace(h.RecordingBasePath)
+	if basePath == "" {
+		basePath = "/api/v2/terminal/recordings"
+	}
+	return strings.TrimRight(basePath, "/") + "/" + url.PathEscape(id) + "/download"
+}
+
+// RecordingFilePath returns the validated on-disk path for a web terminal recording.
+func (h *TerminalHandler) RecordingFilePath(id string) (string, error) {
+	if strings.TrimSpace(h.RecordingDir) == "" {
+		return "", os.ErrNotExist
+	}
+	root := h.recordingRootDir()
+	recordingPath := filepath.Join(root, id+".cast")
+
+	rel, err := filepath.Rel(root, recordingPath)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid recording id")
+	}
+	return recordingPath, nil
+}
+
+func recordingID(recording *terminalRecording) string {
+	if recording == nil {
+		return ""
+	}
+	return recording.id
+}
+
+func recordingDownloadURL(recording *terminalRecording) string {
+	if recording == nil {
+		return ""
+	}
+	return recording.downloadURL
+}
+
+func (r *terminalRecording) AppendOutput(payload []byte) error {
+	if r == nil || len(payload) == 0 {
+		return nil
+	}
+	event := []interface{}{
+		time.Since(r.startedAt).Seconds(),
+		"o",
+		string(payload),
+	}
+	line, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, err := r.file.Write(append(line, '\n')); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *terminalRecording) Close() error {
+	if r == nil || r.file == nil {
+		return nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	err := r.file.Close()
+	r.file = nil
+	return err
+}
+
+func writeTerminalControl(conn *Conn, msg terminalMsg) error {
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	return conn.WriteText(payload)
 }

@@ -132,6 +132,10 @@ static filter_status_t rate_limit_on_connect(filter_t *filter, filter_context_t 
             LOG_WARN("Rate limit: Connection denied for %s (concurrent limit)",
                      client_addr ? client_addr : "(unknown)");
         }
+        if (config->event_cb != NULL) {
+            config->event_cb(ctx->username, client_addr, result,
+                             config->event_user_data);
+        }
         return FILTER_REJECT;
     }
 
@@ -139,6 +143,10 @@ static filter_status_t rate_limit_on_connect(filter_t *filter, filter_context_t 
         if (config->log_rejections) {
             LOG_WARN("Rate limit: Connection throttled for %s (rate limit)",
                      client_addr ? client_addr : "(unknown)");
+        }
+        if (config->event_cb != NULL) {
+            config->event_cb(ctx->username, client_addr, result,
+                             config->event_user_data);
         }
         return FILTER_REJECT;
     }
@@ -152,11 +160,22 @@ static filter_status_t rate_limit_on_authenticated(filter_t *filter, filter_cont
         return FILTER_CONTINUE;
     }
 
+    session_metadata_t *meta = NULL;
+    if (ctx->session != NULL) {
+        meta = session_get_metadata(ctx->session);
+    }
+
     rate_limit_result_t result = rate_limit_check_user_sessions(filter, ctx->username);
     if (result == RATE_LIMIT_DENY) {
         rate_limit_filter_config_t *config = (rate_limit_filter_config_t *)filter->config;
         if (config != NULL && config->log_rejections) {
             LOG_WARN("Rate limit: User '%s' exceeded per-user session limit", ctx->username);
+        }
+        if (config != NULL && config->event_cb != NULL) {
+            config->event_cb(ctx->username,
+                             meta ? meta->client_addr : NULL,
+                             result,
+                             config->event_user_data);
         }
         return FILTER_REJECT;
     }
@@ -521,6 +540,12 @@ rate_limit_result_t rate_limit_check_user_sessions(filter_t *filter, const char 
         if (state->entries[i].active && strcmp(state->entries[i].key, username) == 0) {
             user_sessions = state->entries[i].current_connections;
             break;
+        }
+    }
+    if (config->count_user_cb != NULL) {
+        int shared_sessions = config->count_user_cb(username, config->count_user_user_data);
+        if (shared_sessions >= 0) {
+            user_sessions = shared_sessions;
         }
     }
 

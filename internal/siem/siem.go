@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,10 +18,15 @@ import (
 type SIEMType string
 
 const (
-	SIEMSplunk  SIEMType = "splunk"
-	SIEMElastic SIEMType = "elastic"
-	SIEMSyslog  SIEMType = "syslog"
-	SIEMWebhook SIEMType = "webhook"
+	SIEMSplunk   SIEMType = "splunk"
+	SIEMDatadog  SIEMType = "datadog"
+	SIEMElastic  SIEMType = "elastic"
+	SIEMLogstash SIEMType = "logstash"
+	SIEMSumo     SIEMType = "sumo"
+	SIEMSyslog   SIEMType = "syslog"
+	SIEMQRadar   SIEMType = "qradar"
+	SIEMWazuh    SIEMType = "wazuh"
+	SIEMWebhook  SIEMType = "webhook"
 )
 
 // SIEMConfig configures the SIEM forwarder.
@@ -29,6 +36,7 @@ type SIEMConfig struct {
 	Token         string        `json:"token"`
 	Index         string        `json:"index"`
 	Source        string        `json:"source"`
+	Format        string        `json:"format,omitempty"`
 	Insecure      bool          `json:"insecure"`
 	BatchSize     int           `json:"batch_size"`
 	FlushInterval time.Duration `json:"flush_interval"`
@@ -38,8 +46,8 @@ type SIEMConfig struct {
 type Event struct {
 	Timestamp time.Time              `json:"timestamp"`
 	Source    string                 `json:"source"`
-	EventType string                `json:"event_type"`
-	Severity  string                `json:"severity"`
+	EventType string                 `json:"event_type"`
+	Severity  string                 `json:"severity"`
 	Data      map[string]interface{} `json:"data"`
 }
 
@@ -79,9 +87,19 @@ func NewForwarder(cfg *SIEMConfig) (*Forwarder, error) {
 	if cfg.Source == "" {
 		cfg.Source = "ssh-proxy"
 	}
+	if cfg.Format == "" {
+		switch cfg.Type {
+		case SIEMQRadar:
+			cfg.Format = "leef"
+		case SIEMSyslog:
+			cfg.Format = "rfc5424"
+		case SIEMWazuh:
+			cfg.Format = "json"
+		}
+	}
 
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.Insecure},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.Insecure}, // #nosec G402 -- explicit operator opt-in for private or self-signed SIEM endpoints.
 	}
 	client := &http.Client{
 		Transport: transport,
@@ -131,9 +149,19 @@ func (f *Forwarder) Flush() error {
 	switch f.config.Type {
 	case SIEMSplunk:
 		err = f.sendSplunk(batch)
+	case SIEMDatadog:
+		err = f.sendDatadog(batch)
 	case SIEMElastic:
 		err = f.sendElastic(batch)
+	case SIEMLogstash:
+		err = f.sendLogstash(batch)
+	case SIEMSumo:
+		err = f.sendSumo(batch)
 	case SIEMSyslog:
+		err = f.sendSyslog(batch)
+	case SIEMQRadar:
+		err = f.sendSyslog(batch)
+	case SIEMWazuh:
 		err = f.sendSyslog(batch)
 	case SIEMWebhook:
 		err = f.sendWebhook(batch)
@@ -230,23 +258,13 @@ type splunkHECPayload struct {
 }
 
 func (f *Forwarder) sendSplunk(events []Event) error {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	for _, ev := range events {
-		payload := splunkHECPayload{
-			Event:      ev,
-			Sourcetype: "ssh_proxy",
-			Index:      f.config.Index,
-			Source:     f.config.Source,
-			Time:       float64(ev.Timestamp.UnixNano()) / 1e9,
-		}
-		if err := enc.Encode(payload); err != nil {
-			return fmt.Errorf("siem: splunk encode: %w", err)
-		}
+	data, err := FormatSplunkHEC(events, f.config.Index, f.config.Source)
+	if err != nil {
+		return fmt.Errorf("siem: splunk encode: %w", err)
 	}
 
 	url := f.config.Endpoint + "/services/collector/event"
-	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("siem: splunk request: %w", err)
 	}
@@ -262,6 +280,50 @@ func (f *Forwarder) sendSplunk(events []Event) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("siem: splunk returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Datadog Logs intake
+// ---------------------------------------------------------------------------
+
+type datadogLogPayload struct {
+	Message    string                 `json:"message"`
+	Service    string                 `json:"service,omitempty"`
+	DDSource   string                 `json:"ddsource,omitempty"`
+	Status     string                 `json:"status,omitempty"`
+	Hostname   string                 `json:"hostname,omitempty"`
+	Timestamp  int64                  `json:"timestamp,omitempty"`
+	Attributes map[string]interface{} `json:"attributes,omitempty"`
+}
+
+func (f *Forwarder) sendDatadog(events []Event) error {
+	data, err := FormatDatadogLogs(events, f.config.Source)
+	if err != nil {
+		return fmt.Errorf("siem: datadog encode: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, f.config.Endpoint, bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("siem: datadog request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if f.config.Token != "" {
+		req.Header.Set("DD-API-KEY", f.config.Token)
+	}
+	if f.config.Source != "" {
+		req.Header.Set("DD-Source", f.config.Source)
+		req.Header.Set("DD-Service", f.config.Source)
+	}
+
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("siem: datadog send: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("siem: datadog returned %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -351,22 +413,75 @@ func (f *Forwarder) sendSyslog(events []Event) error {
 	}
 
 	for _, ev := range events {
-		severity := severityToSyslog(ev.Severity)
-		pri := facility*8 + severity
-
-		data, _ := json.Marshal(ev.Data)
-		// RFC 5424: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID STRUCTURED-DATA MSG
-		msg := fmt.Sprintf("<%d>1 %s %s %s - - - %s %s\n",
-			pri,
-			ev.Timestamp.UTC().Format(time.RFC3339),
-			hostname,
-			appName,
-			ev.EventType,
-			string(data),
-		)
+		msg := formatSyslogMessage(ev, hostname, appName, facility, f.config.Format)
 		if _, err := conn.Write([]byte(msg)); err != nil {
 			return fmt.Errorf("siem: syslog write: %w", err)
 		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Logstash HTTP input / ELK
+// ---------------------------------------------------------------------------
+
+func (f *Forwarder) sendLogstash(events []Event) error {
+	data, err := FormatLogstashPayload(events)
+	if err != nil {
+		return fmt.Errorf("siem: logstash encode: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, f.config.Endpoint, bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("siem: logstash request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-ndjson")
+	if f.config.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+f.config.Token)
+	}
+
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("siem: logstash send: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("siem: logstash returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Sumo Logic HTTP source
+// ---------------------------------------------------------------------------
+
+func (f *Forwarder) sendSumo(events []Event) error {
+	data, err := FormatSumoPayload(events)
+	if err != nil {
+		return fmt.Errorf("siem: sumo encode: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, f.config.Endpoint, bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("siem: sumo request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sumo-Host", "ssh-proxy")
+	if f.config.Source != "" {
+		req.Header.Set("X-Sumo-Category", f.config.Source)
+		req.Header.Set("X-Sumo-Name", f.config.Source)
+	}
+	if f.config.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+f.config.Token)
+	}
+
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("siem: sumo send: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("siem: sumo returned %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -428,6 +543,27 @@ func FormatSplunkHEC(events []Event, index, source string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// FormatDatadogLogs returns a Datadog-compatible JSON array for a batch of logs.
+func FormatDatadogLogs(events []Event, source string) ([]byte, error) {
+	logs := make([]datadogLogPayload, 0, len(events))
+	for _, ev := range events {
+		logs = append(logs, datadogLogPayload{
+			Message:   ev.EventType,
+			Service:   source,
+			DDSource:  source,
+			Status:    ev.Severity,
+			Hostname:  "ssh-proxy",
+			Timestamp: ev.Timestamp.UnixMilli(),
+			Attributes: map[string]interface{}{
+				"source":     ev.Source,
+				"event_type": ev.EventType,
+				"data":       ev.Data,
+			},
+		})
+	}
+	return json.Marshal(logs)
+}
+
 // FormatElasticBulk returns the Elastic bulk API NDJSON bytes for a batch.
 func FormatElasticBulk(events []Event, index string) ([]byte, error) {
 	if index == "" {
@@ -448,28 +584,157 @@ func FormatElasticBulk(events []Event, index string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// FormatSumoPayload returns newline-delimited JSON for Sumo HTTP sources.
+func FormatSumoPayload(events []Event) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	for _, ev := range events {
+		if err := enc.Encode(ev); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+// FormatLogstashPayload returns newline-delimited JSON for Logstash HTTP input.
+func FormatLogstashPayload(events []Event) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	for _, ev := range events {
+		record := map[string]interface{}{
+			"@timestamp": ev.Timestamp.UTC().Format(time.RFC3339Nano),
+			"source":     ev.Source,
+			"event_type": ev.EventType,
+			"severity":   ev.Severity,
+			"data":       ev.Data,
+		}
+		if err := enc.Encode(record); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
 // FormatSyslog returns a slice of RFC 5424 formatted messages.
 func FormatSyslog(events []Event, source string) []string {
+	return formatSyslogMessages(events, source, "rfc5424")
+}
+
+// FormatCEF returns a slice of RFC 5424 syslog messages whose payloads use CEF.
+func FormatCEF(events []Event, source string) []string {
+	return formatSyslogMessages(events, source, "cef")
+}
+
+// FormatLEEF returns a slice of RFC 5424 syslog messages whose payloads use LEEF.
+func FormatLEEF(events []Event, source string) []string {
+	return formatSyslogMessages(events, source, "leef")
+}
+
+func formatSyslogMessages(events []Event, source, format string) []string {
 	if source == "" {
 		source = "ssh-proxy"
 	}
 	facility := 4
 	hostname := "ssh-proxy"
 
-	var msgs []string
+	msgs := make([]string, 0, len(events))
 	for _, ev := range events {
-		severity := severityToSyslog(ev.Severity)
-		pri := facility*8 + severity
+		msgs = append(msgs, formatSyslogMessage(ev, hostname, source, facility, format))
+	}
+	return msgs
+}
+
+func formatSyslogMessage(ev Event, hostname, appName string, facility int, format string) string {
+	severity := severityToSyslog(ev.Severity)
+	pri := facility*8 + severity
+	timestamp := ev.Timestamp.UTC().Format(time.RFC3339)
+
+	switch strings.ToLower(format) {
+	case "cef":
+		return fmt.Sprintf("<%d>1 %s %s %s - - - %s\n", pri, timestamp, hostname, appName, formatCEFBody(ev))
+	case "leef":
+		return fmt.Sprintf("<%d>1 %s %s %s - - - %s\n", pri, timestamp, hostname, appName, formatLEEFBody(ev))
+	case "json":
+		payload, _ := json.Marshal(map[string]interface{}{
+			"@timestamp": ev.Timestamp.UTC().Format(time.RFC3339Nano),
+			"source":     ev.Source,
+			"event_type": ev.EventType,
+			"severity":   ev.Severity,
+			"data":       ev.Data,
+		})
+		return fmt.Sprintf("<%d>1 %s %s %s - - - %s\n", pri, timestamp, hostname, appName, string(payload))
+	default:
 		data, _ := json.Marshal(ev.Data)
-		msg := fmt.Sprintf("<%d>1 %s %s %s - - - %s %s",
+		return fmt.Sprintf("<%d>1 %s %s %s - - - %s %s\n",
 			pri,
-			ev.Timestamp.UTC().Format(time.RFC3339),
+			timestamp,
 			hostname,
-			source,
+			appName,
 			ev.EventType,
 			string(data),
 		)
-		msgs = append(msgs, msg)
 	}
-	return msgs
+}
+
+func formatCEFBody(ev Event) string {
+	return fmt.Sprintf(
+		"CEF:0|SSH Proxy|Core|2.0.0|%s|%s|%d|%s",
+		escapeCEF(ev.EventType),
+		escapeCEF(ev.EventType),
+		severityToCEF(ev.Severity),
+		formatKeyValues(ev, " "),
+	)
+}
+
+func formatLEEFBody(ev Event) string {
+	return fmt.Sprintf(
+		"LEEF:2.0|SSH Proxy|Core|2.0.0|%s\t%s",
+		escapeLEEF(ev.EventType),
+		formatKeyValues(ev, "\t"),
+	)
+}
+
+func formatKeyValues(ev Event, sep string) string {
+	parts := []string{
+		"rt=" + sanitizeKV(ev.Timestamp.UTC().Format(time.RFC3339)),
+		"event_type=" + sanitizeKV(ev.EventType),
+		"source=" + sanitizeKV(ev.Source),
+	}
+	keys := make([]string, 0, len(ev.Data))
+	for key := range ev.Data {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		parts = append(parts, sanitizeKV(key)+"="+sanitizeKV(fmt.Sprint(ev.Data[key])))
+	}
+	return strings.Join(parts, sep)
+}
+
+func sanitizeKV(v string) string {
+	replacer := strings.NewReplacer("\n", " ", "\r", " ", "\t", " ", "|", "\\|", "=", "\\=")
+	return replacer.Replace(v)
+}
+
+func escapeCEF(v string) string {
+	replacer := strings.NewReplacer("\\", "\\\\", "|", "\\|")
+	return replacer.Replace(v)
+}
+
+func escapeLEEF(v string) string {
+	replacer := strings.NewReplacer("\n", " ", "\r", " ", "\t", " ", "|", "\\|")
+	return replacer.Replace(v)
+}
+
+func severityToCEF(sev string) int {
+	switch sev {
+	case "critical":
+		return 10
+	case "error":
+		return 8
+	case "warning":
+		return 5
+	default:
+		return 3
+	}
 }

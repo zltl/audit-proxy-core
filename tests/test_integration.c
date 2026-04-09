@@ -14,6 +14,7 @@
 #include "session.h"
 #include "filter.h"
 #include "router.h"
+#include "account_lock.h"
 #include "auth_filter.h"
 #include "rbac_filter.h"
 #include "audit_filter.h"
@@ -585,6 +586,78 @@ static int test_auth_filter_workflow(void)
     TEST_PASS();
 }
 
+static int test_auth_filter_ip_ban(void)
+{
+    TEST_START();
+
+    account_lock_config_t lock_cfg = {
+        .lockout_enabled = false,
+        .lockout_threshold = 3,
+        .lockout_duration_sec = 60,
+        .ip_ban_enabled = true,
+        .ip_ban_threshold = 2,
+        .ip_ban_duration_sec = 60
+    };
+    ASSERT_EQ(account_lock_init(&lock_cfg), 0);
+
+    auth_filter_config_t cfg = {
+        .backend = AUTH_BACKEND_CALLBACK,
+        .allow_password = true,
+        .allow_pubkey = false,
+        .max_attempts = 3,
+        .timeout_sec = 60,
+        .local_users = NULL,
+        .password_cb = test_auth_callback,
+        .pubkey_cb = NULL,
+        .cb_user_data = NULL
+    };
+
+    filter_t *filter = auth_filter_create(&cfg);
+    ASSERT_NOT_NULL(filter);
+
+    session_manager_config_t sm_cfg = {
+        .max_sessions = 4,
+        .session_timeout = 60,
+        .auth_timeout = 60
+    };
+    session_manager_t *session_mgr = session_manager_create(&sm_cfg);
+    ASSERT_NOT_NULL(session_mgr);
+
+    ssh_session client = ssh_new();
+    ASSERT_NOT_NULL(client);
+
+    session_t *session = session_manager_create_session(session_mgr, client);
+    ASSERT_NOT_NULL(session);
+
+    session_metadata_t *meta = session_get_metadata(session);
+    ASSERT_NOT_NULL(meta);
+    strncpy(meta->client_addr, "10.10.10.5", sizeof(meta->client_addr) - 1);
+
+    filter_context_t ctx = {
+        .session = session,
+        .username = "testuser",
+        .password = "wrongpass"
+    };
+
+    ASSERT_EQ(filter->callbacks.on_auth(filter, &ctx), FILTER_REJECT);
+    ASSERT_FALSE(account_ip_is_blocked("10.10.10.5"));
+    ASSERT_EQ(filter->callbacks.on_auth(filter, &ctx), FILTER_REJECT);
+    ASSERT_TRUE(account_ip_is_blocked("10.10.10.5"));
+
+    ctx.password = "testpass";
+    ASSERT_EQ(filter->callbacks.on_auth(filter, &ctx), FILTER_REJECT);
+
+    if (filter->callbacks.destroy) {
+        filter->callbacks.destroy(filter);
+    }
+    free(filter->config);
+    free(filter);
+    session_manager_destroy(session_mgr);
+    account_lock_cleanup();
+
+    TEST_PASS();
+}
+
 /* ========== Main ========== */
 
 int main(void)
@@ -612,6 +685,7 @@ int main(void)
     printf("▶ Authentication Tests\n");
     printf("─────────────────────────────────────────────────────────────────\n");
     failed += test_auth_filter_workflow();
+    failed += test_auth_filter_ip_ban();
     printf("\n");
 
     printf("▶ RBAC Tests\n");

@@ -8,14 +8,14 @@
 #include "password_policy.h"
 #include "logger.h"
 
-#include <string.h>
 #include <ctype.h>
+#include <string.h>
+#include <time.h>
 
 /* Thread-local error buffer */
 static _Thread_local char g_policy_error[PASSWORD_POLICY_ERROR_MAX];
 
-password_policy_t password_policy_defaults(void)
-{
+password_policy_t password_policy_defaults(void) {
     password_policy_t policy;
     memset(&policy, 0, sizeof(policy));
     policy.min_length = 8;
@@ -27,20 +27,16 @@ password_policy_t password_policy_defaults(void)
     return policy;
 }
 
-int password_policy_check(const password_policy_t *policy,
-                          const char *password)
-{
+int password_policy_check(const password_policy_t *policy, const char *password) {
     g_policy_error[0] = '\0';
 
     if (policy == NULL) {
-        snprintf(g_policy_error, sizeof(g_policy_error),
-                 "policy is NULL");
+        snprintf(g_policy_error, sizeof(g_policy_error), "policy is NULL");
         return -1;
     }
 
     if (password == NULL) {
-        snprintf(g_policy_error, sizeof(g_policy_error),
-                 "password is NULL");
+        snprintf(g_policy_error, sizeof(g_policy_error), "password is NULL");
         return -1;
     }
 
@@ -48,8 +44,7 @@ int password_policy_check(const password_policy_t *policy,
 
     /* Minimum length */
     if (len < policy->min_length) {
-        snprintf(g_policy_error, sizeof(g_policy_error),
-                 "password too short: %zu < %u minimum",
+        snprintf(g_policy_error, sizeof(g_policy_error), "password too short: %zu < %u minimum",
                  len, policy->min_length);
         return -1;
     }
@@ -61,10 +56,14 @@ int password_policy_check(const password_policy_t *policy,
 
     for (size_t i = 0; i < len; i++) {
         unsigned char ch = (unsigned char)password[i];
-        if (isupper(ch)) has_upper = true;
-        else if (islower(ch)) has_lower = true;
-        else if (isdigit(ch)) has_digit = true;
-        else if (ispunct(ch) || ch == ' ') has_special = true;
+        if (isupper(ch))
+            has_upper = true;
+        else if (islower(ch))
+            has_lower = true;
+        else if (isdigit(ch))
+            has_digit = true;
+        else if (ispunct(ch) || ch == ' ')
+            has_special = true;
     }
 
     if (policy->require_uppercase && !has_upper) {
@@ -94,7 +93,35 @@ int password_policy_check(const password_policy_t *policy,
     return 0;
 }
 
-const char *password_policy_error(void)
-{
+const char *password_policy_error(void) {
     return g_policy_error;
+}
+
+int password_policy_check_expiry(const password_policy_t *policy, bool has_last_changed,
+                                 time_t last_changed_at, time_t now) {
+    g_policy_error[0] = '\0';
+
+    if (policy == NULL) {
+        snprintf(g_policy_error, sizeof(g_policy_error), "policy is NULL");
+        return -1;
+    }
+
+    if (policy->max_age_days == 0 || !has_last_changed) {
+        return 0;
+    }
+
+    if (now < last_changed_at) {
+        return 0;
+    }
+
+    double age_seconds = difftime(now, last_changed_at);
+    double max_age_seconds = (double)policy->max_age_days * 86400.0;
+    if (age_seconds < max_age_seconds) {
+        return 0;
+    }
+
+    snprintf(g_policy_error, sizeof(g_policy_error),
+             "password expired: age %.0f days exceeds %u day limit", age_seconds / 86400.0,
+             policy->max_age_days);
+    return -1;
 }

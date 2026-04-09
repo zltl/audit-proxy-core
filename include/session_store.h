@@ -13,6 +13,13 @@
 #include <stddef.h>
 #include <time.h>
 
+#define SESSION_STORE_MAX_USERNAME 128
+#define SESSION_STORE_MAX_ADDR 256
+#define SESSION_STORE_MAX_INSTANCE_ID 64
+#define SESSION_STORE_MAX_CLIENT_VERSION 256
+#define SESSION_STORE_MAX_DEVICE_OS 64
+#define SESSION_STORE_MAX_DEVICE_FINGERPRINT 64
+
 /* Storage backend type */
 typedef enum {
     SESSION_STORE_LOCAL,    /* In-memory only (default) */
@@ -22,12 +29,21 @@ typedef enum {
 /* Session record (serializable) */
 typedef struct {
     uint64_t session_id;
-    char username[128];
-    char client_addr[64];
-    char target_addr[256];
-    char instance_id[64];       /* Which proxy instance owns this session */
+    char username[SESSION_STORE_MAX_USERNAME];
+    char client_addr[SESSION_STORE_MAX_ADDR];
+    uint16_t client_port;
+    char target_addr[SESSION_STORE_MAX_ADDR];
+    uint16_t target_port;
+    char instance_id[SESSION_STORE_MAX_INSTANCE_ID]; /* Which proxy instance owns this session */
+    char client_version[SESSION_STORE_MAX_CLIENT_VERSION];
+    char client_os[SESSION_STORE_MAX_DEVICE_OS];
+    char device_fingerprint[SESSION_STORE_MAX_DEVICE_FINGERPRINT];
     time_t created_at;
     time_t last_active;
+    time_t synced_at; /* Last successful owner heartbeat written to shared store */
+    uint32_t state;
+    uint64_t bytes_sent;
+    uint64_t bytes_received;
     bool active;
 } session_record_t;
 

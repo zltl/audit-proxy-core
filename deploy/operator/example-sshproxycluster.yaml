@@ -1,0 +1,43 @@
+apiVersion: proxy.sshproxy.io/v1alpha1
+kind: SSHProxyCluster
+metadata:
+  name: example
+spec:
+  image:
+    repository: ghcr.io/ssh-proxy-core/ssh-proxy-core
+    tag: latest
+  controlPlane:
+    replicas: 2
+    port: 8443
+  dataPlane:
+    replicas: 2
+    port: 2222
+  service:
+    type: LoadBalancer
+    sshPort: 2222
+    httpPort: 443
+  persistence:
+    enabled: true
+    size: 10Gi
+    accessMode: ReadWriteOnce
+  config:
+    controlPlaneJSON: |
+      {
+        "listen_addr": ":8443",
+        "data_plane_addr": "http://example-data-plane:9090",
+        "data_plane_config_file": "/etc/ssh-proxy/config.ini",
+        "audit_log_dir": "/data/audit",
+        "recording_dir": "/data/recordings"
+      }
+    dataPlaneINI: |
+      [server]
+      port = 2222
+      host_key = /data/host_key
+
+      [logging]
+      audit_dir = /data/audit
+      level = info
+  secrets:
+    admin_user: admin
+    session_secret: change-me-32-bytes
+    admin_pass_hash: $2a$10$replace-with-bcrypt-hash

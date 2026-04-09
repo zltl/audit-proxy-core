@@ -13,6 +13,7 @@
 #include "filter.h"
 #include "router.h"
 #include "config.h"
+#include "webhook_runtime.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,6 +28,7 @@ typedef struct proxy_handler_context {
     router_t *router;
     session_t *session;
     proxy_config_t *config;  /* Configuration for route lookup */
+    webhook_runtime_t *webhooks;
 } proxy_handler_context_t;
 
 /**
@@ -63,7 +65,10 @@ typedef enum {
     UPSTREAM_ERR_AUTH_AUTO,
     UPSTREAM_ERR_AUTH_NONE,
     UPSTREAM_ERR_AUTH_ALL_FAILED,
-    UPSTREAM_ERR_CHANNEL_OPEN
+    UPSTREAM_ERR_POLICY_DENIED,
+    UPSTREAM_ERR_CIRCUIT_OPEN,
+    UPSTREAM_ERR_CHANNEL_OPEN,
+    UPSTREAM_ERR_CHANNEL_REQUEST
 } upstream_error_t;
 
 /**

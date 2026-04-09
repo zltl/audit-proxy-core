@@ -6,7 +6,6 @@ package discovery
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"net"
 	"strings"
@@ -91,10 +90,8 @@ func (s *Scanner) Scan(ctx context.Context) ([]ScanResult, error) {
 	sem := make(chan struct{}, s.config.Concurrency)
 
 	for _, j := range jobs {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			break
-		default:
 		}
 
 		wg.Add(1)
@@ -284,14 +281,4 @@ func isTimeout(err error) bool {
 		return true
 	}
 	return false
-}
-
-// ipToUint32 converts a 4-byte IPv4 address to an integer (unused but useful
-// for subnet math).
-func ipToUint32(ip net.IP) uint32 {
-	ip = ip.To4()
-	if ip == nil {
-		return 0
-	}
-	return binary.BigEndian.Uint32(ip)
 }

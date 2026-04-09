@@ -120,6 +120,30 @@ func TestSingleNodeSelf(t *testing.T) {
 	}
 }
 
+func TestSingleNodeSelfIncludesTopologyMetadata(t *testing.T) {
+	cfg := testConfig("node-1", "Node 1", "127.0.0.1:0")
+	cfg.Region = "us-east-1"
+	cfg.Zone = "us-east-1a"
+	m := startManager(t, cfg)
+
+	self := m.Self()
+	if self.Metadata["region"] != "us-east-1" {
+		t.Fatalf("Self().Metadata[region] = %q, want us-east-1", self.Metadata["region"])
+	}
+	if self.Metadata["zone"] != "us-east-1a" {
+		t.Fatalf("Self().Metadata[zone] = %q, want us-east-1a", self.Metadata["zone"])
+	}
+	if self.Metadata["failure_domain"] != "us-east-1/us-east-1a" {
+		t.Fatalf("Self().Metadata[failure_domain] = %q, want us-east-1/us-east-1a",
+			self.Metadata["failure_domain"])
+	}
+
+	self.Metadata["region"] = "mutated"
+	if latest := m.Self().Metadata["region"]; latest != "us-east-1" {
+		t.Fatalf("mutating Self() metadata leaked back into manager: got %q", latest)
+	}
+}
+
 func TestSingleNodeTerm(t *testing.T) {
 	m := startManager(t, testConfig("node-1", "Node 1", "127.0.0.1:0"))
 	if m.Term() != 1 {

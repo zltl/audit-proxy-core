@@ -2,17 +2,25 @@ package api
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cmdctrl"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/discovery"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
+	"golang.org/x/crypto/ssh"
 )
 
 // mockDP implements DataPlaneClient for testing.
@@ -22,6 +30,7 @@ type mockDP struct {
 	servers   []models.Server
 	metrics   string
 	config    map[string]interface{}
+	drain     *models.DrainStatus
 	killErr   error
 	reloadErr error
 }
@@ -38,6 +47,15 @@ func (m *mockDP) ListSessions() ([]models.Session, error) {
 }
 
 func (m *mockDP) KillSession(id string) error {
+	if m.killErr == nil {
+		filtered := m.sessions[:0]
+		for _, session := range m.sessions {
+			if session.ID != id {
+				filtered = append(filtered, session)
+			}
+		}
+		m.sessions = filtered
+	}
 	return m.killErr
 }
 
@@ -60,13 +78,36 @@ func (m *mockDP) GetConfig() (map[string]interface{}, error) {
 	return m.config, nil
 }
 
+func (m *mockDP) GetDrainStatus() (*models.DrainStatus, error) {
+	if m.drain == nil {
+		return &models.DrainStatus{Status: "healthy", Draining: false, ActiveSessions: len(m.sessions)}, nil
+	}
+	cloned := *m.drain
+	return &cloned, nil
+}
+
+func (m *mockDP) SetDrainMode(draining bool) (*models.DrainStatus, error) {
+	if m.drain == nil {
+		m.drain = &models.DrainStatus{}
+	}
+	m.drain.Draining = draining
+	if draining {
+		m.drain.Status = "draining"
+	} else {
+		m.drain.Status = "healthy"
+	}
+	m.drain.ActiveSessions = len(m.sessions)
+	cloned := *m.drain
+	return &cloned, nil
+}
+
 func setupTestAPI(t *testing.T) (*API, *http.ServeMux, *mockDP) {
 	t.Helper()
 	dir := t.TempDir()
 
 	dp := &mockDP{
 		sessions: []models.Session{
-			{ID: "s1", Username: "alice", SourceIP: "10.0.0.1", TargetHost: "srv1.local", TargetPort: 22, Status: "active", StartTime: time.Now(), BytesIn: 100, BytesOut: 200},
+			{ID: "s1", Username: "alice", SourceIP: "10.0.0.1", ClientVersion: "OpenSSH_9.7p1 Ubuntu-7ubuntu4", ClientOS: "Ubuntu/Linux", DeviceFingerprint: "sshfp-4d2d9f6a1f0ef8e0", TargetHost: "srv1.local", TargetPort: 22, Status: "active", StartTime: time.Now(), BytesIn: 100, BytesOut: 200},
 			{ID: "s2", Username: "bob", SourceIP: "10.0.0.2", TargetHost: "srv2.local", TargetPort: 22, Status: "closed", StartTime: time.Now().Add(-time.Hour), BytesIn: 500, BytesOut: 1000},
 			{ID: "s3", Username: "alice", SourceIP: "10.0.0.1", TargetHost: "srv3.local", TargetPort: 22, Status: "active", StartTime: time.Now(), RecordingFile: filepath.Join(dir, "rec-s3.cast")},
 		},
@@ -100,7 +141,11 @@ func setupTestAPI(t *testing.T) (*API, *http.ServeMux, *mockDP) {
 	// Write initial config file
 	os.WriteFile(cfg.ConfigFile, []byte(`{"listen_port": 2222}`), 0644)
 
-	api := New(dp, cfg)
+	api, err := New(dp, cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = api.Close() })
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
 	return api, mux, dp
@@ -216,6 +261,58 @@ func TestListSessions(t *testing.T) {
 	if resp.Total != 3 {
 		t.Errorf("expected 3 sessions, got %d", resp.Total)
 	}
+	items := resp.Data.([]interface{})
+	first := items[0].(map[string]interface{})
+	if first["client_version"] != "OpenSSH_9.7p1 Ubuntu-7ubuntu4" {
+		t.Fatalf("expected client version in list response, got %v", first["client_version"])
+	}
+}
+
+func TestListServersIncludesStoredServers(t *testing.T) {
+	_, mux, _ := setupTestAPI(t)
+
+	create := doRequest(mux, "POST", "/api/v2/servers", map[string]interface{}{
+		"name":  "server3",
+		"host":  "10.0.1.3",
+		"port":  22,
+		"group": "production",
+	})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("expected 201 when creating server, got %d: %s", create.Code, create.Body.String())
+	}
+
+	rr := doRequest(mux, "GET", "/api/v2/servers", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	resp := parseResponse(t, rr)
+	if resp.Total != 3 {
+		t.Fatalf("expected 3 servers after merge, got %d", resp.Total)
+	}
+
+	items, ok := resp.Data.([]interface{})
+	if !ok {
+		t.Fatalf("expected []interface{} payload, got %T", resp.Data)
+	}
+
+	found := false
+	for _, item := range items {
+		server, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if server["host"] == "10.0.1.3" {
+			found = true
+			if server["group"] != "production" {
+				t.Fatalf("expected merged server group to be preserved, got %v", server["group"])
+			}
+		}
+	}
+
+	if !found {
+		t.Fatal("expected newly stored server to appear in merged list response")
+	}
 }
 
 func TestListSessionsFilterByStatus(t *testing.T) {
@@ -239,6 +336,42 @@ func TestListSessionsFilterByUser(t *testing.T) {
 	resp := parseResponse(t, rr)
 	if resp.Total != 1 {
 		t.Errorf("expected 1 session for bob, got %d", resp.Total)
+	}
+}
+
+func TestListSessionsFilterByIP(t *testing.T) {
+	_, mux, _ := setupTestAPI(t)
+	rr := doRequest(mux, "GET", "/api/v2/sessions?ip=10.0.0.1", nil)
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	resp := parseResponse(t, rr)
+	if resp.Total != 2 {
+		t.Errorf("expected 2 sessions for IP 10.0.0.1, got %d", resp.Total)
+	}
+}
+
+func TestListSessionsFilterByTarget(t *testing.T) {
+	_, mux, _ := setupTestAPI(t)
+	rr := doRequest(mux, "GET", "/api/v2/sessions?target=srv3", nil)
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	resp := parseResponse(t, rr)
+	if resp.Total != 1 {
+		t.Errorf("expected 1 session for target srv3, got %d", resp.Total)
+	}
+}
+
+func TestListSessionsFiltersSupportPartialCaseInsensitiveMatch(t *testing.T) {
+	_, mux, _ := setupTestAPI(t)
+	rr := doRequest(mux, "GET", "/api/v2/sessions?user=ALI&ip=10.0.0&target=SRV3", nil)
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	resp := parseResponse(t, rr)
+	if resp.Total != 1 {
+		t.Errorf("expected 1 session for partial filters, got %d", resp.Total)
 	}
 }
 
@@ -271,6 +404,12 @@ func TestGetSession(t *testing.T) {
 	data := resp.Data.(map[string]interface{})
 	if data["id"] != "s1" {
 		t.Errorf("expected id s1, got %v", data["id"])
+	}
+	if data["client_os"] != "Ubuntu/Linux" {
+		t.Fatalf("expected client_os, got %v", data["client_os"])
+	}
+	if data["device_fingerprint"] != "sshfp-4d2d9f6a1f0ef8e0" {
+		t.Fatalf("expected device_fingerprint, got %v", data["device_fingerprint"])
 	}
 }
 
@@ -323,6 +462,33 @@ func TestGetRecording(t *testing.T) {
 	rr := doRequest(mux, "GET", "/api/v2/sessions/s3/recording", nil)
 	if rr.Code != 200 {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestDownloadRecording(t *testing.T) {
+	_, mux, dp := setupTestAPI(t)
+	if err := os.WriteFile(dp.sessions[2].RecordingFile, []byte("{\"version\":2}\n[0.1,\"o\",\"hello\"]\n"), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	rr := doRequest(mux, "GET", "/api/v2/sessions/s3/recording/download", nil)
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("Content-Type"); !strings.Contains(got, "application/x-asciicast") {
+		t.Fatalf("unexpected content type: %s", got)
+	}
+	if !strings.Contains(rr.Body.String(), "\"version\":2") {
+		t.Fatalf("expected recording payload, got %q", rr.Body.String())
+	}
+}
+
+func TestDownloadRecordingRejectsOutsideDir(t *testing.T) {
+	_, mux, dp := setupTestAPI(t)
+	dp.sessions[2].RecordingFile = filepath.Join(filepath.Dir(dp.sessions[2].RecordingFile), "..", "outside.cast")
+	rr := doRequest(mux, "GET", "/api/v2/sessions/s3/recording/download", nil)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -896,6 +1062,121 @@ func TestConfigRollback(t *testing.T) {
 	}
 }
 
+func TestConfigDiffPreviewSanitizesSecretsAndShowsChanges(t *testing.T) {
+	api, mux, _ := setupTestAPI(t)
+	if err := os.WriteFile(api.config.ConfigFile, []byte(`{"listen_port":2222,"api_token":"tok-123","nested":{"private_key":"abc123"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := doRequest(mux, "POST", "/api/v2/config/diff", map[string]interface{}{
+		"to_config": map[string]interface{}{
+			"listen_port": 3333,
+			"api_token":   redactedConfigValue,
+			"nested": map[string]interface{}{
+				"private_key": redactedConfigValue,
+			},
+		},
+	})
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	resp := parseResponse(t, rr)
+	data := resp.Data.(map[string]interface{})
+	if changed, ok := data["changed"].(bool); !ok || !changed {
+		t.Fatalf("expected changed=true, got %#v", data["changed"])
+	}
+	diff := data["diff"].(string)
+	if !strings.Contains(diff, `-  "listen_port": 2222`) || !strings.Contains(diff, `+  "listen_port": 3333`) {
+		t.Fatalf("unexpected diff output: %s", diff)
+	}
+	if strings.Contains(diff, "tok-123") || strings.Contains(diff, "abc123") {
+		t.Fatalf("diff leaked sensitive data: %s", diff)
+	}
+}
+
+func TestUpdateConfigPreservesRedactedSecrets(t *testing.T) {
+	api, mux, _ := setupTestAPI(t)
+	if err := os.WriteFile(api.config.ConfigFile, []byte(`{"listen_port":2222,"api_token":"tok-123","nested":{"private_key":"abc123"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := doRequest(mux, "PUT", "/api/v2/config", map[string]interface{}{
+		"listen_port": 3333,
+		"api_token":   redactedConfigValue,
+		"nested": map[string]interface{}{
+			"private_key": redactedConfigValue,
+		},
+	})
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	raw, err := os.ReadFile(api.config.ConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored map[string]interface{}
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored["api_token"] != "tok-123" {
+		t.Fatalf("expected api_token to be preserved, got %#v", stored["api_token"])
+	}
+	nested := stored["nested"].(map[string]interface{})
+	if nested["private_key"] != "abc123" {
+		t.Fatalf("expected private_key to be preserved, got %#v", nested["private_key"])
+	}
+}
+
+func TestConfigVersionEndpointsSanitizeSnapshotAndDiff(t *testing.T) {
+	api, mux, _ := setupTestAPI(t)
+	if err := os.WriteFile(api.config.ConfigFile, []byte(`{"listen_port":2222,"api_token":"tok-123"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if rr := doRequest(mux, "PUT", "/api/v2/config", map[string]interface{}{
+		"listen_port": 3333,
+		"api_token":   redactedConfigValue,
+	}); rr.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	listRR := doRequest(mux, "GET", "/api/v2/config/versions", nil)
+	listResp := parseResponse(t, listRR)
+	versions := listResp.Data.([]interface{})
+	if len(versions) == 0 {
+		t.Fatal("expected at least one version")
+	}
+	version := versions[0].(map[string]interface{})["version"].(string)
+
+	getRR := doRequest(mux, "GET", "/api/v2/config/versions/"+version, nil)
+	if getRR.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", getRR.Code, getRR.Body.String())
+	}
+	if strings.Contains(getRR.Body.String(), "tok-123") {
+		t.Fatalf("version endpoint leaked secret: %s", getRR.Body.String())
+	}
+	if !strings.Contains(getRR.Body.String(), redactedConfigValue) {
+		t.Fatalf("expected version endpoint to redact secrets: %s", getRR.Body.String())
+	}
+
+	diffRR := doRequest(mux, "POST", "/api/v2/config/diff", map[string]interface{}{
+		"from_version": version,
+		"to_version":   "current",
+	})
+	if diffRR.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", diffRR.Code, diffRR.Body.String())
+	}
+	diffResp := parseResponse(t, diffRR)
+	diff := diffResp.Data.(map[string]interface{})["diff"].(string)
+	if !strings.Contains(diff, `-  "listen_port": 2222`) || !strings.Contains(diff, `+  "listen_port": 3333`) {
+		t.Fatalf("unexpected version diff: %s", diff)
+	}
+	if strings.Contains(diff, "tok-123") {
+		t.Fatalf("version diff leaked secret: %s", diff)
+	}
+}
+
 func TestHashAndCheckPassword(t *testing.T) {
 	hash := hashPassword("mypassword")
 	if !checkPassword("mypassword", hash) {
@@ -903,5 +1184,342 @@ func TestHashAndCheckPassword(t *testing.T) {
 	}
 	if checkPassword("wrongpassword", hash) {
 		t.Error("password check should fail for wrong password")
+	}
+}
+
+func TestDiscoveryRegisterCreatesManagedServer(t *testing.T) {
+	api, mux, _ := setupTestAPI(t)
+	ds := api.initDiscovery()
+	ds.inventory.AddFromScan([]discovery.ScanResult{
+		{
+			Host:       "10.2.0.5",
+			Port:       22,
+			IsSSH:      true,
+			SSHVersion: "OpenSSH_9.0",
+			OS:         "linux",
+			Status:     "open",
+			ScannedAt:  time.Now().UTC(),
+		},
+	})
+
+	rr := doRequest(mux, "POST", "/api/v2/discovery/register", map[string]interface{}{
+		"ids": []string{"10.2.0.5:22"},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	servers, err := api.listManagedServers()
+	if err != nil {
+		t.Fatalf("list managed servers: %v", err)
+	}
+
+	var found *models.Server
+	for _, srv := range servers {
+		if srv.ID == "discovery-10.2.0.5-22" {
+			cp := srv
+			found = &cp
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected discovery-managed server to be created")
+	}
+	if found.Host != "10.2.0.5" || found.Port != 22 {
+		t.Fatalf("unexpected discovery server endpoint: %+v", *found)
+	}
+	if found.Tags["source"] != "discovery" {
+		t.Fatalf("expected discovery source tag, got %+v", found.Tags)
+	}
+	if found.Tags["discovery_asset_id"] != "10.2.0.5:22" {
+		t.Fatalf("expected discovery asset tag, got %+v", found.Tags)
+	}
+}
+
+func TestDiscoveryAssetOfflineRemovesManagedServer(t *testing.T) {
+	api, mux, _ := setupTestAPI(t)
+	ds := api.initDiscovery()
+	ds.inventory.AddFromScan([]discovery.ScanResult{
+		{
+			Host:      "10.2.0.6",
+			Port:      2222,
+			IsSSH:     true,
+			Status:    "open",
+			ScannedAt: time.Now().UTC(),
+		},
+	})
+
+	rr := doRequest(mux, "POST", "/api/v2/discovery/register", map[string]interface{}{
+		"ids": []string{"10.2.0.6:2222"},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doRequest(mux, "PUT", "/api/v2/discovery/assets/10.2.0.6:2222", map[string]interface{}{
+		"status": "offline",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	servers, err := api.listManagedServers()
+	if err != nil {
+		t.Fatalf("list managed servers: %v", err)
+	}
+	for _, srv := range servers {
+		if srv.ID == "discovery-10.2.0.6-2222" {
+			t.Fatalf("expected discovery-managed server to be removed, got %+v", srv)
+		}
+	}
+}
+
+func TestCommandEvaluateRewriteAction(t *testing.T) {
+	api, mux, _ := setupTestAPI(t)
+
+	engine := cmdctrl.NewPolicyEngine(t.TempDir())
+	if err := engine.AddRule(&cmdctrl.CommandRule{
+		ID:       "rewrite-audit-flag",
+		Name:     "Rewrite command with audit wrapper",
+		Pattern:  `^kubectl\s+exec\b`,
+		Action:   cmdctrl.ActionRewrite,
+		Rewrite:  `audit-wrapper --user {{username}} --target {{target}} -- {{command}}`,
+		Severity: "medium",
+		Message:  "command rewritten with audit wrapper",
+		Enabled:  true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	api.SetCmdCtrl(engine, cmdctrl.NewApprovalManager(5*time.Minute, ""))
+	api.RegisterCmdCtrlRoutes(mux)
+
+	rr := doRequest(mux, "POST", "/api/v2/commands/evaluate", map[string]interface{}{
+		"command":  "kubectl exec deploy/api -- bash",
+		"username": "alice",
+		"role":     "operator",
+		"target":   "prod-cluster",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	resp := parseResponse(t, rr)
+	data := resp.Data.(map[string]interface{})
+	if data["action"] != string(cmdctrl.ActionRewrite) {
+		t.Fatalf("expected rewrite action, got %#v", data["action"])
+	}
+	expected := "audit-wrapper --user alice --target prod-cluster -- kubectl exec deploy/api -- bash"
+	if data["rewritten_command"] != expected {
+		t.Fatalf("expected rewritten command %q, got %#v", expected, data["rewritten_command"])
+	}
+
+	statsRR := doRequest(mux, "GET", "/api/v2/commands/stats", nil)
+	if statsRR.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", statsRR.Code, statsRR.Body.String())
+	}
+	statsResp := parseResponse(t, statsRR)
+	stats := statsResp.Data.(map[string]interface{})
+	if stats["rewritten"] != float64(1) {
+		t.Fatalf("expected rewritten stat to be 1, got %#v", stats["rewritten"])
+	}
+}
+
+func TestWebhookDeliveriesListAndRetry(t *testing.T) {
+	api, mux, _ := setupTestAPI(t)
+
+	var receivedBody string
+	var receivedAuth string
+	var receivedSignature string
+	webhookSink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		body, _ := io.ReadAll(r.Body)
+		receivedBody = string(body)
+		receivedAuth = r.Header.Get("Authorization")
+		receivedSignature = r.Header.Get("X-SSH-Proxy-Signature")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer webhookSink.Close()
+
+	payload := `{"event":"auth.failure","username":"alice"}`
+	dlqPath := filepath.Join(t.TempDir(), "webhook-dlq.jsonl")
+	entry, err := json.Marshal(map[string]interface{}{
+		"failed_at": time.Now().Unix(),
+		"event":     "auth.failure",
+		"attempts":  3,
+		"payload":   payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dlqPath, append(entry, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(api.config.ConfigFile, []byte(`{
+		"webhook": {
+			"enabled": true,
+			"url": "`+webhookSink.URL+`",
+			"auth_header": "Bearer debug-token",
+			"hmac_secret": "debug-secret",
+			"dead_letter_path": "`+dlqPath+`",
+			"timeout_ms": 1000
+		}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := doRequest(mux, "GET", "/api/v2/webhooks/deliveries", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp := parseResponse(t, rr)
+	if resp.Total != 1 {
+		t.Fatalf("expected 1 delivery, got %d", resp.Total)
+	}
+	items := resp.Data.([]interface{})
+	id := items[0].(map[string]interface{})["id"].(string)
+
+	rr = doRequest(mux, "POST", "/api/v2/webhooks/deliveries/retry", map[string]interface{}{
+		"ids": []string{id},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	if receivedBody != payload {
+		t.Fatalf("expected payload %q, got %q", payload, receivedBody)
+	}
+	if receivedAuth != "Bearer debug-token" {
+		t.Fatalf("expected auth header to be forwarded, got %q", receivedAuth)
+	}
+	mac := hmac.New(sha256.New, []byte("debug-secret"))
+	mac.Write([]byte(payload))
+	expectedSignature := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	if receivedSignature != expectedSignature {
+		t.Fatalf("expected signature %q, got %q", expectedSignature, receivedSignature)
+	}
+
+	rr = doRequest(mux, "GET", "/api/v2/webhooks/deliveries", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp = parseResponse(t, rr)
+	if resp.Total != 0 {
+		t.Fatalf("expected dead letter queue to be empty, got %d entries", resp.Total)
+	}
+}
+
+func TestWebhookDeliveriesListParsesINIConfig(t *testing.T) {
+	api, mux, _ := setupTestAPI(t)
+
+	payload := `{"event":"session.start","username":"alice"}`
+	dlqPath := filepath.Join(t.TempDir(), "webhook-dlq.jsonl")
+	entry, err := json.Marshal(map[string]interface{}{
+		"failed_at": time.Now().Unix(),
+		"event":     "session.start",
+		"attempts":  2,
+		"payload":   payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dlqPath, append(entry, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	iniConfig := "[webhook]\n" +
+		"enabled = true\n" +
+		"url = http://127.0.0.1:65535/hooks\n" +
+		"auth_header = Bearer ini-token\n" +
+		"hmac_secret = ini-secret\n" +
+		"dead_letter_path = " + dlqPath + "\n" +
+		"timeout_ms = 1000\n"
+	if err := os.WriteFile(api.config.ConfigFile, []byte(iniConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := doRequest(mux, "GET", "/api/v2/webhooks/deliveries", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp := parseResponse(t, rr)
+	if resp.Total != 1 {
+		t.Fatalf("expected 1 delivery, got %d", resp.Total)
+	}
+}
+
+func TestSignUserCertEmitsCertificateIssuedWebhook(t *testing.T) {
+	api, mux, _ := setupTestAPI(t)
+	ca, err := sshca.New(&sshca.CAConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api.SetCA(ca)
+
+	var receivedBody string
+	webhookSink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		body, _ := io.ReadAll(r.Body)
+		receivedBody = string(body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer webhookSink.Close()
+
+	if err := os.WriteFile(api.config.ConfigFile, []byte(`{
+		"webhook": {
+			"enabled": true,
+			"url": "`+webhookSink.URL+`",
+			"events": ["certificate.issued"]
+		}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	userSigner, err := sshca.GenerateED25519Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey := string(ssh.MarshalAuthorizedKey(userSigner.PublicKey()))
+
+	rr := doRequest(mux, "POST", "/api/v2/ca/sign-user", map[string]interface{}{
+		"public_key": publicKey,
+		"principals": []string{"alice"},
+		"ttl":        "1h",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(receivedBody, `"event":"certificate.issued"`) {
+		t.Fatalf("expected certificate.issued webhook, got %s", receivedBody)
+	}
+	if !strings.Contains(receivedBody, `"username":"alice"`) {
+		t.Fatalf("expected webhook username alice, got %s", receivedBody)
+	}
+}
+
+func TestExportCRLIncludesRevokedSerials(t *testing.T) {
+	api, mux, _ := setupTestAPI(t)
+	ca, err := sshca.New(&sshca.CAConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api.SetCA(ca)
+
+	userSigner, err := sshca.GenerateED25519Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := ca.SignUserCert(userSigner.PublicKey(), "alice", []string{"alice"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ca.RevokeCert(cert.Serial); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := doRequest(mux, "GET", "/api/v2/ca/crl", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), strconv.FormatUint(cert.Serial, 10)) {
+		t.Fatalf("expected CRL response to contain serial %d, got %s", cert.Serial, rr.Body.String())
 	}
 }

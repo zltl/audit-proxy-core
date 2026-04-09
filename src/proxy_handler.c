@@ -4,8 +4,10 @@
  */
 
 #include "proxy_handler.h"
+#include "channel_request_state.h"
 #include "logger.h"
 #include "version.h"
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -13,6 +15,8 @@
 #include <time.h>
 #include <unistd.h>
 #include <errno.h>
+#include <netdb.h>
+#include <sys/socket.h>
 #include <sys/epoll.h>
 #include <libssh/libssh.h>
 #include <libssh/server.h>
@@ -23,6 +27,181 @@
 
 #define BUF_SIZE 16384
 #define MAX_EPOLL_EVENTS 4
+
+static void emit_session_webhook(proxy_handler_context_t *ctx,
+                                 webhook_event_type_t event_type,
+                                 const char *username,
+                                 const char *upstream_user,
+                                 const char *upstream_host,
+                                 uint16_t upstream_port)
+{
+    if (ctx == NULL || ctx->webhooks == NULL) {
+        return;
+    }
+
+    session_metadata_t *meta = (ctx->session != NULL)
+        ? session_get_metadata(ctx->session) : NULL;
+
+    char detail[256];
+    snprintf(detail, sizeof(detail), "%s@%s:%u",
+             upstream_user != NULL ? upstream_user : "unknown",
+             upstream_host != NULL ? upstream_host : "unknown",
+             (unsigned int)upstream_port);
+
+    webhook_runtime_emit(ctx->webhooks,
+                         event_type,
+                         username != NULL ? username : (meta ? meta->username : NULL),
+                         meta ? meta->client_addr : NULL,
+                         detail);
+}
+
+static void normalize_client_version(const char *banner, char *out, size_t out_size)
+{
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (banner == NULL || banner[0] == '\0') {
+        return;
+    }
+
+    const char *version = banner;
+    if (strncmp(version, "SSH-2.0-", 8) == 0) {
+        version += 8;
+    }
+
+    size_t len = strlen(version);
+    while (len > 0 &&
+           (version[len - 1] == '\r' || version[len - 1] == '\n' ||
+            version[len - 1] == ' ' || version[len - 1] == '\t')) {
+        len--;
+    }
+    if (len >= out_size) {
+        len = out_size - 1;
+    }
+    memcpy(out, version, len);
+    out[len] = '\0';
+}
+
+static void infer_client_os(const char *banner, char *out, size_t out_size)
+{
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (banner == NULL || banner[0] == '\0') {
+        return;
+    }
+
+    char lower[SESSION_MAX_CLIENT_VERSION];
+    size_t i = 0;
+    for (; banner[i] != '\0' && i + 1 < sizeof(lower); i++) {
+        lower[i] = (char)tolower((unsigned char)banner[i]);
+    }
+    lower[i] = '\0';
+
+    const char *os = "Unknown";
+    if (strstr(lower, "ubuntu") != NULL) {
+        os = "Ubuntu/Linux";
+    } else if (strstr(lower, "debian") != NULL) {
+        os = "Debian/Linux";
+    } else if (strstr(lower, "centos") != NULL) {
+        os = "CentOS/Linux";
+    } else if (strstr(lower, "red hat") != NULL || strstr(lower, "rhel") != NULL) {
+        os = "RHEL/Linux";
+    } else if (strstr(lower, "fedora") != NULL) {
+        os = "Fedora/Linux";
+    } else if (strstr(lower, "macos") != NULL || strstr(lower, "darwin") != NULL ||
+               strstr(lower, "apple") != NULL) {
+        os = "macOS";
+    } else if (strstr(lower, "windows") != NULL || strstr(lower, "putty") != NULL ||
+               strstr(lower, "winscp") != NULL || strstr(lower, "mobaxterm") != NULL ||
+               strstr(lower, "securecrt") != NULL || strstr(lower, "teraterm") != NULL) {
+        os = "Windows";
+    } else if (strstr(lower, "freebsd") != NULL) {
+        os = "FreeBSD";
+    } else if (strstr(lower, "openbsd") != NULL) {
+        os = "OpenBSD";
+    } else if (strstr(lower, "netbsd") != NULL) {
+        os = "NetBSD";
+    } else if (strstr(lower, "linux") != NULL) {
+        os = "Linux";
+    }
+
+    strncpy(out, os, out_size - 1);
+    out[out_size - 1] = '\0';
+}
+
+static uint64_t fnv1a64_update(uint64_t hash, const char *value)
+{
+    if (value == NULL) {
+        return hash;
+    }
+    for (const unsigned char *p = (const unsigned char *)value; *p != '\0'; p++) {
+        hash ^= (uint64_t)tolower(*p);
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static void build_device_fingerprint(const char *client_version, const char *client_os,
+                                     char *out, size_t out_size)
+{
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    out[0] = '\0';
+
+    uint64_t hash = 1469598103934665603ULL;
+    hash = fnv1a64_update(hash, client_version);
+    hash ^= (uint64_t)'|';
+    hash *= 1099511628211ULL;
+    hash = fnv1a64_update(hash, client_os);
+
+    snprintf(out, out_size, "sshfp-%016llx", (unsigned long long)hash);
+}
+
+static void capture_client_identity(proxy_handler_context_t *ctx)
+{
+    if (ctx == NULL || ctx->session == NULL) {
+        return;
+    }
+
+    session_metadata_t *meta = session_get_metadata(ctx->session);
+    ssh_session client_ssh = session_get_client(ctx->session);
+    if (meta == NULL || client_ssh == NULL) {
+        return;
+    }
+
+    int fd = (int)ssh_get_fd(client_ssh);
+    if (fd >= 0) {
+        struct sockaddr_storage peer_addr;
+        socklen_t peer_len = sizeof(peer_addr);
+        if (getpeername(fd, (struct sockaddr *)&peer_addr, &peer_len) == 0) {
+            char host[NI_MAXHOST];
+            char service[NI_MAXSERV];
+            if (getnameinfo((struct sockaddr *)&peer_addr, peer_len, host, sizeof(host), service,
+                            sizeof(service), NI_NUMERICHOST | NI_NUMERICSERV) == 0) {
+                strncpy(meta->client_addr, host, sizeof(meta->client_addr) - 1);
+                meta->client_port = (uint16_t)strtoul(service, NULL, 10);
+            }
+        }
+    }
+
+    char client_version[SESSION_MAX_CLIENT_VERSION];
+    normalize_client_version(ssh_get_clientbanner(client_ssh), client_version,
+                             sizeof(client_version));
+    if (client_version[0] != '\0') {
+        strncpy(meta->client_version, client_version, sizeof(meta->client_version) - 1);
+    }
+
+    infer_client_os(client_version, meta->client_os, sizeof(meta->client_os));
+    if (meta->client_version[0] != '\0' || meta->client_os[0] != '\0') {
+        build_device_fingerprint(meta->client_version, meta->client_os, meta->device_fingerprint,
+                                 sizeof(meta->device_fingerprint));
+    }
+    session_sync(ctx->session);
+}
 
 void banner_expand_vars(const char *tmpl, char *output, size_t output_size,
                         const char *username, const char *client_ip)
@@ -194,6 +373,7 @@ static int setup_auth_and_handshake(proxy_handler_context_t *ctx, char **usernam
         LOG_ERROR("Key exchange failed: %s", ssh_get_error(session));
         return -1;
     }
+    capture_client_identity(ctx);
     
     /* Handle authentication messages manually */
     ssh_message message;
@@ -216,6 +396,7 @@ static int setup_auth_and_handshake(proxy_handler_context_t *ctx, char **usernam
             }
             
             int subtype = ssh_message_subtype(message);
+            session_metadata_t *meta = session_get_metadata(ctx->session);
             filter_context_t filter_ctx = {
                 .session = ctx->session,
                 .username = user,
@@ -225,6 +406,9 @@ static int setup_auth_and_handshake(proxy_handler_context_t *ctx, char **usernam
             };
             
             if (subtype == SSH_AUTH_METHOD_PASSWORD) {
+                if (meta != NULL) {
+                    meta->auth_method = SESSION_AUTH_PASSWORD;
+                }
                 filter_ctx.password = ssh_message_auth_password(message);
                 LOG_DEBUG("Password auth attempt for user '%s'", user);
                 
@@ -232,9 +416,26 @@ static int setup_auth_and_handshake(proxy_handler_context_t *ctx, char **usernam
                 filter_status_t status = filter_chain_on_auth(ctx->filters, &filter_ctx);
                 
                 if (status == FILTER_CONTINUE) {
-                    authenticated = true;
-                    ssh_message_auth_reply_success(message, 0);
-                    LOG_INFO("User '%s' authenticated successfully", user);
+                    filter_status_t authz_status = FILTER_CONTINUE;
+                    if (ctx->filters != NULL) {
+                        filter_context_t authenticated_ctx = {
+                            .session = ctx->session,
+                            .username = user,
+                            .user_data = NULL
+                        };
+                        authz_status = filter_chain_on_authenticated(ctx->filters, &authenticated_ctx);
+                    }
+
+                    if (authz_status == FILTER_CONTINUE) {
+                        authenticated = true;
+                        ssh_message_auth_reply_success(message, 0);
+                        LOG_INFO("User '%s' authenticated successfully", user);
+                    } else {
+                        auth_attempts++;
+                        ssh_message_reply_default(message);
+                        LOG_WARN("Post-authentication policy rejected user '%s' (attempt %d/%d)",
+                                 user, auth_attempts, max_attempts);
+                    }
                 } else {
                     auth_attempts++;
                     ssh_message_reply_default(message);
@@ -242,6 +443,9 @@ static int setup_auth_and_handshake(proxy_handler_context_t *ctx, char **usernam
                              user, auth_attempts, max_attempts);
                 }
             } else if (subtype == SSH_AUTH_METHOD_PUBLICKEY) {
+                if (meta != NULL) {
+                    meta->auth_method = SESSION_AUTH_PUBLICKEY;
+                }
                 ssh_key client_pubkey = ssh_message_auth_pubkey(message);
                 if (client_pubkey == NULL) {
                     LOG_DEBUG("No public key in auth message for user '%s'", user);
@@ -262,7 +466,10 @@ static int setup_auth_and_handshake(proxy_handler_context_t *ctx, char **usernam
 
                 /* SSH_PUBLICKEY_STATE_VALID: signature verified by libssh, now check authorization */
                 char *pubkey_b64 = NULL;
-                if (ssh_pki_export_pubkey_base64(client_pubkey, &pubkey_b64) != SSH_OK || pubkey_b64 == NULL) {
+                const char *pubkey_type = ssh_key_type_to_char(ssh_key_type(client_pubkey));
+                if (pubkey_type == NULL ||
+                    ssh_pki_export_pubkey_base64(client_pubkey, &pubkey_b64) != SSH_OK ||
+                    pubkey_b64 == NULL) {
                     LOG_WARN("Failed to export public key base64 for user '%s'", user);
                     auth_attempts++;
                     ssh_message_reply_default(message);
@@ -270,25 +477,53 @@ static int setup_auth_and_handshake(proxy_handler_context_t *ctx, char **usernam
                     continue;
                 }
 
-                /* Pass base64 key string as the pubkey data for filter chain */
-                size_t b64_len = strlen(pubkey_b64);
-                filter_ctx.pubkey = pubkey_b64;
-                filter_ctx.pubkey_len = b64_len;
-                LOG_DEBUG("Public key auth attempt for user '%s' (b64_len=%zu)", user, b64_len);
+                size_t line_len = strlen(pubkey_type) + 1 + strlen(pubkey_b64) + 1;
+                char *pubkey_line = malloc(line_len);
+                if (pubkey_line == NULL) {
+                    ssh_string_free_char(pubkey_b64);
+                    auth_attempts++;
+                    ssh_message_reply_default(message);
+                    ssh_message_free(message);
+                    continue;
+                }
+
+                snprintf(pubkey_line, line_len, "%s %s", pubkey_type, pubkey_b64);
+                filter_ctx.pubkey = pubkey_line;
+                filter_ctx.pubkey_len = strlen(pubkey_line);
+                LOG_DEBUG("Public key auth attempt for user '%s' (type=%s len=%zu)", user,
+                          pubkey_type, filter_ctx.pubkey_len);
 
                 filter_status_t status = filter_chain_on_auth(ctx->filters, &filter_ctx);
 
                 if (status == FILTER_CONTINUE) {
-                    authenticated = true;
-                    ssh_message_auth_reply_success(message, 0);
-                    LOG_INFO("User '%s' authenticated successfully with public key", user);
+                    filter_status_t authz_status = FILTER_CONTINUE;
+                    if (ctx->filters != NULL) {
+                        filter_context_t authenticated_ctx = {
+                            .session = ctx->session,
+                            .username = user,
+                            .user_data = NULL
+                        };
+                        authz_status = filter_chain_on_authenticated(ctx->filters, &authenticated_ctx);
+                    }
+
+                    if (authz_status == FILTER_CONTINUE) {
+                        authenticated = true;
+                        ssh_message_auth_reply_success(message, 0);
+                        LOG_INFO("User '%s' authenticated successfully with public key", user);
+                    } else {
+                        auth_attempts++;
+                        ssh_message_reply_default(message);
+                        LOG_WARN("Post-authentication policy rejected user '%s' (attempt %d/%d)",
+                                 user, auth_attempts, max_attempts);
+                    }
                 } else {
                     auth_attempts++;
                     ssh_message_reply_default(message);
                     LOG_WARN("Public key authentication failed for user '%s' (attempt %d/%d)", 
                              user, auth_attempts, max_attempts);
                 }
-                free(pubkey_b64);
+                free(pubkey_line);
+                ssh_string_free_char(pubkey_b64);
             } else {
                 /* Handle other auth methods (like "none") - just reject them */
                 LOG_DEBUG("Unsupported auth method %d for user '%s'", subtype, user);
@@ -304,84 +539,115 @@ static int setup_auth_and_handshake(proxy_handler_context_t *ctx, char **usernam
     return authenticated ? 0 : -1;
 }
 
-/* Connect to upstream */
-static ssh_session connect_upstream(proxy_handler_context_t *ctx, const char *username,
-                                    connect_result_t *cr) {
-    const char *upstream_host = "127.0.0.1";
-    uint16_t upstream_port = 22;
-    const char *upstream_user = NULL;
-    const char *privkey_path = NULL;
+static void set_connect_result_target(connect_result_t *cr, const char *username,
+                                      const char *upstream_host, uint16_t upstream_port,
+                                      const char *upstream_user) {
+    if (cr == NULL) {
+        return;
+    }
+    memset(cr->host, 0, sizeof(cr->host));
+    memset(cr->user, 0, sizeof(cr->user));
+    if (upstream_host != NULL) {
+        strncpy(cr->host, upstream_host, sizeof(cr->host) - 1);
+    }
+    cr->port = upstream_port;
+    if (upstream_user != NULL) {
+        strncpy(cr->user, upstream_user, sizeof(cr->user) - 1);
+    } else if (username != NULL) {
+        strncpy(cr->user, username, sizeof(cr->user) - 1);
+    }
+}
 
-    memset(cr, 0, sizeof(*cr));
-    cr->error = UPSTREAM_ERR_NONE;
-    
-    /* First, try to find route from config */
+static bool upstream_error_retryable(upstream_error_t error) {
+    return error == UPSTREAM_ERR_CONNECT_FAILED || error == UPSTREAM_ERR_CIRCUIT_OPEN;
+}
+
+static void sleep_retry_delay_ms(uint32_t delay_ms) {
+    struct timespec ts;
+
+    if (delay_ms == 0) {
+        return;
+    }
+    ts.tv_sec = (time_t)(delay_ms / 1000);
+    ts.tv_nsec = (long)(delay_ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+}
+
+static ssh_session connect_resolved_upstream(proxy_handler_context_t *ctx, const char *username,
+                                             const char *client_addr, session_metadata_t *meta,
+                                             const char *upstream_host, uint16_t upstream_port,
+                                             const char *upstream_user,
+                                             const char *privkey_path, config_route_t *route,
+                                             bool half_open_probe, connect_result_t *cr) {
+    ssh_session upstream;
+    int rc = SSH_AUTH_DENIED;
+
+    set_connect_result_target(cr, username, upstream_host, upstream_port, upstream_user);
+    if (meta != NULL) {
+        strncpy(meta->target_addr, upstream_host, sizeof(meta->target_addr) - 1);
+        meta->target_port = upstream_port;
+        session_sync(ctx->session);
+    }
+
     if (ctx->config != NULL) {
-        config_route_t *route = config_find_route(ctx->config, username);
-        if (route != NULL) {
-            upstream_host = route->upstream_host;
-            upstream_port = route->upstream_port;
-            upstream_user = route->upstream_user[0] ? route->upstream_user : NULL;
-            privkey_path = route->privkey_path[0] ? route->privkey_path : NULL;
-            LOG_INFO("Route found for user '%s' -> %s:%u (user=%s)", 
-                     username, upstream_host, upstream_port, 
-                     upstream_user ? upstream_user : "(default)");
-        } else {
-            LOG_WARN("No route found for user '%s', using default", username);
+        char reason[256];
+        if (!config_policy_allows_connection(ctx->config, username, upstream_host, client_addr,
+                                             time(NULL), reason, sizeof(reason))) {
+            if (half_open_probe) {
+                config_route_circuit_release_probe(route);
+            }
+            cr->error = UPSTREAM_ERR_POLICY_DENIED;
+            snprintf(cr->stage, sizeof(cr->stage), "Policy evaluation");
+            snprintf(cr->detail, sizeof(cr->detail), "%s",
+                     reason[0] != '\0' ? reason : "connection denied by policy");
+            return NULL;
         }
     }
 
-    /* Populate cr with route info */
-    strncpy(cr->host, upstream_host, sizeof(cr->host) - 1);
-    cr->port = upstream_port;
-    if (upstream_user) {
-        strncpy(cr->user, upstream_user, sizeof(cr->user) - 1);
-    } else if (username) {
-        strncpy(cr->user, username, sizeof(cr->user) - 1);
-    }
-    
-    /* Update session metadata */
-    session_metadata_t *meta = session_get_metadata(ctx->session);
-    if (meta) {
-        strncpy(meta->target_addr, upstream_host, sizeof(meta->target_addr) - 1);
-        meta->target_port = upstream_port;
-    }
-
-    /* Connect to upstream SSH server */
-    ssh_session upstream = ssh_new();
+    upstream = ssh_new();
     if (upstream == NULL) {
+        if (half_open_probe) {
+            config_route_circuit_release_probe(route);
+        }
         LOG_ERROR("Failed to create upstream SSH session");
         cr->error = UPSTREAM_ERR_SESSION_ALLOC;
         snprintf(cr->stage, sizeof(cr->stage), "Session allocation");
         snprintf(cr->detail, sizeof(cr->detail), "Failed to create SSH session object");
         return NULL;
     }
-    
+
     ssh_options_set(upstream, SSH_OPTIONS_HOST, upstream_host);
     ssh_options_set(upstream, SSH_OPTIONS_PORT, &upstream_port);
     if (upstream_user != NULL) {
         ssh_options_set(upstream, SSH_OPTIONS_USER, upstream_user);
     }
-    
+
+    if (half_open_probe) {
+        LOG_INFO("Probing half-open circuit for %s:%u", upstream_host, upstream_port);
+    }
     LOG_DEBUG("Connecting to upstream %s:%u", upstream_host, upstream_port);
     cr->attempts++;
-    
+
     if (ssh_connect(upstream) != SSH_OK) {
-        LOG_ERROR("Failed to connect to upstream %s:%u: %s", 
-                  upstream_host, upstream_port, ssh_get_error(upstream));
+        if (route != NULL) {
+            config_route_circuit_record_failure(ctx->config, route, time(NULL));
+        } else if (half_open_probe) {
+            config_route_circuit_release_probe(route);
+        }
+        LOG_ERROR("Failed to connect to upstream %s:%u: %s", upstream_host, upstream_port,
+                  ssh_get_error(upstream));
         cr->error = UPSTREAM_ERR_CONNECT_FAILED;
         snprintf(cr->stage, sizeof(cr->stage), "TCP connection");
         snprintf(cr->detail, sizeof(cr->detail), "%s", ssh_get_error(upstream));
         ssh_free(upstream);
         return NULL;
     }
-    
+
+    if (route != NULL) {
+        config_route_circuit_record_success(route);
+    }
     LOG_INFO("Connected to upstream %s:%u", upstream_host, upstream_port);
 
-    /* Authenticate to upstream */
-    int rc = SSH_AUTH_DENIED;
-    
-    /* Try private key if specified */
     if (privkey_path != NULL) {
         LOG_DEBUG("Trying private key auth with %s", privkey_path);
         ssh_key privkey = NULL;
@@ -402,8 +668,7 @@ static ssh_session connect_upstream(proxy_handler_context_t *ctx, const char *us
             snprintf(cr->detail, sizeof(cr->detail), "Failed to load key: %.230s", privkey_path);
         }
     }
-    
-    /* Try publickey auto (uses SSH agent or default keys) */
+
     if (rc != SSH_AUTH_SUCCESS) {
         rc = ssh_userauth_publickey_auto(upstream, upstream_user, NULL);
         if (rc == SSH_AUTH_SUCCESS) {
@@ -414,8 +679,7 @@ static ssh_session connect_upstream(proxy_handler_context_t *ctx, const char *us
         snprintf(cr->stage, sizeof(cr->stage), "Auto key authentication");
         snprintf(cr->detail, sizeof(cr->detail), "%s", ssh_get_error(upstream));
     }
-    
-    /* Try none auth */
+
     if (rc != SSH_AUTH_SUCCESS) {
         rc = ssh_userauth_none(upstream, upstream_user);
         if (rc == SSH_AUTH_SUCCESS) {
@@ -423,7 +687,7 @@ static ssh_session connect_upstream(proxy_handler_context_t *ctx, const char *us
             return upstream;
         }
     }
-    
+
     LOG_ERROR("Failed to authenticate to upstream %s:%u", upstream_host, upstream_port);
     cr->error = UPSTREAM_ERR_AUTH_ALL_FAILED;
     snprintf(cr->stage, sizeof(cr->stage), "Upstream authentication");
@@ -431,6 +695,126 @@ static ssh_session connect_upstream(proxy_handler_context_t *ctx, const char *us
              upstream_host, upstream_port);
     ssh_disconnect(upstream);
     ssh_free(upstream);
+    return NULL;
+}
+
+/* Connect to upstream */
+static ssh_session connect_upstream(proxy_handler_context_t *ctx, const char *username,
+                                    connect_result_t *cr) {
+    static const uint32_t kDefaultRetryInitialDelayMs = 100;
+    static const uint32_t kDefaultRetryMaxDelayMs = 5000;
+    static const float kDefaultRetryBackoff = 2.0f;
+    const char *default_host = "127.0.0.1";
+    uint16_t default_port = 22;
+    session_metadata_t *meta = session_get_metadata(ctx->session);
+    const char *client_addr =
+        (meta != NULL && meta->client_addr[0] != '\0') ? meta->client_addr : NULL;
+    int max_retries = 0;
+    uint32_t delay_ms = kDefaultRetryInitialDelayMs;
+    uint32_t max_delay_ms = kDefaultRetryMaxDelayMs;
+    float backoff = kDefaultRetryBackoff;
+
+    memset(cr, 0, sizeof(*cr));
+    cr->error = UPSTREAM_ERR_NONE;
+
+    if (ctx->config != NULL) {
+        max_retries = ctx->config->router_retry_max;
+        delay_ms = ctx->config->router_retry_initial_delay_ms > 0
+                       ? ctx->config->router_retry_initial_delay_ms
+                       : kDefaultRetryInitialDelayMs;
+        max_delay_ms = ctx->config->router_retry_max_delay_ms >= delay_ms
+                           ? ctx->config->router_retry_max_delay_ms
+                           : delay_ms;
+        backoff = ctx->config->router_retry_backoff_factor >= 1.0f
+                      ? ctx->config->router_retry_backoff_factor
+                      : kDefaultRetryBackoff;
+    }
+    if (max_retries < 0) {
+        max_retries = 0;
+    }
+
+    for (int round = 0; round <= max_retries; round++) {
+        config_route_t **routes = NULL;
+        size_t route_count = 0;
+        bool attempted_route = false;
+        bool skipped_open = false;
+
+        if (ctx->config != NULL) {
+            route_count =
+                config_get_route_candidates_for_client(ctx->config, username, client_addr, &routes);
+        }
+
+        if (route_count == 0) {
+            if (round == 0) {
+                LOG_WARN("No route found for user '%s', using default", username);
+            }
+            free(routes);
+            return connect_resolved_upstream(ctx, username, client_addr, meta, default_host,
+                                             default_port, NULL, NULL, NULL, false, cr);
+        }
+
+        for (size_t i = 0; i < route_count; i++) {
+            config_route_t *route = routes[i];
+            bool half_open_probe = false;
+
+            if (!config_route_circuit_try_acquire(ctx->config, route, time(NULL),
+                                                  &half_open_probe)) {
+                skipped_open = true;
+                LOG_WARN("Skipping route '%s' -> %s:%u because its circuit is open",
+                         route->proxy_user, route->upstream_host, route->upstream_port);
+                continue;
+            }
+
+            attempted_route = true;
+            LOG_INFO("Route candidate for user '%s' from %s -> %s:%u (user=%s%s%s%s%s%s)",
+                     username, client_addr != NULL ? client_addr : "unknown",
+                     route->upstream_host, route->upstream_port,
+                     route->upstream_user[0] != '\0' ? route->upstream_user : "(default)",
+                     route->geo_city[0] != '\0' ? ", city=" : "",
+                     route->geo_city[0] != '\0' ? route->geo_city : "",
+                     route->geo_region[0] != '\0' ? ", region=" : "",
+                     route->geo_region[0] != '\0' ? route->geo_region : "",
+                     half_open_probe ? ", circuit=half-open" : "");
+
+            ssh_session upstream =
+                connect_resolved_upstream(ctx, username, client_addr, meta, route->upstream_host,
+                                          route->upstream_port,
+                                          route->upstream_user[0] != '\0'
+                                              ? route->upstream_user
+                                              : NULL,
+                                          route->privkey_path[0] != '\0' ? route->privkey_path
+                                                                          : NULL,
+                                          route, half_open_probe, cr);
+            if (upstream != NULL) {
+                free(routes);
+                return upstream;
+            }
+            if (!upstream_error_retryable(cr->error)) {
+                free(routes);
+                return NULL;
+            }
+        }
+
+        free(routes);
+        if (!attempted_route && skipped_open) {
+            cr->error = UPSTREAM_ERR_CIRCUIT_OPEN;
+            snprintf(cr->stage, sizeof(cr->stage), "Circuit breaker");
+            snprintf(cr->detail, sizeof(cr->detail),
+                     "All matching upstream circuits are open; waiting for recovery");
+        }
+        if (round >= max_retries || !upstream_error_retryable(cr->error)) {
+            break;
+        }
+        LOG_INFO("Retrying upstream connect for user '%s' (%d/%d) after %u ms",
+                 username != NULL ? username : "unknown", round + 1, max_retries, delay_ms);
+        sleep_retry_delay_ms(delay_ms);
+        if ((float)delay_ms * backoff > (float)max_delay_ms) {
+            delay_ms = max_delay_ms;
+        } else {
+            delay_ms = (uint32_t)((float)delay_ms * backoff);
+        }
+    }
+
     return NULL;
 }
 
@@ -448,6 +832,7 @@ static void forward_loop(proxy_handler_context_t *ctx,
         .username = username,
         .user_data = NULL
     };
+    session_stats_t *stats = session_get_stats(ctx->session);
 
     /* Get socket file descriptors for epoll */
     ssh_session client_session = session_get_client(ctx->session);
@@ -525,6 +910,10 @@ static void forward_loop(proxy_handler_context_t *ctx,
                 LOG_DEBUG("Write to upstream failed");
                 goto end_loop;
             }
+            if (stats != NULL) {
+                stats->bytes_sent += (uint64_t)rc;
+            }
+            session_touch(ctx->session);
         }
         if (nbytes < 0 && nbytes != SSH_AGAIN) {
             LOG_DEBUG("Read from client failed: %d", nbytes);
@@ -537,6 +926,10 @@ static void forward_loop(proxy_handler_context_t *ctx,
             if (rc < 0) {
                 goto end_loop;
             }
+            if (stats != NULL) {
+                stats->bytes_sent += (uint64_t)rc;
+            }
+            session_touch(ctx->session);
         }
 
         /* Always try to read from upstream channel */
@@ -552,6 +945,10 @@ static void forward_loop(proxy_handler_context_t *ctx,
                 LOG_DEBUG("Write to client failed");
                 goto end_loop;
             }
+            if (stats != NULL) {
+                stats->bytes_received += (uint64_t)rc;
+            }
+            session_touch(ctx->session);
         }
         if (nbytes < 0 && nbytes != SSH_AGAIN) {
             LOG_DEBUG("Read from upstream failed: %d", nbytes);
@@ -564,6 +961,10 @@ static void forward_loop(proxy_handler_context_t *ctx,
             if (rc < 0) {
                 goto end_loop;
             }
+            if (stats != NULL) {
+                stats->bytes_received += (uint64_t)rc;
+            }
+            session_touch(ctx->session);
         }
     }
 
@@ -633,7 +1034,10 @@ static const char *upstream_error_stage(upstream_error_t err) {
         case UPSTREAM_ERR_AUTH_AUTO:         return "Automatic Key Authentication";
         case UPSTREAM_ERR_AUTH_NONE:         return "Server Authentication";
         case UPSTREAM_ERR_AUTH_ALL_FAILED:   return "Upstream Authentication";
+        case UPSTREAM_ERR_POLICY_DENIED:     return "Policy Evaluation";
+        case UPSTREAM_ERR_CIRCUIT_OPEN:      return "Circuit Breaker";
         case UPSTREAM_ERR_CHANNEL_OPEN:      return "Channel Setup";
+        case UPSTREAM_ERR_CHANNEL_REQUEST:   return "Channel Request";
         default:                             return "Unknown";
     }
 }
@@ -686,6 +1090,19 @@ static void send_connection_error(ssh_channel ch, const connect_result_t *result
                 result->host,
                 result->user[0] ? result->user : "(default)");
             break;
+        case UPSTREAM_ERR_POLICY_DENIED:
+            send_channel_msg(ch,
+                "    * Access is blocked by a contextual policy\r\n"
+                "    * Check login window or source-network restrictions for '%s'\r\n",
+                result->user[0] ? result->user : "(default)");
+            break;
+        case UPSTREAM_ERR_CIRCUIT_OPEN:
+            send_channel_msg(ch,
+                "    * All matching upstream nodes are temporarily marked unhealthy\r\n"
+                "    * Wait for the circuit-breaker cool-down window to expire\r\n"
+                "    * Check upstream node health or route pool size for '%s'\r\n",
+                result->user[0] ? result->user : "(default)");
+            break;
         case UPSTREAM_ERR_SESSION_ALLOC:
             send_channel_msg(ch,
                 "    * Proxy server out of memory\r\n"
@@ -695,6 +1112,12 @@ static void send_connection_error(ssh_channel ch, const connect_result_t *result
             send_channel_msg(ch,
                 "    * Upstream server denied channel open request\r\n"
                 "    * Upstream MaxSessions limit may be reached\r\n");
+            break;
+        case UPSTREAM_ERR_CHANNEL_REQUEST:
+            send_channel_msg(ch,
+                "    * Upstream server rejected the requested shell, exec, or subsystem\r\n"
+                "    * The requested subsystem may not be installed on upstream\r\n"
+                "    * The upstream account may not be allowed to start that service\r\n");
             break;
         default:
             send_channel_msg(ch, "    * An unexpected error occurred\r\n");
@@ -720,6 +1143,29 @@ static void send_connection_error(ssh_channel ch, const connect_result_t *result
         "\033[1;36m========================================\033[0m\r\n\r\n");
 }
 
+static void report_channel_request_error(ssh_session upstream_session,
+                                         ssh_channel client_channel,
+                                         bool show_progress,
+                                         const connect_result_t *base_result,
+                                         const char *stage)
+{
+    connect_result_t req_err = {0};
+
+    req_err.error = UPSTREAM_ERR_CHANNEL_REQUEST;
+    snprintf(req_err.stage, sizeof(req_err.stage), "%s", stage);
+    snprintf(req_err.detail, sizeof(req_err.detail), "%s", ssh_get_error(upstream_session));
+    if (base_result != NULL) {
+        strncpy(req_err.host, base_result->host, sizeof(req_err.host) - 1);
+        req_err.port = base_result->port;
+        strncpy(req_err.user, base_result->user, sizeof(req_err.user) - 1);
+    }
+
+    LOG_ERROR("%s failed: %s", stage, req_err.detail);
+    if (show_progress && client_channel != NULL) {
+        send_connection_error(client_channel, &req_err);
+    }
+}
+
 /* Send success footer to client */
 static void send_connection_success(ssh_channel ch)
 {
@@ -734,24 +1180,16 @@ void *proxy_handler_run(void *arg) {
     ssh_session upstream_session = NULL;
     ssh_channel client_channel = NULL;
     ssh_channel upstream_channel = NULL;
+    channel_request_state_t request_state;
 
     LOG_INFO("Handler started for session %lu", session_get_id(ctx->session));
+    channel_request_state_init(&request_state);
 
     /* 1. Setup auth callbacks and perform handshake/auth */
     if (setup_auth_and_handshake(ctx, &username) != 0) {
         goto cleanup;
     }
     session_set_state(ctx->session, SESSION_STATE_AUTHENTICATED);
-    
-    /* Notify filters of successful authentication */
-    if (ctx->filters != NULL) {
-        filter_context_t auth_ctx = {
-            .session = ctx->session,
-            .username = username,
-            .user_data = NULL
-        };
-        filter_chain_on_authenticated(ctx->filters, &auth_ctx);
-    }
 
     /* 2. Open Channel - Wait for channel open request from client */
     /* (Moved BEFORE upstream connect so we can send status messages) */
@@ -774,34 +1212,25 @@ void *proxy_handler_run(void *arg) {
 
     /* 3. Handle PTY/Shell/Exec requests from client */
     /* Save these for later replay to upstream after connection is established */
-    char saved_term[64] = "xterm-256color";
-    int saved_width = 80, saved_height = 24;
-    bool has_pty = false;
-    char saved_command[4096] = {0};
-    bool is_exec = false;
-    #define MAX_SAVED_ENVS 32
-    struct { char name[256]; char value[1024]; } saved_envs[MAX_SAVED_ENVS];
-    int saved_env_count = 0;
-
-    bool got_shell_or_exec = false;
     while ((message = ssh_message_get(client_session))) {
         if (ssh_message_type(message) == SSH_REQUEST_CHANNEL &&
             ssh_message_channel_request_channel(message) == client_channel) {
             
             int subtype = ssh_message_subtype(message);
             if (subtype == SSH_CHANNEL_REQUEST_SHELL) {
-                is_exec = false;
-                got_shell_or_exec = true;
+                channel_request_state_set_shell(&request_state);
                 ssh_message_channel_request_reply_success(message);
                 ssh_message_free(message);
                 break;
             } else if (subtype == SSH_CHANNEL_REQUEST_EXEC) {
                 const char *cmd = ssh_message_channel_request_command(message);
-                if (cmd) {
-                    strncpy(saved_command, cmd, sizeof(saved_command) - 1);
-                }
-                is_exec = true;
-                got_shell_or_exec = true;
+                channel_request_state_set_exec(&request_state, cmd);
+                ssh_message_channel_request_reply_success(message);
+                ssh_message_free(message);
+                break;
+            } else if (subtype == SSH_CHANNEL_REQUEST_SUBSYSTEM) {
+                const char *subsystem = ssh_message_channel_request_subsystem(message);
+                channel_request_state_set_subsystem(&request_state, subsystem);
                 ssh_message_channel_request_reply_success(message);
                 ssh_message_free(message);
                 break;
@@ -813,12 +1242,7 @@ void *proxy_handler_run(void *arg) {
                 LOG_DEBUG("PTY request: term=%s, size=%dx%d", 
                           term ? term : "unknown", width, height);
                 
-                if (term) {
-                    strncpy(saved_term, term, sizeof(saved_term) - 1);
-                }
-                saved_width = width;
-                saved_height = height;
-                has_pty = true;
+                channel_request_state_set_pty(&request_state, term, width, height);
                 
                 ssh_message_channel_request_reply_success(message);
                 ssh_message_free(message);
@@ -826,20 +1250,15 @@ void *proxy_handler_run(void *arg) {
             } else if (subtype == SSH_CHANNEL_REQUEST_ENV) {
                 const char *env_name = ssh_message_channel_request_env_name(message);
                 const char *env_value = ssh_message_channel_request_env_value(message);
-                if (env_name && env_value && saved_env_count < MAX_SAVED_ENVS) {
-                    strncpy(saved_envs[saved_env_count].name, env_name,
-                            sizeof(saved_envs[saved_env_count].name) - 1);
-                    strncpy(saved_envs[saved_env_count].value, env_value,
-                            sizeof(saved_envs[saved_env_count].value) - 1);
-                    saved_env_count++;
-                }
+                channel_request_state_add_env(&request_state, env_name, env_value);
                 ssh_message_channel_request_reply_success(message);
                 ssh_message_free(message);
                 continue;
             } else if (subtype == SSH_CHANNEL_REQUEST_WINDOW_CHANGE) {
                 /* Save as PTY size update */
-                saved_width = ssh_message_channel_request_pty_width(message);
-                saved_height = ssh_message_channel_request_pty_height(message);
+                channel_request_state_update_window(&request_state,
+                                                    ssh_message_channel_request_pty_width(message),
+                                                    ssh_message_channel_request_pty_height(message));
                 ssh_message_channel_request_reply_success(message);
                 ssh_message_free(message);
                 continue;
@@ -854,7 +1273,10 @@ void *proxy_handler_run(void *arg) {
     uint16_t disp_upstream_port = 22;
     const char *disp_upstream_user = NULL;
     if (ctx->config != NULL) {
-        config_route_t *route = config_find_route(ctx->config, username);
+        session_metadata_t *meta = session_get_metadata(ctx->session);
+        const char *client_addr =
+            (meta != NULL && meta->client_addr[0] != '\0') ? meta->client_addr : NULL;
+        config_route_t *route = config_find_route_for_client(ctx->config, username, client_addr);
         if (route != NULL) {
             disp_upstream_host = route->upstream_host;
             disp_upstream_port = route->upstream_port;
@@ -894,7 +1316,6 @@ void *proxy_handler_run(void *arg) {
         send_channel_msg(client_channel,
             "  \033[1;32m[" "\xe2\x9c\x93" "]\033[0m Upstream connection established\r\n"
             "  \033[1;32m[" "\xe2\x9c\x93" "]\033[0m Upstream authentication successful\r\n");
-        send_connection_success(client_channel);
     }
 
     /* 7. Open upstream channel and forward saved requests */
@@ -913,22 +1334,59 @@ void *proxy_handler_run(void *arg) {
         }
         goto cleanup;
     }
-
+    
     /* Replay saved requests to upstream */
-    if (has_pty) {
-        ssh_channel_request_pty_size(upstream_channel, saved_term, saved_width, saved_height);
+    if (request_state.has_pty &&
+        ssh_channel_request_pty_size(upstream_channel, request_state.term,
+                                     request_state.width, request_state.height) != SSH_OK) {
+        report_channel_request_error(upstream_session, client_channel, show_progress, &cr,
+                                     "Replay PTY request");
+        goto cleanup;
     }
-    for (int i = 0; i < saved_env_count; i++) {
-        ssh_channel_request_env(upstream_channel, saved_envs[i].name, saved_envs[i].value);
+    for (int i = 0; i < request_state.env_count; i++) {
+        if (ssh_channel_request_env(upstream_channel, request_state.envs[i].name,
+                                    request_state.envs[i].value) != SSH_OK) {
+            report_channel_request_error(upstream_session, client_channel, show_progress, &cr,
+                                         "Replay environment request");
+            goto cleanup;
+        }
     }
-    if (is_exec) {
-        ssh_channel_request_exec(upstream_channel, saved_command);
-    } else if (got_shell_or_exec) {
-        ssh_channel_request_shell(upstream_channel);
+    switch (request_state.request_type) {
+        case CHANNEL_REQUEST_EXEC:
+            if (ssh_channel_request_exec(upstream_channel, request_state.command) != SSH_OK) {
+                report_channel_request_error(upstream_session, client_channel, show_progress, &cr,
+                                             "Replay exec request");
+                goto cleanup;
+            }
+            break;
+        case CHANNEL_REQUEST_SUBSYSTEM:
+            if (ssh_channel_request_subsystem(upstream_channel, request_state.subsystem) != SSH_OK) {
+                report_channel_request_error(upstream_session, client_channel, show_progress, &cr,
+                                             "Replay subsystem request");
+                goto cleanup;
+            }
+            break;
+        case CHANNEL_REQUEST_SHELL:
+            if (ssh_channel_request_shell(upstream_channel) != SSH_OK) {
+                report_channel_request_error(upstream_session, client_channel, show_progress, &cr,
+                                             "Replay shell request");
+                goto cleanup;
+            }
+            break;
+        case CHANNEL_REQUEST_NONE:
+        default:
+            break;
+    }
+
+    if (show_progress && client_channel != NULL) {
+        send_connection_success(client_channel);
     }
 
     session_set_state(ctx->session, SESSION_STATE_ACTIVE);
     LOG_INFO("Session %lu active, forwarding...", session_get_id(ctx->session));
+    emit_session_webhook(ctx, WEBHOOK_EVENT_SESSION_START,
+                         username, disp_upstream_user,
+                         disp_upstream_host, disp_upstream_port);
 
     /* 8. Send MOTD after connection established */
     if (ctx->config != NULL && ctx->config->motd[0] != '\0') {
@@ -960,6 +1418,9 @@ void *proxy_handler_run(void *arg) {
 
 cleanup:
     LOG_INFO("Session %lu ending", session_get_id(ctx->session));
+    emit_session_webhook(ctx, WEBHOOK_EVENT_SESSION_END,
+                         username, disp_upstream_user,
+                         disp_upstream_host, disp_upstream_port);
     
     if (client_channel) {
         ssh_channel_send_eof(client_channel);

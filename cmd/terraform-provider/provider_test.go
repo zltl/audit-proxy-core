@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +14,15 @@ import (
 func fakeAPI(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
+	configDoc := map[string]interface{}{
+		"listen_port": 2222,
+		"routes": []map[string]interface{}{
+			{"pattern": "alice", "upstream": "10.0.0.10", "port": 22, "user": "ubuntu", "auth_method": "key"},
+		},
+		"policies": []map[string]interface{}{
+			{"pattern": "alice@prod", "allow": []string{"shell", "exec"}, "deny": []string{"port_forward"}},
+		},
+	}
 
 	mux.HandleFunc("GET /api/v2/users", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -24,10 +31,24 @@ func fakeAPI(t *testing.T) *httptest.Server {
 		})
 	})
 
+	mux.HandleFunc("GET /api/v2/users/{username}", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"data":    map[string]string{"username": r.PathValue("username"), "role": "viewer"},
+		})
+	})
+
 	mux.HandleFunc("GET /api/v2/servers", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
 			"data":    []map[string]string{{"id": "srv-1", "host": "10.0.0.1"}},
+		})
+	})
+
+	mux.HandleFunc("GET /api/v2/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"data":    map[string]string{"id": r.PathValue("id"), "host": "10.0.0.1"},
 		})
 	})
 
@@ -75,13 +96,14 @@ func fakeAPI(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /api/v2/config", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
-			"data":    map[string]interface{}{"listen_port": 2222},
+			"data":    configDoc,
 		})
 	})
 
 	mux.HandleFunc("PUT /api/v2/config", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
 		json.NewDecoder(r.Body).Decode(&body)
+		configDoc = body
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "data": body})
 	})
 
@@ -119,6 +141,34 @@ func TestReadServers(t *testing.T) {
 	client := makeClient(t, srv.URL)
 
 	result, err := dispatch("read-servers", nil, strings.NewReader(""), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Contains(result, []byte("srv-1")) {
+		t.Errorf("expected srv-1 in result: %s", string(result))
+	}
+}
+
+func TestReadUser(t *testing.T) {
+	srv := fakeAPI(t)
+	defer srv.Close()
+	client := makeClient(t, srv.URL)
+
+	result, err := dispatch("read-user", []string{"alice"}, strings.NewReader(""), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Contains(result, []byte("alice")) {
+		t.Errorf("expected alice in result: %s", string(result))
+	}
+}
+
+func TestReadServer(t *testing.T) {
+	srv := fakeAPI(t)
+	defer srv.Close()
+	client := makeClient(t, srv.URL)
+
+	result, err := dispatch("read-server", []string{"srv-1"}, strings.NewReader(""), client)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -255,6 +305,88 @@ func TestApplyConfig(t *testing.T) {
 	}
 }
 
+func TestReadRoutes(t *testing.T) {
+	srv := fakeAPI(t)
+	defer srv.Close()
+	client := makeClient(t, srv.URL)
+
+	result, err := dispatch("read-routes", nil, strings.NewReader(""), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Contains(result, []byte("10.0.0.10")) {
+		t.Errorf("expected upstream in result: %s", string(result))
+	}
+}
+
+func TestCreateRoute(t *testing.T) {
+	srv := fakeAPI(t)
+	defer srv.Close()
+	client := makeClient(t, srv.URL)
+
+	input := `{"pattern":"ops","upstream":"10.0.2.5","port":22,"user":"root","auth_method":"key"}`
+	result, err := dispatch("create-route", nil, strings.NewReader(input), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Contains(result, []byte("10.0.2.5")) {
+		t.Errorf("expected new route in result: %s", string(result))
+	}
+
+	routes, err := dispatch("read-routes", nil, strings.NewReader(""), client)
+	if err != nil {
+		t.Fatalf("unexpected error reading routes: %v", err)
+	}
+	if !bytes.Contains(routes, []byte("10.0.2.5")) {
+		t.Errorf("expected persisted route in config: %s", string(routes))
+	}
+}
+
+func TestUpdatePolicy(t *testing.T) {
+	srv := fakeAPI(t)
+	defer srv.Close()
+	client := makeClient(t, srv.URL)
+
+	input := `{"pattern":"alice@prod","allow":["shell","exec","scp"],"deny":["port_forward"]}`
+	result, err := dispatch("update-policy", nil, strings.NewReader(input), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Contains(result, []byte("scp")) {
+		t.Errorf("expected updated policy in result: %s", string(result))
+	}
+
+	policy, err := dispatch("read-policy", []string{"alice@prod"}, strings.NewReader(""), client)
+	if err != nil {
+		t.Fatalf("unexpected error reading policy: %v", err)
+	}
+	if !bytes.Contains(policy, []byte("scp")) {
+		t.Errorf("expected persisted policy change: %s", string(policy))
+	}
+}
+
+func TestDeleteRoute(t *testing.T) {
+	srv := fakeAPI(t)
+	defer srv.Close()
+	client := makeClient(t, srv.URL)
+
+	result, err := dispatch("delete-route", []string{"alice", "10.0.0.10", "22"}, strings.NewReader(""), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Contains(result, []byte("deleted")) {
+		t.Errorf("expected deleted response: %s", string(result))
+	}
+
+	routes, err := dispatch("read-routes", nil, strings.NewReader(""), client)
+	if err != nil {
+		t.Fatalf("unexpected error reading routes: %v", err)
+	}
+	if bytes.Contains(routes, []byte("10.0.0.10")) {
+		t.Errorf("expected route to be removed: %s", string(routes))
+	}
+}
+
 func TestUnknownAction(t *testing.T) {
 	srv := fakeAPI(t)
 	defer srv.Close()
@@ -385,18 +517,4 @@ func TestAPIErrorResponse(t *testing.T) {
 	if !strings.Contains(err.Error(), "forbidden") {
 		t.Errorf("unexpected error: %v", err)
 	}
-}
-
-// helpers to keep the test output capturing functionality separate
-func captureOutput(fn func()) string {
-	old := io.Discard
-	_ = old
-	return ""
-}
-
-func ptr(s string) *string { return &s }
-
-func init() {
-	// Ensure the formatter function compiles.
-	_ = fmt.Sprintf
 }

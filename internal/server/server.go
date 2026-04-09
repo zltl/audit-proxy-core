@@ -9,19 +9,30 @@ import (
 	"html/template"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/api"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cluster"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cmdctrl"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/collab"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/compliance"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dataplane"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/grpcapi"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/oidc"
+	samlprovider "github.com/ssh-proxy-core/ssh-proxy-core/internal/saml"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/threat"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/ws"
 	"github.com/ssh-proxy-core/ssh-proxy-core/web"
+	"google.golang.org/grpc"
 )
 
 // Server is the top-level HTTP server for the control-plane.
@@ -29,10 +40,20 @@ type Server struct {
 	config         *config.Config
 	mux            *http.ServeMux
 	dp             *dataplane.Client
+	apiHandler     *api.API
 	tmpl           *template.Template
 	srv            *http.Server
 	oidcProvider   *oidc.Provider
 	oidcRoleMapper *oidc.RoleMapping
+	samlProvider   *samlprovider.Provider
+	clusterManager *cluster.Manager
+	threatDetector *threat.Detector
+	cliLogin       *cliLoginManager
+	grpcBridge     *grpcapi.BridgeServer
+	grpcServer     *grpc.Server
+	grpcListener   net.Listener
+	backgroundCtx  context.Context
+	stopBackground context.CancelFunc
 }
 
 // New creates a fully-initialised Server.  It loads templates, builds the
@@ -45,11 +66,17 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("server: load templates: %w", err)
 	}
 
+	backgroundCtx, stopBackground := context.WithCancel(context.Background())
+
 	s := &Server{
-		config: cfg,
-		mux:    http.NewServeMux(),
-		dp:     dp,
-		tmpl:   tmpl,
+		config:         cfg,
+		mux:            http.NewServeMux(),
+		dp:             dp,
+		tmpl:           tmpl,
+		cliLogin:       newCLILoginManager(),
+		grpcBridge:     grpcapi.NewBridgeServer(dp),
+		backgroundCtx:  backgroundCtx,
+		stopBackground: stopBackground,
 	}
 
 	// Initialise OIDC provider when enabled.
@@ -79,13 +106,38 @@ func New(cfg *config.Config) (*Server, error) {
 			Default:  defaultRole,
 		}
 	}
+	if cfg.SAMLEnabled {
+		provider, samlErr := samlprovider.NewProvider(&samlprovider.Config{
+			RootURL:            cfg.SAMLRootURL,
+			EntityID:           cfg.SAMLEntityID,
+			IDPMetadataURL:     cfg.SAMLIDPMetadataURL,
+			IDPMetadataFile:    cfg.SAMLIDPMetadataFile,
+			CertFile:           cfg.SAMLSPCert,
+			KeyFile:            cfg.SAMLSPKey,
+			UsernameAttribute:  cfg.SAMLUsernameAttribute,
+			RolesAttribute:     cfg.SAMLRolesAttribute,
+			RoleMappings:       cfg.SAMLRoleMappings,
+			AllowIDPInitiated:  cfg.SAMLAllowIDPInitiated,
+			DefaultRedirectURI: "/dashboard",
+		})
+		if samlErr != nil {
+			return nil, fmt.Errorf("server: init SAML: %w", samlErr)
+		}
+		s.samlProvider = provider
+	}
 
-	s.routes()
+	if err := s.routes(); err != nil {
+		stopBackground()
+		return nil, err
+	}
 
 	handler := middleware.Chain(
 		s.mux,
+		middleware.HSTS(cfg.HSTSEnabled, cfg.HSTSIncludeSubdomains, cfg.HSTSPreload),
 		middleware.Recovery,
 		middleware.Logger,
+		middleware.APIAudit(cfg.AuditLogDir, cfg.SessionSecret),
+		middleware.RateLimit(10, 60),
 		middleware.Compression,
 		middleware.CSRF(cfg.SessionSecret),
 		middleware.Auth(cfg.SessionSecret),
@@ -97,6 +149,10 @@ func New(cfg *config.Config) (*Server, error) {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	s.srv.TLSConfig, err = buildRuntimeTLSConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	return s, nil
 }
@@ -104,6 +160,14 @@ func New(cfg *config.Config) (*Server, error) {
 // Start begins listening.  If both TLSCert and TLSKey are configured it
 // serves HTTPS; otherwise plain HTTP.
 func (s *Server) Start() error {
+	if err := s.startGRPC(); err != nil {
+		return err
+	}
+	if s.srv.TLSConfig != nil &&
+		(len(s.srv.TLSConfig.Certificates) > 0 || s.srv.TLSConfig.GetCertificate != nil) {
+		log.Printf("control-plane listening on %s (runtime TLS)", s.config.ListenAddr)
+		return s.srv.ListenAndServeTLS("", "")
+	}
 	if s.config.TLSCert != "" && s.config.TLSKey != "" {
 		log.Printf("control-plane listening on %s (TLS)", s.config.ListenAddr)
 		return s.srv.ListenAndServeTLS(s.config.TLSCert, s.config.TLSKey)
@@ -114,7 +178,33 @@ func (s *Server) Start() error {
 
 // Shutdown gracefully drains in-flight connections.
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.threatDetector != nil {
+		_ = s.threatDetector.Stop()
+	}
+	if s.clusterManager != nil {
+		_ = s.clusterManager.Stop()
+	}
+	if s.stopBackground != nil {
+		s.stopBackground()
+	}
+	if s.apiHandler != nil {
+		_ = s.apiHandler.Close()
+	}
+	if s.grpcServer != nil {
+		s.grpcServer.GracefulStop()
+	}
+	if s.grpcListener != nil {
+		_ = s.grpcListener.Close()
+	}
 	return s.srv.Shutdown(ctx)
+}
+
+// GRPCAddr returns the actual gRPC listen address when the listener is active.
+func (s *Server) GRPCAddr() string {
+	if s.grpcListener == nil {
+		return ""
+	}
+	return s.grpcListener.Addr().String()
 }
 
 // --------------------------------------------------------------------------
@@ -175,6 +265,14 @@ func formatBytes(b int64) string {
 	}
 }
 
+func parseOptionalDuration(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	return time.ParseDuration(raw)
+}
+
 func toJSON(v interface{}) template.JS {
 	b, _ := json.Marshal(v)
 	return template.JS(b) //nolint:gosec // intentional
@@ -230,16 +328,16 @@ func loadTemplates() (*template.Template, error) {
 // --------------------------------------------------------------------------
 
 // routes registers all HTTP handlers on the ServeMux.
-func (s *Server) routes() {
+func (s *Server) routes() error {
 	// Static assets — served from the embedded FS (or external dir override).
 	staticFS, err := fs.Sub(web.EmbeddedFS, "static")
 	if err != nil {
-		log.Fatalf("server: embedded static sub: %v", err)
+		return fmt.Errorf("server: embedded static sub: %w", err)
 	}
 	if s.config.StaticDir != "" {
-		s.mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(s.config.StaticDir))))
+		s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(s.config.StaticDir))))
 	} else {
-		s.mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
+		s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	}
 
 	// Auth routes.
@@ -250,26 +348,148 @@ func (s *Server) routes() {
 
 	// OIDC routes (registered even if disabled — handlers check the flag).
 	s.registerOIDCRoutes()
+	s.registerSAMLRoutes()
+	s.registerCLILoginRoutes()
 
 	// Health (public).
 	s.mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+	s.mux.HandleFunc("GET /api/openapi.json", s.handleOpenAPIJSON)
+	s.mux.HandleFunc("GET /api/docs", s.handleAPIDocs)
 
 	// REST API v2 — delegate to api package.
 	apiCfg := &api.Config{
-		AdminUser:     s.config.AdminUser,
-		AdminPassHash: s.config.AdminPassHash,
-		SessionSecret: s.config.SessionSecret,
-		AuditLogDir:   s.config.AuditLogDir,
-		RecordingDir:  s.config.RecordingDir,
+		AdminUser:                       s.config.AdminUser,
+		AdminPassHash:                   s.config.AdminPassHash,
+		SessionSecret:                   s.config.SessionSecret,
+		AuditLogDir:                     s.config.AuditLogDir,
+		RecordingDir:                    s.config.RecordingDir,
+		RecordingObjectStorageEnabled:   s.config.RecordingObjectStorageEnabled,
+		RecordingObjectStorageEndpoint:  s.config.RecordingObjectStorageEndpoint,
+		RecordingObjectStorageBucket:    s.config.RecordingObjectStorageBucket,
+		RecordingObjectStorageAccessKey: s.config.RecordingObjectStorageAccessKey,
+		RecordingObjectStorageSecretKey: s.config.RecordingObjectStorageSecretKey,
+		RecordingObjectStorageRegion:    s.config.RecordingObjectStorageRegion,
+		RecordingObjectStoragePrefix:    s.config.RecordingObjectStoragePrefix,
+		RecordingObjectStorageUseSSL:    s.config.RecordingObjectStorageUseSSL,
+		DataDir:                         s.config.DataDir,
+		ConfigFile:                      s.config.DataPlaneConfigFile,
+		ConfigVerDir:                    filepath.Join(s.config.DataDir, "config_versions"),
+		ConfigApprovalEnabled:           s.config.ConfigApprovalEnabled,
+		ConfigStoreBackend:              s.config.ConfigStoreBackend,
+		UserStoreBackend:                s.config.UserStoreBackend,
+		PostgresDatabaseURL:             s.config.PostgresDatabaseURL,
+		PostgresReadDatabaseURLs:        s.config.PostgresReadDatabaseURLs,
+		AuditStoreBackend:               s.config.AuditStoreBackend,
+		AuditStoreDatabaseURL:           s.config.AuditStoreDatabaseURL,
+		AuditStoreReadDatabaseURLs:      s.config.AuditStoreReadDatabaseURLs,
+		DatabaseMaxOpenConns:            s.config.DatabaseMaxOpenConns,
+		DatabaseMaxIdleConns:            s.config.DatabaseMaxIdleConns,
+		DatabaseConnMaxLifetime:         s.config.DatabaseConnMaxLifetime,
+		DatabaseConnMaxIdleTime:         s.config.DatabaseConnMaxIdleTime,
+		DatabaseReadAfterWriteWindow:    s.config.DatabaseReadAfterWriteWindow,
 	}
-	apiHandler := api.New(s.dp, apiCfg)
+	apiHandler, err := api.New(s.dp, apiCfg)
+	if err != nil {
+		return fmt.Errorf("server: init api: %w", err)
+	}
+	s.apiHandler = apiHandler
+	apiHandler.StartSessionMetadataSync(s.backgroundCtx, 5*time.Second)
+	apiHandler.StartAuditSync(s.backgroundCtx, 5*time.Second)
+	apiHandler.StartRecordingArchiveSync(s.backgroundCtx, 5*time.Second)
 	apiHandler.RegisterRoutes(s.mux)
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
+		s.mux.Handle(method+" /api/v3/", s.handleAPIVersionAlias("/api/v3/", "/api/v2/"))
+	}
 
-	// Command control — policy engine + real-time approvals.
 	dataDir := apiCfg.DataDir
 	if dataDir == "" {
-		dataDir = "."
+		dataDir = s.config.DataDir
 	}
+	if dataDir == "" {
+		dataDir = s.config.RecordingDir
+	}
+
+	caDir := filepath.Join(dataDir, "ca")
+	if err := os.MkdirAll(caDir, 0o700); err != nil {
+		return fmt.Errorf("server: ensure ca dir: %w", err)
+	}
+	ca, err := sshca.New(&sshca.CAConfig{
+		HostKeyPath:    filepath.Join(caDir, "host_ca"),
+		UserKeyPath:    filepath.Join(caDir, "user_ca"),
+		RevocationPath: filepath.Join(caDir, "revocations.json"),
+	})
+	if err != nil {
+		return fmt.Errorf("server: init ssh ca: %w", err)
+	}
+	apiHandler.SetCA(ca)
+
+	if s.config.ClusterEnabled {
+		clusterAPIAddr := s.config.ClusterAPIAddr
+		if clusterAPIAddr == "" {
+			clusterAPIAddr = s.config.ListenAddr
+		}
+		heartbeatInterval, err := parseOptionalDuration(s.config.ClusterHeartbeatInterval)
+		if err != nil {
+			return fmt.Errorf("server: invalid cluster heartbeat interval: %w", err)
+		}
+		electionTimeout, err := parseOptionalDuration(s.config.ClusterElectionTimeout)
+		if err != nil {
+			return fmt.Errorf("server: invalid cluster election timeout: %w", err)
+		}
+		syncInterval, err := parseOptionalDuration(s.config.ClusterSyncInterval)
+		if err != nil {
+			return fmt.Errorf("server: invalid cluster sync interval: %w", err)
+		}
+		clusterMgr, err := cluster.NewManager(&cluster.ClusterConfig{
+			NodeID:            s.config.ClusterNodeID,
+			NodeName:          s.config.ClusterNodeName,
+			BindAddr:          s.config.ClusterBindAddr,
+			APIAddr:           clusterAPIAddr,
+			Region:            s.config.ClusterRegion,
+			Zone:              s.config.ClusterZone,
+			Seeds:             s.config.ClusterSeeds,
+			HeartbeatInterval: heartbeatInterval,
+			ElectionTimeout:   electionTimeout,
+			SyncInterval:      syncInterval,
+			TLSCert:           s.config.ClusterTLSCert,
+			TLSKey:            s.config.ClusterTLSKey,
+			TLSCA:             s.config.ClusterTLSCA,
+		})
+		if err != nil {
+			return fmt.Errorf("server: init cluster manager: %w", err)
+		}
+		if err := clusterMgr.Start(s.backgroundCtx); err != nil {
+			return fmt.Errorf("server: start cluster manager: %w", err)
+		}
+		s.clusterManager = clusterMgr
+		apiHandler.SetCluster(clusterMgr)
+		clusterMgr.SetConfigSyncApplier(apiHandler.ApplyClusterConfigSnapshot)
+		apiHandler.RegisterClusterRoutes(s.mux)
+	}
+
+	// Just-in-time access requests.
+	jitStore := jit.NewStore(dataDir, nil)
+	jitNotifier, err := jit.NewNotifier(jit.NotifierConfig{
+		SMTPAddr:           s.config.JITNotifySMTPAddr,
+		SMTPUsername:       s.config.JITNotifySMTPUsername,
+		SMTPPassword:       s.config.JITNotifySMTPPassword,
+		EmailFrom:          s.config.JITNotifyEmailFrom,
+		EmailTo:            s.config.JITNotifyEmailTo,
+		SlackWebhookURL:    s.config.JITNotifySlackWebhookURL,
+		DingTalkWebhookURL: s.config.JITNotifyDingTalkWebhookURL,
+		WeComWebhookURL:    s.config.JITNotifyWeComWebhookURL,
+	})
+	if err != nil {
+		return fmt.Errorf("server: init jit notifier: %w", err)
+	}
+	if jitNotifier != nil {
+		jitStore.SetNotifier(jitNotifier)
+	}
+	go jitStore.StartCleanupLoop(s.backgroundCtx, time.Minute)
+	apiHandler.SetJIT(jitStore)
+	apiHandler.RegisterJITRoutes(s.mux)
+
+	// Command control — policy engine + real-time approvals.
 	policyEngine := cmdctrl.NewPolicyEngine(dataDir)
 	if err := policyEngine.LoadRules(); err != nil {
 		log.Printf("cmdctrl: load rules: %v (starting with defaults)", err)
@@ -288,22 +508,62 @@ func (s *Server) routes() {
 	apiHandler.SetCollab(collabMgr)
 	apiHandler.RegisterCollabRoutes(s.mux)
 
+	// Threat detection and compliance reporting.
+	var geoResolver threat.GeoResolver
+	if strings.TrimSpace(s.config.GeoIPDataFile) != "" {
+		resolver, err := threat.LoadStaticGeoResolver(strings.TrimSpace(s.config.GeoIPDataFile))
+		if err != nil {
+			return fmt.Errorf("server: load geoip data: %w", err)
+		}
+		geoResolver = resolver
+	}
+	threatDetector := threat.NewDetector(&threat.DetectorConfig{
+		Enabled:     true,
+		DataDir:     dataDir,
+		GeoResolver: geoResolver,
+	})
+	_ = threatDetector.Start(s.backgroundCtx)
+	s.threatDetector = threatDetector
+	apiHandler.SetThreat(threatDetector)
+	apiHandler.RegisterThreatRoutes(s.mux)
+
+	complianceGen := compliance.NewReportGenerator(apiCfg.AuditLogDir, apiCfg.ConfigFile, dataDir)
+	complianceGen.SetSubjectDataProvider(apiHandler.ComplianceDataProvider())
+	complianceGen.SetQueryDataProvider(apiHandler.ComplianceDataProvider())
+	apiHandler.SetCompliance(complianceGen)
+	apiHandler.RegisterComplianceRoutes(s.mux)
+	apiHandler.StartReportScheduler(s.backgroundCtx, api.ReportEmailConfig{
+		SMTPAddr:     strings.TrimSpace(s.config.JITNotifySMTPAddr),
+		SMTPUsername: strings.TrimSpace(s.config.JITNotifySMTPUsername),
+		SMTPPassword: s.config.JITNotifySMTPPassword,
+		EmailFrom:    strings.TrimSpace(s.config.JITNotifyEmailFrom),
+	})
+
 	// Page routes.
 	s.mux.HandleFunc("GET /dashboard", s.handlePage("pages/dashboard.html", "Dashboard"))
 	s.mux.HandleFunc("GET /sessions", s.handlePage("pages/sessions.html", "Sessions"))
 	s.mux.HandleFunc("GET /users", s.handlePage("pages/users.html", "Users"))
 	s.mux.HandleFunc("GET /servers", s.handlePage("pages/servers.html", "Servers"))
 	s.mux.HandleFunc("GET /audit", s.handlePage("pages/audit.html", "Audit Log"))
+	s.mux.HandleFunc("GET /webhooks", s.handlePage("pages/webhooks.html", "Webhook Deliveries"))
 	s.mux.HandleFunc("GET /settings", s.handlePage("pages/settings.html", "Settings"))
 	s.mux.HandleFunc("GET /terminal", s.handlePage("pages/terminal.html", "Terminal"))
 
 	// WebSocket terminal endpoint.
-	s.mux.Handle("/ws/terminal", &ws.TerminalHandler{
-		ProxyAddr: s.config.DataPlaneAddr,
-	})
+	s.mux.Handle("GET /ws/dashboard", s.handleDashboardStream())
+	s.mux.Handle("GET /ws/sessions", s.handleSessionsStream())
+	s.mux.Handle("GET /ws/sessions/{id}/live", s.handleSessionLiveStream())
+	terminalHandler := &ws.TerminalHandler{
+		ProxyAddr:         s.config.SSHProxyAddr,
+		RecordingDir:      s.config.RecordingDir,
+		RecordingBasePath: terminalRecordingBasePath,
+	}
+	s.mux.Handle("GET /ws/terminal", terminalHandler)
+	s.mux.HandleFunc("GET /api/v2/terminal/recordings/{id}/download", s.handleTerminalRecordingDownload(terminalHandler))
 
 	// Catch-all: dashboard.
 	s.mux.HandleFunc("GET /", s.handleIndex)
+	return nil
 }
 
 // --------------------------------------------------------------------------
@@ -360,7 +620,11 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 	if data == nil {
 		data = make(map[string]interface{})
 	}
-	data["User"] = r.Header.Get("X-Auth-User")
+	if username := r.Header.Get("X-Auth-User"); username != "" {
+		data["User"] = struct {
+			Username string
+		}{Username: username}
+	}
 
 	// Inject CSRF token for forms.
 	if c, err := r.Cookie("csrf_token"); err == nil {

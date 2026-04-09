@@ -2,8 +2,11 @@ package sshca
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,6 +42,7 @@ type CA struct {
 type CAConfig struct {
 	HostKeyPath       string
 	UserKeyPath       string
+	RevocationPath    string
 	UserCertTTL       time.Duration
 	HostCertTTL       time.Duration
 	MaxCertTTL        time.Duration
@@ -49,14 +53,19 @@ type CAConfig struct {
 
 // IssuedCert records metadata about an issued certificate.
 type IssuedCert struct {
-	Serial     uint64    `json:"serial"`
-	KeyID      string    `json:"key_id"`
-	Type       string    `json:"type"` // "user" or "host"
-	Principals []string  `json:"principals"`
-	ValidAfter time.Time `json:"valid_after"`
+	Serial      uint64    `json:"serial"`
+	KeyID       string    `json:"key_id"`
+	Type        string    `json:"type"` // "user" or "host"
+	Principals  []string  `json:"principals"`
+	ValidAfter  time.Time `json:"valid_after"`
 	ValidBefore time.Time `json:"valid_before"`
-	IssuedAt   time.Time `json:"issued_at"`
-	Revoked    bool      `json:"revoked"`
+	IssuedAt    time.Time `json:"issued_at"`
+	Revoked     bool      `json:"revoked"`
+}
+
+type revocationFile struct {
+	RevokedSerials []uint64  `json:"revoked_serials"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // defaultExtensions are the standard OpenSSH extensions for user certificates.
@@ -96,7 +105,7 @@ func New(cfg *CAConfig) (*CA, error) {
 		return nil, fmt.Errorf("user CA key: %w", err)
 	}
 
-	return &CA{
+	ca := &CA{
 		hostKey:    hostKey,
 		userKey:    userKey,
 		hostKeyPub: hostKey.PublicKey(),
@@ -104,7 +113,11 @@ func New(cfg *CAConfig) (*CA, error) {
 		config:     cfg,
 		issued:     make([]IssuedCert, 0),
 		revoked:    make(map[uint64]bool),
-	}, nil
+	}
+	if err := ca.loadRevocations(); err != nil {
+		return nil, err
+	}
+	return ca, nil
 }
 
 // loadOrGenerate loads a key from path, or generates and saves a new ED25519 key.
@@ -157,6 +170,14 @@ func (ca *CA) SignUserCert(pubKey ssh.PublicKey, username string, principals []s
 
 	now := time.Now()
 	serial := nextSerial()
+	validAfter, err := unixTimeSeconds(now.Add(-5 * time.Minute))
+	if err != nil {
+		return nil, err
+	}
+	validBefore, err := unixTimeSeconds(now.Add(ttl))
+	if err != nil {
+		return nil, err
+	}
 
 	cert := &ssh.Certificate{
 		CertType:        ssh.UserCert,
@@ -164,8 +185,8 @@ func (ca *CA) SignUserCert(pubKey ssh.PublicKey, username string, principals []s
 		KeyId:           fmt.Sprintf("user-%s-%d", username, serial),
 		Serial:          serial,
 		ValidPrincipals: principals,
-		ValidAfter:      uint64(now.Add(-5 * time.Minute).Unix()),
-		ValidBefore:     uint64(now.Add(ttl).Unix()),
+		ValidAfter:      validAfter,
+		ValidBefore:     validBefore,
 		Permissions: ssh.Permissions{
 			Extensions: copyMap(ca.config.Extensions),
 		},
@@ -216,6 +237,14 @@ func (ca *CA) SignHostCert(pubKey ssh.PublicKey, hostname string, ttl time.Durat
 
 	now := time.Now()
 	serial := nextSerial()
+	validAfter, err := unixTimeSeconds(now.Add(-5 * time.Minute))
+	if err != nil {
+		return nil, err
+	}
+	validBefore, err := unixTimeSeconds(now.Add(ttl))
+	if err != nil {
+		return nil, err
+	}
 
 	cert := &ssh.Certificate{
 		CertType:        ssh.HostCert,
@@ -223,8 +252,8 @@ func (ca *CA) SignHostCert(pubKey ssh.PublicKey, hostname string, ttl time.Durat
 		KeyId:           fmt.Sprintf("host-%s-%d", hostname, serial),
 		Serial:          serial,
 		ValidPrincipals: []string{hostname},
-		ValidAfter:      uint64(now.Add(-5 * time.Minute).Unix()),
-		ValidBefore:     uint64(now.Add(ttl).Unix()),
+		ValidAfter:      validAfter,
+		ValidBefore:     validBefore,
 	}
 
 	if err := cert.SignCert(rand.Reader, ca.hostKey); err != nil {
@@ -286,6 +315,10 @@ func (ca *CA) RevokeCert(serial uint64) error {
 	}
 
 	ca.revoked[serial] = true
+	if err := ca.saveRevocationsLocked(); err != nil {
+		delete(ca.revoked, serial)
+		return err
+	}
 	return nil
 }
 
@@ -294,6 +327,76 @@ func (ca *CA) IsRevoked(serial uint64) bool {
 	ca.mu.RLock()
 	defer ca.mu.RUnlock()
 	return ca.revoked[serial]
+}
+
+// ListRevokedSerials returns the current revocation list as a sorted serial slice.
+func (ca *CA) ListRevokedSerials() []uint64 {
+	ca.mu.RLock()
+	defer ca.mu.RUnlock()
+
+	out := make([]uint64, 0, len(ca.revoked))
+	for serial := range ca.revoked {
+		out = append(out, serial)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func (ca *CA) loadRevocations() error {
+	if ca == nil || ca.config == nil || ca.config.RevocationPath == "" {
+		return nil
+	}
+
+	raw, err := os.ReadFile(ca.config.RevocationPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("load revocations: %w", err)
+	}
+
+	var state revocationFile
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return fmt.Errorf("parse revocations: %w", err)
+	}
+	for _, serial := range state.RevokedSerials {
+		ca.revoked[serial] = true
+	}
+	return nil
+}
+
+func (ca *CA) saveRevocationsLocked() error {
+	if ca == nil || ca.config == nil || ca.config.RevocationPath == "" {
+		return nil
+	}
+
+	serials := make([]uint64, 0, len(ca.revoked))
+	for serial := range ca.revoked {
+		serials = append(serials, serial)
+	}
+	sort.Slice(serials, func(i, j int) bool { return serials[i] < serials[j] })
+
+	state := revocationFile{
+		RevokedSerials: serials,
+		UpdatedAt:      time.Now().UTC(),
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal revocations: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(ca.config.RevocationPath), 0o700); err != nil {
+		return fmt.Errorf("create revocation dir: %w", err)
+	}
+	tmpPath := ca.config.RevocationPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return fmt.Errorf("write revocations: %w", err)
+	}
+	if err := os.Rename(tmpPath, ca.config.RevocationPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("persist revocations: %w", err)
+	}
+	return nil
 }
 
 func copyMap(m map[string]string) map[string]string {

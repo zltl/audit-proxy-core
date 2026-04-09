@@ -27,7 +27,10 @@ func setupJITTestAPI(t *testing.T) (*API, *http.ServeMux, *jit.Store) {
 		ConfigVerDir:  dir + "/config_versions",
 	}
 
-	api := New(dp, cfg)
+	api, err := New(dp, cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
 	store := jit.NewStore(dir, &jit.Policy{
 		MaxDuration:   24 * time.Hour,
 		ApproverRoles: []string{"admin"},
@@ -409,6 +412,146 @@ func TestAPIUpdatePolicy(t *testing.T) {
 	}
 }
 
+func TestAPIUpdatePolicyWithStagesAndAutoRules(t *testing.T) {
+	_, mux, _ := setupJITTestAPI(t)
+
+	body := map[string]interface{}{
+		"max_duration": "8h",
+		"approval_stages": []map[string]interface{}{
+			{"name": "security", "approver_roles": []string{"security"}, "required_approvals": 1},
+			{"name": "admin", "approver_roles": []string{"admin"}, "required_approvals": 1},
+		},
+		"auto_approve_rules": []map[string]interface{}{
+			{"name": "viewer-staging", "targets": []string{"staging-*"}, "roles": []string{"viewer"}, "max_duration": "30m"},
+		},
+	}
+	rr := doJITRequest(mux, "PUT", "/api/v2/jit/policy", body, "admin-user", "admin")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAPIMultiStageApprovalWorkflow(t *testing.T) {
+	_, mux, store := setupJITTestAPI(t)
+	if err := store.SetPolicy(&jit.Policy{
+		MaxDuration: 24 * time.Hour,
+		ApprovalStages: []jit.ApprovalStage{
+			{Name: "security", ApproverRoles: []string{"security"}},
+			{Name: "admin", ApproverRoles: []string{"admin"}},
+		},
+		ApproverRoles: []string{"security", "admin"},
+	}); err != nil {
+		t.Fatalf("SetPolicy() error = %v", err)
+	}
+
+	body := map[string]string{
+		"target": "prod-db-01", "role": "operator",
+		"reason": "test", "duration": "1h",
+	}
+	rr := doJITRequest(mux, "POST", "/api/v2/jit/requests", body, "alice", "operator")
+	resp := parseJITResponse(t, rr)
+	id := extractID(t, resp)
+
+	rr = doJITRequest(mux, "POST", "/api/v2/jit/requests/"+id+"/approve", nil, "sec-amy", "security")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 after stage 1, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp = parseJITResponse(t, rr)
+	data := resp.Data.(map[string]interface{})
+	if data["status"] != "pending" {
+		t.Fatalf("expected pending after stage 1, got %v", data["status"])
+	}
+	if data["current_stage"] != float64(1) {
+		t.Fatalf("expected current_stage=1 after stage 1, got %v", data["current_stage"])
+	}
+
+	rr = doJITRequest(mux, "POST", "/api/v2/jit/requests/"+id+"/approve", nil, "admin-bob", "admin")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 after final stage, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp = parseJITResponse(t, rr)
+	data = resp.Data.(map[string]interface{})
+	if data["status"] != "approved" {
+		t.Fatalf("expected approved after final stage, got %v", data["status"])
+	}
+}
+
+func TestAPIApproveJITRequestWrongStageRoleForbidden(t *testing.T) {
+	_, mux, store := setupJITTestAPI(t)
+	if err := store.SetPolicy(&jit.Policy{
+		MaxDuration: 24 * time.Hour,
+		ApprovalStages: []jit.ApprovalStage{
+			{Name: "security", ApproverRoles: []string{"security"}},
+		},
+		ApproverRoles: []string{"security"},
+	}); err != nil {
+		t.Fatalf("SetPolicy() error = %v", err)
+	}
+
+	body := map[string]string{
+		"target": "prod-db-01", "role": "operator",
+		"reason": "test", "duration": "1h",
+	}
+	rr := doJITRequest(mux, "POST", "/api/v2/jit/requests", body, "alice", "operator")
+	resp := parseJITResponse(t, rr)
+	id := extractID(t, resp)
+
+	rr = doJITRequest(mux, "POST", "/api/v2/jit/requests/"+id+"/approve", nil, "admin-bob", "admin")
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAPICreateBreakGlassRequest(t *testing.T) {
+	_, mux, store := setupJITTestAPI(t)
+	if err := store.SetPolicy(&jit.Policy{
+		MaxDuration:           24 * time.Hour,
+		BreakGlassEnabled:     true,
+		BreakGlassMaxDuration: time.Hour,
+		BreakGlassRoles:       []string{"operator"},
+		BreakGlassTargets:     []string{"prod-*"},
+		ApproverRoles:         []string{"admin"},
+	}); err != nil {
+		t.Fatalf("SetPolicy() error = %v", err)
+	}
+
+	body := map[string]interface{}{
+		"target":      "prod-db-01",
+		"role":        "operator",
+		"reason":      "incident response",
+		"ticket":      "INC-123",
+		"break_glass": true,
+		"duration":    "30m",
+	}
+	rr := doJITRequest(mux, "POST", "/api/v2/jit/requests", body, "alice", "operator")
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp := parseJITResponse(t, rr)
+	data := resp.Data.(map[string]interface{})
+	if data["status"] != "approved" {
+		t.Fatalf("expected approved break-glass request, got %v", data["status"])
+	}
+	if data["break_glass"] != true {
+		t.Fatalf("expected break_glass=true, got %v", data["break_glass"])
+	}
+}
+
+func TestAPIUpdatePolicyWithBreakGlassFields(t *testing.T) {
+	_, mux, _ := setupJITTestAPI(t)
+
+	body := map[string]interface{}{
+		"break_glass_enabled":      true,
+		"break_glass_max_duration": "1h",
+		"break_glass_roles":        []string{"operator"},
+		"break_glass_targets":      []string{"prod-*"},
+	}
+	rr := doJITRequest(mux, "PUT", "/api/v2/jit/policy", body, "admin-user", "admin")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestAPIUpdatePolicyNotAdmin(t *testing.T) {
 	_, mux, _ := setupJITTestAPI(t)
 
@@ -461,7 +604,10 @@ func TestAPIJITNotEnabled(t *testing.T) {
 		ConfigFile:    dir + "/config.ini",
 		ConfigVerDir:  dir + "/config_versions",
 	}
-	api := New(dp, cfg)
+	api, err := New(dp, cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
 	api.RegisterJITRoutes(mux)

@@ -207,6 +207,114 @@ static int test_router_null_handling(void)
     TEST_PASS();
 }
 
+static int test_router_consistent_hash_minimizes_reassignment(void)
+{
+    TEST_START();
+
+    router_config_t config = {
+        .lb_policy = LB_POLICY_HASH,
+        .connect_timeout_ms = 5000,
+        .health_check_interval = 30,
+        .max_retries = 3,
+        .health_check_enabled = false
+    };
+
+    router_t *router = router_create(&config);
+    ASSERT_NOT_NULL(router);
+
+    upstream_config_t upstream = {
+        .port = 22,
+        .weight = 1,
+        .enabled = true
+    };
+    strncpy(upstream.host, "server1.example.com", ROUTER_MAX_HOST - 1);
+    router_add_upstream(router, &upstream);
+    strncpy(upstream.host, "server2.example.com", ROUTER_MAX_HOST - 1);
+    router_add_upstream(router, &upstream);
+    strncpy(upstream.host, "server3.example.com", ROUTER_MAX_HOST - 1);
+    router_add_upstream(router, &upstream);
+
+    int before[128];
+    memset(before, -1, sizeof(before));
+    for (int i = 0; i < 128; i++) {
+        char username[32];
+        route_result_t result;
+        snprintf(username, sizeof(username), "user-%03d", i);
+        ASSERT_EQ(router_resolve(router, username, "target", &result), 0);
+        before[i] = result.upstream_index;
+    }
+
+    ASSERT_EQ(router_remove_upstream(router, 1), 0);
+
+    int moved_from_survivor = 0;
+    int moved_from_removed = 0;
+    for (int i = 0; i < 128; i++) {
+        char username[32];
+        route_result_t result;
+        snprintf(username, sizeof(username), "user-%03d", i);
+        ASSERT_EQ(router_resolve(router, username, "target", &result), 0);
+        if (before[i] == 1) {
+            if (result.upstream_index != 1) {
+                moved_from_removed++;
+            }
+        } else if (result.upstream_index != before[i]) {
+            moved_from_survivor++;
+        }
+    }
+
+    ASSERT_TRUE(moved_from_removed > 0);
+    ASSERT_EQ(moved_from_survivor, 0);
+
+    router_destroy(router);
+    TEST_PASS();
+}
+
+static int test_router_weighted_routing(void)
+{
+    TEST_START();
+
+    router_config_t config = {
+        .lb_policy = LB_POLICY_WEIGHTED,
+        .connect_timeout_ms = 5000,
+        .health_check_interval = 30,
+        .max_retries = 3,
+        .health_check_enabled = false
+    };
+
+    router_t *router = router_create(&config);
+    ASSERT_NOT_NULL(router);
+
+    upstream_config_t upstream = {
+        .port = 22,
+        .enabled = true
+    };
+    upstream.weight = 1;
+    strncpy(upstream.host, "small-capacity", ROUTER_MAX_HOST - 1);
+    router_add_upstream(router, &upstream);
+
+    upstream.weight = 3;
+    strncpy(upstream.host, "large-capacity", ROUTER_MAX_HOST - 1);
+    router_add_upstream(router, &upstream);
+
+    int small_hits = 0;
+    int large_hits = 0;
+    route_result_t result;
+    for (int i = 0; i < 40; i++) {
+        ASSERT_EQ(router_resolve(router, "user", "target", &result), 0);
+        if (strcmp(result.upstream->config.host, "small-capacity") == 0) {
+            small_hits++;
+        } else if (strcmp(result.upstream->config.host, "large-capacity") == 0) {
+            large_hits++;
+        }
+    }
+
+    ASSERT_EQ(small_hits, 10);
+    ASSERT_EQ(large_hits, 30);
+
+    router_destroy(router);
+    TEST_PASS();
+}
+
 int main(void)
 {
     log_init(LOG_LEVEL_WARN, NULL);
@@ -219,6 +327,8 @@ int main(void)
     failed += test_router_resolve();
     failed += test_router_rules();
     failed += test_router_null_handling();
+    failed += test_router_consistent_hash_minimizes_reassignment();
+    failed += test_router_weighted_routing();
 
     printf("\n");
     if (failed == 0) {

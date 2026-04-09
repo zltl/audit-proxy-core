@@ -206,7 +206,11 @@ func (c *Conn) writeFrame(opcode int, payload []byte) error {
 func (c *Conn) writeFrameLocked(opcode int, payload []byte) error {
 	var buf []byte
 	fin := byte(0x80)
-	buf = append(buf, fin|byte(opcode))
+	op, err := frameOpcode(opcode)
+	if err != nil {
+		return err
+	}
+	buf = append(buf, fin|op)
 
 	length := len(payload)
 	switch {
@@ -225,7 +229,7 @@ func (c *Conn) writeFrameLocked(opcode int, payload []byte) error {
 	}
 
 	buf = append(buf, payload...)
-	_, err := c.conn.Write(buf)
+	_, err = c.conn.Write(buf)
 	return err
 }
 
@@ -235,4 +239,13 @@ func (c *Conn) writeClose(code uint16, reason string) {
 	binary.BigEndian.PutUint16(payload, code)
 	copy(payload[2:], reason)
 	c.writeFrame(OpClose, payload)
+}
+
+func frameOpcode(opcode int) (byte, error) {
+	switch opcode {
+	case OpText, OpBinary, OpClose, OpPing, OpPong:
+		return byte(opcode), nil
+	default:
+		return 0, fmt.Errorf("ws: invalid opcode %d", opcode)
+	}
 }

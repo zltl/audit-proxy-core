@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ssh-proxy-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ssh-proxy-operator
+rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "create", "patch", "update"]
+  - apiGroups: ["proxy.sshproxy.io"]
+    resources: ["sshproxyclusters"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["proxy.sshproxy.io"]
+    resources: ["sshproxyclusters/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts", "configmaps", "secrets", "services", "persistentvolumeclaims"]
+    verbs: ["get", "list", "create", "patch", "update", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "patch", "update", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ssh-proxy-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ssh-proxy-operator
+subjects:
+  - kind: ServiceAccount
+    name: ssh-proxy-operator
+    namespace: default

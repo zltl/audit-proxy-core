@@ -23,17 +23,21 @@ type User struct {
 
 // Session describes an active or historical SSH proxy session.
 type Session struct {
-	ID            string    `json:"id"`
-	Username      string    `json:"username"`
-	SourceIP      string    `json:"source_ip"`
-	TargetHost    string    `json:"target_host"`
-	TargetPort    int       `json:"target_port"`
-	StartTime     time.Time `json:"start_time"`
-	Duration      string    `json:"duration"`
-	BytesIn       int64     `json:"bytes_in"`
-	BytesOut      int64     `json:"bytes_out"`
-	Status        string    `json:"status"` // "active", "closed", "terminated"
-	RecordingFile string    `json:"recording_file,omitempty"`
+	ID                string    `json:"id"`
+	Username          string    `json:"username"`
+	SourceIP          string    `json:"source_ip"`
+	ClientVersion     string    `json:"client_version,omitempty"`
+	ClientOS          string    `json:"client_os,omitempty"`
+	DeviceFingerprint string    `json:"device_fingerprint,omitempty"`
+	InstanceID        string    `json:"instance_id,omitempty"`
+	TargetHost        string    `json:"target_host"`
+	TargetPort        int       `json:"target_port"`
+	StartTime         time.Time `json:"start_time"`
+	Duration          string    `json:"duration"`
+	BytesIn           int64     `json:"bytes_in"`
+	BytesOut          int64     `json:"bytes_out"`
+	Status            string    `json:"status"` // "active", "closed", "terminated"
+	RecordingFile     string    `json:"recording_file,omitempty"`
 }
 
 // Server represents an upstream SSH server managed by the proxy.
@@ -51,6 +55,13 @@ type Server struct {
 	Sessions    int               `json:"sessions"`
 	Tags        map[string]string `json:"tags,omitempty"`
 	CheckedAt   time.Time         `json:"checked_at"`
+}
+
+// DrainStatus describes the local data-plane drain/upgrade state.
+type DrainStatus struct {
+	Status         string `json:"status,omitempty"`
+	Draining       bool   `json:"draining"`
+	ActiveSessions int    `json:"active_sessions"`
 }
 
 // AuditEvent records a security-relevant action in the system.
@@ -94,6 +105,14 @@ type DashboardStats struct {
 	AuthSuccessRate float64           `json:"auth_success_rate"`
 	RecentEvents    []AuditEvent      `json:"recent_events"`
 	SessionTrend    []TimeSeriesPoint `json:"session_trend"`
+}
+
+// DashboardSnapshot is the realtime payload pushed to dashboard WebSocket clients.
+type DashboardSnapshot struct {
+	Stats    DashboardStats `json:"stats"`
+	Sessions []Session      `json:"sessions"`
+	Events   []AuditEvent   `json:"events"`
+	Servers  []Server       `json:"servers"`
 }
 
 // TimeSeriesPoint is a single data-point on a time-series chart.

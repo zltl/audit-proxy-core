@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -89,9 +90,17 @@ func runSessionsList(args []string) {
 	fs.BoolVar(&noColor, "no-color", noColor, "disable color output")
 	fs.Parse(args)
 
-	path := "/api/v1/sessions?status=" + *status
+	query := url.Values{}
+	if *status != "" && *status != "all" {
+		query.Set("status", *status)
+	}
 	if *user != "" {
-		path += "&user=" + *user
+		query.Set("user", *user)
+	}
+
+	path := "/api/v2/sessions"
+	if encoded := query.Encode(); encoded != "" {
+		path += "?" + encoded
 	}
 
 	client := NewClient()
@@ -109,12 +118,13 @@ func runSessionsList(args []string) {
 	}
 
 	var sessions []struct {
-		ID       string `json:"id"`
-		User     string `json:"user"`
-		SourceIP string `json:"source_ip"`
-		Target   string `json:"target"`
-		Duration string `json:"duration"`
-		Status   string `json:"status"`
+		ID         string `json:"id"`
+		Username   string `json:"username"`
+		SourceIP   string `json:"source_ip"`
+		TargetHost string `json:"target_host"`
+		TargetPort int    `json:"target_port"`
+		Duration   string `json:"duration"`
+		Status     string `json:"status"`
 	}
 	if err := json.Unmarshal(data, &sessions); err != nil {
 		printError(fmt.Sprintf("failed to parse sessions: %v", err))
@@ -124,7 +134,14 @@ func runSessionsList(args []string) {
 	headers := []string{"ID", "USER", "SOURCE IP", "TARGET", "DURATION", "STATUS"}
 	rows := make([][]string, len(sessions))
 	for i, s := range sessions {
-		rows[i] = []string{s.ID, s.User, s.SourceIP, s.Target, formatDuration(s.Duration), s.Status}
+		rows[i] = []string{
+			s.ID,
+			s.Username,
+			s.SourceIP,
+			fmt.Sprintf("%s:%d", s.TargetHost, s.TargetPort),
+			formatDuration(s.Duration),
+			s.Status,
+		}
 	}
 	printTable(headers, rows)
 }
@@ -142,7 +159,7 @@ func runSessionsKill(args []string) {
 	sessionID := fs.Arg(0)
 
 	client := NewClient()
-	data, err := client.Delete("/api/v1/sessions/" + sessionID)
+	data, err := client.Delete("/api/v2/sessions/" + sessionID)
 	if err != nil {
 		printError(fmt.Sprintf("failed to kill session %s: %v", sessionID, err))
 		os.Exit(1)
@@ -353,7 +370,7 @@ func runServersList(args []string) {
 	fs.Parse(args)
 
 	client := NewClient()
-	data, err := client.Get("/api/v1/servers")
+	data, err := client.Get("/api/v2/servers")
 	if err != nil {
 		printError(fmt.Sprintf("failed to list servers: %v", err))
 		os.Exit(1)
@@ -367,21 +384,26 @@ func runServersList(args []string) {
 	}
 
 	var servers []struct {
-		Name     string `json:"name"`
-		Address  string `json:"address"`
-		Port     int    `json:"port"`
-		Status   string `json:"status"`
-		LastSeen string `json:"last_seen"`
+		Name    string `json:"name"`
+		Host    string `json:"host"`
+		Port    int    `json:"port"`
+		Group   string `json:"group"`
+		Status  string `json:"status"`
+		Healthy bool   `json:"healthy"`
 	}
 	if err := json.Unmarshal(data, &servers); err != nil {
 		printError(fmt.Sprintf("failed to parse servers: %v", err))
 		os.Exit(1)
 	}
 
-	headers := []string{"NAME", "ADDRESS", "PORT", "STATUS", "LAST SEEN"}
+	headers := []string{"NAME", "HOST", "PORT", "GROUP", "STATUS", "HEALTH"}
 	rows := make([][]string, len(servers))
 	for i, s := range servers {
-		rows[i] = []string{s.Name, s.Address, fmt.Sprintf("%d", s.Port), s.Status, formatTime(s.LastSeen)}
+		health := "unhealthy"
+		if s.Healthy {
+			health = "healthy"
+		}
+		rows[i] = []string{s.Name, s.Host, fmt.Sprintf("%d", s.Port), s.Group, s.Status, health}
 	}
 	printTable(headers, rows)
 }
@@ -552,7 +574,7 @@ func runConfigShow(args []string) {
 	fs.Parse(args)
 
 	client := NewClient()
-	data, err := client.Get("/api/v1/config")
+	data, err := client.Get("/api/v2/config")
 	if err != nil {
 		printError(fmt.Sprintf("failed to get config: %v", err))
 		os.Exit(1)
@@ -587,13 +609,22 @@ func runConfigEdit(args []string) {
 		os.Exit(1)
 	}
 
-	body := map[string]string{
-		"key":   *key,
-		"value": *value,
+	client := NewClient()
+	currentData, err := client.Get("/api/v2/config")
+	if err != nil {
+		printError(fmt.Sprintf("failed to load current config: %v", err))
+		os.Exit(1)
 	}
 
-	client := NewClient()
-	data, err := client.Put("/api/v1/config", body)
+	var current map[string]interface{}
+	if err := json.Unmarshal(currentData, &current); err != nil {
+		printError(fmt.Sprintf("failed to parse current config: %v", err))
+		os.Exit(1)
+	}
+
+	setConfigValue(current, *key, parseConfigValue(*value))
+
+	data, err := client.Put("/api/v2/config", current)
 	if err != nil {
 		printError(fmt.Sprintf("failed to update config: %v", err))
 		os.Exit(1)
@@ -615,7 +646,7 @@ func runConfigReload(args []string) {
 	fs.Parse(args)
 
 	client := NewClient()
-	data, err := client.Post("/api/v1/config/reload", nil)
+	data, err := client.Post("/api/v2/config/reload", nil)
 	if err != nil {
 		printError(fmt.Sprintf("failed to reload config: %v", err))
 		os.Exit(1)
@@ -637,7 +668,7 @@ func runConfigHistory(args []string) {
 	fs.Parse(args)
 
 	client := NewClient()
-	data, err := client.Get("/api/v1/config/history")
+	data, err := client.Get("/api/v2/config/versions")
 	if err != nil {
 		printError(fmt.Sprintf("failed to get config history: %v", err))
 		os.Exit(1)
@@ -651,23 +682,47 @@ func runConfigHistory(args []string) {
 	}
 
 	var entries []struct {
+		Version   string `json:"version"`
+		Size      int64  `json:"size"`
 		Timestamp string `json:"timestamp"`
-		User      string `json:"user"`
-		Key       string `json:"key"`
-		OldValue  string `json:"old_value"`
-		NewValue  string `json:"new_value"`
 	}
 	if err := json.Unmarshal(data, &entries); err != nil {
 		printError(fmt.Sprintf("failed to parse config history: %v", err))
 		os.Exit(1)
 	}
 
-	headers := []string{"TIMESTAMP", "USER", "KEY", "OLD VALUE", "NEW VALUE"}
+	headers := []string{"VERSION", "SIZE", "TIMESTAMP"}
 	rows := make([][]string, len(entries))
 	for i, e := range entries {
-		rows[i] = []string{formatTime(e.Timestamp), e.User, e.Key, e.OldValue, e.NewValue}
+		rows[i] = []string{e.Version, fmt.Sprintf("%d", e.Size), formatTime(e.Timestamp)}
 	}
 	printTable(headers, rows)
+}
+
+func parseConfigValue(raw string) interface{} {
+	var value interface{}
+	if err := json.Unmarshal([]byte(raw), &value); err == nil {
+		return value
+	}
+	return raw
+}
+
+func setConfigValue(root map[string]interface{}, path string, value interface{}) {
+	parts := strings.Split(path, ".")
+	current := root
+	for i, part := range parts {
+		if i == len(parts)-1 {
+			current[part] = value
+			return
+		}
+
+		next, ok := current[part].(map[string]interface{})
+		if !ok {
+			next = map[string]interface{}{}
+			current[part] = next
+		}
+		current = next
+	}
 }
 
 // runCert handles "sshproxy cert ..."
@@ -688,51 +743,61 @@ func runCert(args []string) {
 
 func runCertSign(args []string) {
 	fs := flag.NewFlagSet("cert sign", flag.ExitOnError)
-	user := fs.String("user", "", "username (required)")
+	user := fs.String("user", "", "primary certificate principal (defaults to the authenticated username)")
 	ttl := fs.String("ttl", "8h", "certificate TTL")
 	principals := fs.String("principals", "", "comma-separated principals")
+	keyPathFlag := fs.String("key", defaultIdentityPath(), "private key path (generated if missing)")
+	certPathFlag := fs.String("cert", "", "certificate output path (default <key>-cert.pub)")
 	fs.BoolVar(&jsonOutput, "json", false, "output in JSON format")
 	fs.BoolVar(&noColor, "no-color", noColor, "disable color output")
 	fs.Parse(args)
 
-	if *user == "" {
-		printError("--user is required")
+	client := NewClient()
+	username := *user
+	if username == "" {
+		var err error
+		username, err = authenticatedUsername(client)
+		if err != nil {
+			printError(fmt.Sprintf("failed to resolve authenticated user: %v", err))
+			os.Exit(1)
+		}
+	}
+
+	keyPath, certPath, err := resolveIdentityPaths(*keyPathFlag, *certPathFlag)
+	if err != nil {
+		printError(fmt.Sprintf("failed to resolve key paths: %v", err))
 		os.Exit(1)
 	}
 
-	body := map[string]interface{}{
-		"username": *user,
-		"ttl":      *ttl,
-	}
-	if *principals != "" {
-		body["principals"] = strings.Split(*principals, ",")
+	publicKey, err := ensureIdentityKeyPair(keyPath)
+	if err != nil {
+		printError(fmt.Sprintf("failed to prepare SSH identity: %v", err))
+		os.Exit(1)
 	}
 
-	client := NewClient()
-	data, err := client.Post("/api/v1/cert/sign", body)
+	cert, err := issueUserCertificate(client, publicKey, resolvePrincipals(username, *principals), *ttl)
 	if err != nil {
 		printError(fmt.Sprintf("failed to sign certificate: %v", err))
 		os.Exit(1)
 	}
-
-	if jsonOutput {
-		var v interface{}
-		json.Unmarshal(data, &v)
-		printJSON(v)
-		return
-	}
-
-	var cert struct {
-		Certificate string `json:"certificate"`
-		ExpiresAt   string `json:"expires_at"`
-	}
-	if err := json.Unmarshal(data, &cert); err != nil {
-		printError(fmt.Sprintf("failed to parse certificate response: %v", err))
+	if err := writeSignedCertificate(certPath, cert.Certificate); err != nil {
+		printError(fmt.Sprintf("failed to write certificate: %v", err))
 		os.Exit(1)
 	}
 
-	printSuccess(fmt.Sprintf("Certificate signed for user %s (expires: %s)", *user, formatTime(cert.ExpiresAt)))
-	fmt.Println(cert.Certificate)
+	cfg := loadConfig()
+	cfg.IdentityFile = keyPath
+	if err := saveConfig(cfg); err != nil {
+		printWarning(fmt.Sprintf("certificate saved but failed to update config: %v", err))
+	}
+
+	if jsonOutput {
+		printJSON(cert)
+		return
+	}
+
+	printSuccess(fmt.Sprintf("Certificate signed for user %s (expires: %s)", username, formatTime(cert.ExpiresAt)))
+	fmt.Printf("Identity: %s\nCertificate: %s\n", keyPath, certPath)
 }
 
 // runJIT handles "sshproxy jit ..."

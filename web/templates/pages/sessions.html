@@ -18,6 +18,12 @@
             <div class="search-input">
                 <input type="text" id="filter-user" placeholder="Search user…">
             </div>
+            <div class="search-input">
+                <input type="text" id="filter-ip" placeholder="Search IP…">
+            </div>
+            <div class="search-input">
+                <input type="text" id="filter-target" placeholder="Search target…">
+            </div>
             <input type="date" class="form-control" id="filter-date-from" style="width:150px;" title="From date">
             <input type="date" class="form-control" id="filter-date-to" style="width:150px;" title="To date">
             <button class="btn btn-secondary btn-sm" onclick="loadSessions()">🔍 Filter</button>
@@ -41,6 +47,7 @@
                     <th class="sortable">ID <span class="sort-icon">↕</span></th>
                     <th class="sortable">User <span class="sort-icon">↕</span></th>
                     <th class="sortable">Source IP <span class="sort-icon">↕</span></th>
+                    <th class="sortable">Device <span class="sort-icon">↕</span></th>
                     <th class="sortable">Target <span class="sort-icon">↕</span></th>
                     <th class="sortable">Start Time <span class="sort-icon">↕</span></th>
                     <th class="sortable">Duration <span class="sort-icon">↕</span></th>
@@ -49,7 +56,7 @@
                 </tr>
             </thead>
             <tbody id="sessions-body">
-                <tr><td colspan="9" class="table-empty">
+                <tr><td colspan="10" class="table-empty">
                     <div class="skeleton skeleton-row"></div>
                     <div class="skeleton skeleton-row"></div>
                     <div class="skeleton skeleton-row"></div>
@@ -77,103 +84,380 @@
 {{end}}
 
 {{define "scripts"}}
+<style>
+.session-recording-player {
+    min-height: 220px;
+    background: var(--color-surface-secondary, #111827);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.session-recording-actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 12px;
+}
+
+.session-recording-status {
+    color: var(--color-text-secondary, #6b7280);
+    font-size: 0.875rem;
+}
+</style>
 <script>
 (function() {
     var tableHelper;
+    var sessionsStream = null;
+    var liveViewSocket = null;
+    var liveViewEnabled = false;
+    var asciinemaAssetsPromise = null;
 
-    window.loadSessions = function() {
-        var status = document.getElementById('filter-status').value;
-        var user = document.getElementById('filter-user').value.trim();
-        var from = document.getElementById('filter-date-from').value;
-        var to = document.getElementById('filter-date-to').value;
+    function selectedSessionIDs() {
+        if (tableHelper) {
+            return tableHelper.getSelected();
+        }
+        return Array.from(document.querySelectorAll('#sessions-body .row-check:checked')).map(function(cb) {
+            return cb.value;
+        });
+    }
 
+    function currentFilters() {
+        return {
+            status: document.getElementById('filter-status').value,
+            user: document.getElementById('filter-user').value.trim(),
+            ip: document.getElementById('filter-ip').value.trim(),
+            target: document.getElementById('filter-target').value.trim(),
+            from: document.getElementById('filter-date-from').value,
+            to: document.getElementById('filter-date-to').value
+        };
+    }
+
+    function sessionQueryParams(filters) {
         var params = new URLSearchParams();
-        if (status) params.set('status', status);
-        if (user) params.set('user', user);
-        if (from) params.set('from', from);
-        if (to) params.set('to', to);
-        params.set('sort', 'start_time');
-        params.set('order', 'desc');
+        if (filters.status) params.set('status', filters.status);
+        if (filters.user) params.set('user', filters.user);
+        if (filters.ip) params.set('ip', filters.ip);
+        if (filters.target) params.set('target', filters.target);
+        params.set('per_page', '200');
+        return params;
+    }
 
-        App.api('GET', '/api/v1/sessions?' + params.toString()).then(function(data) {
-            var tbody = document.getElementById('sessions-body');
-            var items = data.sessions || data.items || data || [];
-            if (!items.length) {
-                tbody.innerHTML = '<tr><td colspan="9" class="table-empty">' +
-                    '<div class="table-empty-icon">🖥️</div>No sessions found</td></tr>';
+    function recordingDownloadURL(id) {
+        return '/api/v2/sessions/' + encodeURIComponent(id) + '/recording/download';
+    }
+
+    function ensureStylesheet(id, href) {
+        if (document.getElementById(id)) {
+            return;
+        }
+        var link = document.createElement('link');
+        link.id = id;
+        link.rel = 'stylesheet';
+        link.href = href;
+        document.head.appendChild(link);
+    }
+
+    function ensureAsciinemaPlayer() {
+        if (window.AsciinemaPlayer) {
+            return Promise.resolve(window.AsciinemaPlayer);
+        }
+        if (asciinemaAssetsPromise) {
+            return asciinemaAssetsPromise;
+        }
+
+        ensureStylesheet(
+            'asciinema-player-css',
+            'https://unpkg.com/asciinema-player@3.0.1/dist/bundle/asciinema-player.css'
+        );
+
+        asciinemaAssetsPromise = new Promise(function(resolve, reject) {
+            var existing = document.getElementById('asciinema-player-js');
+            if (existing) {
+                existing.addEventListener('load', onLoad, { once: true });
+                existing.addEventListener('error', onError, { once: true });
                 return;
             }
-            tbody.innerHTML = items.map(function(s) {
-                var statusCls = 'badge-neutral';
-                if (s.status === 'active') statusCls = 'badge-success';
-                else if (s.status === 'killed') statusCls = 'badge-danger';
 
-                var actions = '<button class="btn btn-ghost btn-sm" onclick="viewSession(\'' + App.escapeHtml(s.id) + '\')" title="Details">👁</button>';
-                if (s.status === 'active') {
-                    actions += ' <button class="btn btn-ghost btn-sm" onclick="killSession(\'' + App.escapeHtml(s.id) + '\')" title="Kill" style="color:var(--color-danger);">⏹</button>';
-                    actions += ' <a href="/terminal?session=' + encodeURIComponent(s.id) + '" class="btn btn-ghost btn-sm" title="Watch Live">📺</a>';
-                }
-                if (s.recording_url) {
-                    actions += ' <a href="' + App.escapeHtml(s.recording_url) + '" class="btn btn-ghost btn-sm" title="Playback">▶</a>';
-                }
+            var script = document.createElement('script');
+            script.id = 'asciinema-player-js';
+            script.src = 'https://unpkg.com/asciinema-player@3.0.1/dist/bundle/asciinema-player.min.js';
+            script.async = true;
+            script.onload = onLoad;
+            script.onerror = onError;
+            document.head.appendChild(script);
 
-                return '<tr data-id="' + App.escapeHtml(s.id) + '">' +
-                    '<td class="col-check"><input type="checkbox" class="row-check" value="' + App.escapeHtml(s.id) + '"></td>' +
-                    '<td><code>' + App.escapeHtml((s.id || '').substring(0, 8)) + '</code></td>' +
-                    '<td>' + App.escapeHtml(s.user || s.username || '—') + '</td>' +
-                    '<td>' + App.escapeHtml(s.source_ip || s.client_ip || '—') + '</td>' +
-                    '<td>' + App.escapeHtml(s.target || s.upstream || '—') + '</td>' +
-                    '<td>' + App.formatTime(s.start_time || s.started_at) + '</td>' +
-                    '<td>' + App.formatDuration(s.duration) + '</td>' +
-                    '<td><span class="badge ' + statusCls + '">' + App.escapeHtml(s.status || 'unknown') + '</span></td>' +
-                    '<td class="col-actions">' + actions + '</td>' +
-                    '</tr>';
-            }).join('');
-
-            tableHelper = App.table('#sessions-table', {
-                onSelectionChange: function() {
-                    var sel = tableHelper.getSelected();
-                    document.getElementById('btn-kill-selected').style.display = sel.length ? '' : 'none';
+            function onLoad() {
+                if (window.AsciinemaPlayer) {
+                    resolve(window.AsciinemaPlayer);
+                    return;
                 }
+                reject(new Error('player runtime unavailable'));
+            }
+
+            function onError() {
+                reject(new Error('failed to load asciinema-player assets'));
+            }
+        });
+
+        return asciinemaAssetsPromise;
+    }
+
+    function renderRecordingPlayer(session) {
+        var container = document.getElementById('session-recording-player');
+        var status = document.getElementById('session-recording-status');
+        if (!container || !session || !session.recording_file) {
+            return;
+        }
+
+        var downloadURL = recordingDownloadURL(session.id);
+        container.innerHTML = '';
+        if (status) {
+            status.textContent = 'Loading embedded playback…';
+        }
+
+        ensureAsciinemaPlayer().then(function(AsciinemaPlayer) {
+            if (!document.body.contains(container)) {
+                return;
+            }
+            container.innerHTML = '';
+            AsciinemaPlayer.create(downloadURL, container, {
+                fit: 'width',
+                autoPlay: false,
+                preload: true
             });
+            if (status) {
+                status.textContent = 'Embedded playback ready.';
+            }
+        }).catch(function(err) {
+            if (status) {
+                status.textContent = 'Embedded playback unavailable: ' + err.message;
+            }
+        });
+    }
+
+    function applyDateFilters(items, filters) {
+        var filtered = items.slice();
+        if (filters.from) {
+            var fromTime = new Date(filters.from);
+            filtered = filtered.filter(function(s) {
+                return new Date(s.start_time) >= fromTime;
+            });
+        }
+        if (filters.to) {
+            var toTime = new Date(filters.to);
+            toTime.setHours(23, 59, 59, 999);
+            filtered = filtered.filter(function(s) {
+                return new Date(s.start_time) <= toTime;
+            });
+        }
+        return filtered;
+    }
+
+    function renderSessions(items) {
+        var tbody = document.getElementById('sessions-body');
+        var selected = selectedSessionIDs();
+        if (!items.length) {
+            tbody.innerHTML = '<tr><td colspan="10" class="table-empty">' +
+                '<div class="table-empty-icon">🖥️</div>No sessions found</td></tr>';
+            document.getElementById('btn-kill-selected').style.display = 'none';
+            tableHelper = App.table('#sessions-table');
+            return;
+        }
+
+        tbody.innerHTML = items.map(function(s) {
+            var statusCls = 'badge-neutral';
+            if (s.status === 'active') statusCls = 'badge-success';
+            else if (s.status === 'killed') statusCls = 'badge-danger';
+
+            var actions = '<button class="btn btn-ghost btn-sm" onclick="viewSession(\'' + App.escapeHtml(s.id) + '\')" title="Details">👁</button>';
+            if (s.status === 'active') {
+                actions += ' <button class="btn btn-ghost btn-sm" onclick="killSession(\'' + App.escapeHtml(s.id) + '\')" title="Kill" style="color:var(--color-danger);">⏹</button>';
+            }
+            if (s.status === 'active' && s.recording_file) {
+                actions += ' <button class="btn btn-ghost btn-sm" onclick="viewSession(\'' + App.escapeHtml(s.id) + '\')" title="Live View">📺</button>';
+            }
+            if (s.recording_file) {
+                actions += ' <button class="btn btn-ghost btn-sm" onclick="viewSession(\'' + App.escapeHtml(s.id) + '\')" title="Recording playback">🎞</button>';
+            }
+            var deviceSummary = [s.client_os || '', s.client_version || ''].filter(Boolean).join(' / ');
+
+            return '<tr data-id="' + App.escapeHtml(s.id) + '">' +
+                '<td class="col-check"><input type="checkbox" class="row-check" value="' + App.escapeHtml(s.id) + '"' + (selected.indexOf(s.id) >= 0 ? ' checked' : '') + '></td>' +
+                '<td><code>' + App.escapeHtml((s.id || '').substring(0, 8)) + '</code></td>' +
+                '<td>' + App.escapeHtml(s.username || '—') + '</td>' +
+                '<td>' + App.escapeHtml(s.source_ip || '—') + '</td>' +
+                '<td>' + App.escapeHtml(deviceSummary || '—') + '</td>' +
+                '<td>' + App.escapeHtml(s.target_host || '—') + '</td>' +
+                '<td>' + App.formatTime(s.start_time) + '</td>' +
+                '<td>' + App.formatDuration(s.duration) + '</td>' +
+                '<td><span class="badge ' + statusCls + '">' + App.escapeHtml(s.status || 'unknown') + '</span></td>' +
+                '<td class="col-actions">' + actions + '</td>' +
+                '</tr>';
+        }).join('');
+
+        tableHelper = App.table('#sessions-table', {
+            onSelectionChange: function() {
+                var sel = tableHelper.getSelected();
+                document.getElementById('btn-kill-selected').style.display = sel.length ? '' : 'none';
+            }
+        });
+        document.getElementById('btn-kill-selected').style.display = selected.length ? '' : 'none';
+    }
+
+    function restartSessionsStream() {
+        var filters = currentFilters();
+        var params = sessionQueryParams(filters);
+        if (sessionsStream) {
+            sessionsStream.close();
+        }
+        sessionsStream = App.ws('/ws/sessions?' + params.toString(), {
+            onMessage: function(message) {
+                if (!message || message.type !== 'sessions.snapshot' || !message.data) {
+                    return;
+                }
+                renderSessions(applyDateFilters(message.data.sessions || [], currentFilters()));
+            },
+            maxReconnect: 10
+        });
+    }
+
+    function closeLiveView() {
+        liveViewEnabled = false;
+        if (liveViewSocket) {
+            liveViewSocket.close();
+            liveViewSocket = null;
+        }
+    }
+
+    function appendLiveView(chunk) {
+        var output = document.getElementById('session-live-output');
+        if (!output) {
+            return;
+        }
+        if (output.dataset.placeholder === 'true') {
+            output.textContent = '';
+            output.dataset.placeholder = 'false';
+        }
+        output.textContent += chunk;
+        output.scrollTop = output.scrollHeight;
+    }
+
+    function startLiveView(id) {
+        closeLiveView();
+        var output = document.getElementById('session-live-output');
+        if (!output) {
+            return;
+        }
+
+        liveViewEnabled = true;
+        output.textContent = 'Connecting live view…\n';
+        output.dataset.placeholder = 'true';
+
+        liveViewSocket = App.ws('/ws/sessions/' + encodeURIComponent(id) + '/live', {
+            onMessage: function(message) {
+                if (!liveViewEnabled || !message) {
+                    return;
+                }
+                if (message.type === 'session.live.chunk' && message.data && message.data.chunk) {
+                    appendLiveView(message.data.chunk);
+                    return;
+                }
+                if (message.type === 'session.live.status' && message.data && message.data.state) {
+                    appendLiveView('\n\n[' + message.data.state + ']\n');
+                    return;
+                }
+                if (message.type === 'error') {
+                    appendLiveView('\n\n[error] ' + (message.error || 'Live view failed') + '\n');
+                }
+            },
+            onClose: function() {
+                if (liveViewEnabled) {
+                    appendLiveView('\n\n[live view disconnected]\n');
+                }
+            },
+            maxReconnect: 0
+        });
+    }
+
+    window.loadSessions = function() {
+        var filters = currentFilters();
+        var params = sessionQueryParams(filters);
+        App.apiPage('GET', '/api/v2/sessions?' + params.toString()).then(function(page) {
+            renderSessions(applyDateFilters(page.items || [], filters));
+            restartSessionsStream();
         }).catch(function(e) {
             document.getElementById('sessions-body').innerHTML =
-                '<tr><td colspan="9" class="table-empty">Failed to load: ' + App.escapeHtml(e.message) + '</td></tr>';
+                '<tr><td colspan="10" class="table-empty">Failed to load: ' + App.escapeHtml(e.message) + '</td></tr>';
         });
     };
 
     window.viewSession = function(id) {
         var overlay = document.getElementById('session-detail-overlay');
         var body = document.getElementById('session-detail-body');
+        closeLiveView();
         body.innerHTML = '<div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row"></div>';
         overlay.classList.add('show');
 
-        App.api('GET', '/api/v1/sessions/' + encodeURIComponent(id)).then(function(s) {
+        App.apiData('GET', '/api/v2/sessions/' + encodeURIComponent(id)).then(function(s) {
+            var liveView = '';
+            var recordingView = '';
+            if (s.status === 'active' && s.recording_file) {
+                liveView = '<div class="form-group">' +
+                    '<label class="form-label">Live View</label>' +
+                    '<pre id="session-live-output" style="background:var(--terminal-bg);color:var(--terminal-text);padding:16px;border-radius:var(--radius-md);min-height:180px;max-height:320px;overflow:auto;white-space:pre-wrap;"></pre>' +
+                '</div>';
+            }
+            if (s.recording_file) {
+                recordingView = '<div class="form-group">' +
+                    '<label class="form-label">Recording Playback</label>' +
+                    '<div id="session-recording-player" class="session-recording-player"></div>' +
+                    '<div class="session-recording-actions">' +
+                        '<a class="btn btn-secondary btn-sm" href="' + recordingDownloadURL(s.id) + '">⬇ Download asciicast</a>' +
+                        '<span class="session-recording-status" id="session-recording-status">Loading embedded playback…</span>' +
+                    '</div>' +
+                '</div>';
+            }
+
             body.innerHTML =
                 '<div class="form-row">' +
                     '<div class="form-group"><label class="form-label">Session ID</label><div><code>' + App.escapeHtml(s.id) + '</code></div></div>' +
                     '<div class="form-group"><label class="form-label">Status</label><div>' + App.escapeHtml(s.status) + '</div></div>' +
                 '</div>' +
                 '<div class="form-row">' +
-                    '<div class="form-group"><label class="form-label">User</label><div>' + App.escapeHtml(s.user || s.username) + '</div></div>' +
-                    '<div class="form-group"><label class="form-label">Source IP</label><div>' + App.escapeHtml(s.source_ip || s.client_ip) + '</div></div>' +
+                    '<div class="form-group"><label class="form-label">User</label><div>' + App.escapeHtml(s.username) + '</div></div>' +
+                    '<div class="form-group"><label class="form-label">Source IP</label><div>' + App.escapeHtml(s.source_ip) + '</div></div>' +
                 '</div>' +
                 '<div class="form-row">' +
-                    '<div class="form-group"><label class="form-label">Target</label><div>' + App.escapeHtml(s.target || s.upstream) + '</div></div>' +
+                    '<div class="form-group"><label class="form-label">Client Version</label><div>' + App.escapeHtml(s.client_version || '—') + '</div></div>' +
+                    '<div class="form-group"><label class="form-label">Client OS</label><div>' + App.escapeHtml(s.client_os || '—') + '</div></div>' +
+                '</div>' +
+                '<div class="form-row">' +
+                    '<div class="form-group"><label class="form-label">Target</label><div>' + App.escapeHtml(s.target_host) + ':' + App.escapeHtml(String(s.target_port || 22)) + '</div></div>' +
                     '<div class="form-group"><label class="form-label">Duration</label><div>' + App.formatDuration(s.duration) + '</div></div>' +
                 '</div>' +
                 '<div class="form-row">' +
-                    '<div class="form-group"><label class="form-label">Start Time</label><div>' + App.formatTime(s.start_time || s.started_at) + '</div></div>' +
-                    '<div class="form-group"><label class="form-label">End Time</label><div>' + App.formatTime(s.end_time || s.ended_at) + '</div></div>' +
+                    '<div class="form-group"><label class="form-label">Start Time</label><div>' + App.formatTime(s.start_time) + '</div></div>' +
+                    '<div class="form-group"><label class="form-label">Recording</label><div>' + App.escapeHtml(s.recording_file || '—') + '</div></div>' +
                 '</div>' +
-                '<div class="form-group"><label class="form-label">Bytes Transferred</label><div>↑ ' + App.formatBytes(s.bytes_sent) + ' / ↓ ' + App.formatBytes(s.bytes_received) + '</div></div>' +
-                (s.commands ? '<div class="form-group"><label class="form-label">Command History</label><pre style="background:var(--terminal-bg);color:var(--terminal-text);padding:12px;border-radius:var(--radius-md);max-height:200px;overflow:auto;font-size:12px;">' + App.escapeHtml(s.commands.join('\n')) + '</pre></div>' : '');
+                '<div class="form-group"><label class="form-label">Device Fingerprint</label><div><code>' + App.escapeHtml(s.device_fingerprint || '—') + '</code></div></div>' +
+                '<div class="form-group"><label class="form-label">Bytes Transferred</label><div>↑ ' + App.formatBytes(s.bytes_out) + ' / ↓ ' + App.formatBytes(s.bytes_in) + '</div></div>' +
+                recordingView +
+                liveView;
+
+            if (s.status === 'active' && s.recording_file) {
+                startLiveView(s.id);
+            }
+            if (s.recording_file) {
+                renderRecordingPlayer(s);
+            }
         }).catch(function(e) {
             body.innerHTML = '<div class="alert alert-danger"><span class="alert-icon">✕</span><div class="alert-content">Failed to load session details: ' + App.escapeHtml(e.message) + '</div></div>';
         });
     };
 
     window.closeSessionDetail = function() {
+        closeLiveView();
         document.getElementById('session-detail-overlay').classList.remove('show');
     };
 
@@ -181,7 +465,7 @@
         var ok = await App.confirm('Kill session ' + id.substring(0, 8) + '…?');
         if (!ok) return;
         try {
-            await App.api('POST', '/api/v1/sessions/' + encodeURIComponent(id) + '/kill');
+            await App.api('DELETE', '/api/v2/sessions/' + encodeURIComponent(id));
             App.notify('Session killed', 'success');
             loadSessions();
         } catch(e) {
@@ -196,7 +480,7 @@
         var ok = await App.confirm('Kill ' + ids.length + ' selected session(s)?');
         if (!ok) return;
         try {
-            await App.api('POST', '/api/v1/sessions/kill', { session_ids: ids });
+            await App.api('POST', '/api/v2/sessions/bulk-kill', { ids: ids });
             App.notify(ids.length + ' session(s) killed', 'success');
             loadSessions();
         } catch(e) {

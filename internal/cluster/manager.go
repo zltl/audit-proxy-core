@@ -2,8 +2,10 @@ package cluster
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/json"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"net"
 	"net/http"
 	"sync"
@@ -30,10 +32,54 @@ type Manager struct {
 	httpServer *http.Server
 	httpClient *http.Client
 	state      *StateSync
+	configSync *ConfigSyncManager
 	eventCh    chan ClusterEvent
 	stopCh     chan struct{}
 
 	lastHeartbeat time.Time
+}
+
+const (
+	metadataRegionKey        = "region"
+	metadataZoneKey          = "zone"
+	metadataFailureDomainKey = "failure_domain"
+)
+
+func cloneMetadata(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneNode(node *Node) *Node {
+	if node == nil {
+		return nil
+	}
+	cloned := *node
+	cloned.Metadata = cloneMetadata(node.Metadata)
+	return &cloned
+}
+
+func newNodeMetadata(region, zone string) map[string]string {
+	metadata := make(map[string]string)
+	if region != "" {
+		metadata[metadataRegionKey] = region
+	}
+	if zone != "" {
+		metadata[metadataZoneKey] = zone
+	}
+	if region != "" && zone != "" {
+		metadata[metadataFailureDomainKey] = region + "/" + zone
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
 }
 
 // NewManager creates a new cluster manager. Call Start to begin cluster
@@ -45,7 +91,19 @@ func NewManager(cfg *ClusterConfig) (*Manager, error) {
 	if cfg.BindAddr == "" {
 		return nil, fmt.Errorf("cluster: BindAddr is required")
 	}
+	if err := validateTLSConfig(cfg); err != nil {
+		return nil, err
+	}
 	cfg.defaults()
+
+	clientTLSConfig, err := buildClientTLSConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	transport := &http.Transport{}
+	if clientTLSConfig != nil {
+		transport.TLSClientConfig = clientTLSConfig
+	}
 
 	now := time.Now().UTC()
 	self := &Node{
@@ -58,7 +116,7 @@ func NewManager(cfg *ClusterConfig) (*Manager, error) {
 		JoinedAt: now,
 		LastSeen: now,
 		Version:  "2.0.0",
-		Metadata: make(map[string]string),
+		Metadata: newNodeMetadata(cfg.Region, cfg.Zone),
 	}
 
 	m := &Manager{
@@ -66,12 +124,14 @@ func NewManager(cfg *ClusterConfig) (*Manager, error) {
 		self:   self,
 		nodes:  map[string]*Node{cfg.NodeID: self},
 		httpClient: &http.Client{
-			Timeout: 2 * time.Second,
+			Timeout:   2 * time.Second,
+			Transport: transport,
 		},
 		eventCh: make(chan ClusterEvent, 64),
 		stopCh:  make(chan struct{}),
 	}
 	m.state = newStateSync(m)
+	m.configSync = newConfigSyncManager(m)
 	return m, nil
 }
 
@@ -92,9 +152,20 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.lastHeartbeat = time.Now()
 	m.mu.Unlock()
 
-	m.httpServer = &http.Server{Handler: m.clusterMux()}
+	serverTLSConfig, err := buildServerTLSConfig(m.config)
+	if err != nil {
+		return err
+	}
+	m.httpServer = &http.Server{
+		Handler:   m.clusterMux(),
+		TLSConfig: serverTLSConfig,
+	}
 
-	go m.httpServer.Serve(ln)
+	if serverTLSConfig != nil {
+		go m.httpServer.ServeTLS(ln, "", "")
+	} else {
+		go m.httpServer.Serve(ln)
+	}
 
 	// If there are no seeds, this node starts as the leader.
 	if len(m.config.Seeds) == 0 {
@@ -112,6 +183,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	go m.electionLoop(ctx)
 	go m.heartbeatLoop(ctx)
 	go m.syncLoop(ctx)
+	go m.discoveryLoop(ctx)
 
 	return nil
 }
@@ -142,8 +214,15 @@ func (m *Manager) Join(seeds []string) error {
 	self := *m.self
 	m.mu.RUnlock()
 
+	resolveCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	resolvedSeeds, err := resolveSeedReferences(resolveCtx, seeds)
+	if err != nil {
+		return err
+	}
+
 	req := &JoinRequest{Node: &self}
-	for _, seed := range seeds {
+	for _, seed := range resolvedSeeds {
 		if seed == m.self.Address {
 			continue
 		}
@@ -194,8 +273,7 @@ func (m *Manager) Leader() *Node {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if n, ok := m.nodes[m.leader]; ok {
-		cp := *n
-		return &cp
+		return cloneNode(n)
 	}
 	return nil
 }
@@ -224,11 +302,50 @@ func (m *Manager) State() *StateSync {
 	return m.state
 }
 
+// SetConfigSyncApplier attaches a callback used by followers to apply synced
+// configuration snapshots locally.
+func (m *Manager) SetConfigSyncApplier(applier func([]byte) error) {
+	if m.configSync != nil {
+		m.configSync.SetApplier(applier)
+	}
+}
+
+// PublishConfigSnapshot publishes the desired cluster config snapshot and marks
+// the leader's local status as applied.
+func (m *Manager) PublishConfigSnapshot(snapshot []byte, version, changeID, requester string) error {
+	if m.configSync == nil {
+		return nil
+	}
+	return m.configSync.Publish(snapshot, version, changeID, requester)
+}
+
+// GetConfigSyncStatus returns the current cluster-wide config sync view.
+func (m *Manager) GetConfigSyncStatus() *ConfigSyncStatus {
+	if m.configSync == nil {
+		return &ConfigSyncStatus{Nodes: []ConfigSyncNodeStatus{}}
+	}
+	return m.configSync.Status()
+}
+
+// GetDesiredConfigPayload returns the current desired cluster config snapshot, if any.
+func (m *Manager) GetDesiredConfigPayload() (*ConfigSyncPayload, error) {
+	if m.configSync == nil {
+		return nil, nil
+	}
+	payload, err := m.configSync.desiredPayload()
+	if err != nil || payload == nil {
+		return payload, err
+	}
+	cloned := *payload
+	cloned.Snapshot = append(json.RawMessage(nil), payload.Snapshot...)
+	return &cloned, nil
+}
+
 // Self returns a copy of this node's descriptor.
 func (m *Manager) Self() Node {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return *m.self
+	return *cloneNode(m.self)
 }
 
 // Term returns the current election term.
@@ -243,7 +360,10 @@ func (m *Manager) Term() uint64 {
 func (m *Manager) electionLoop(ctx context.Context) {
 	for {
 		// Jitter the election timeout to reduce split votes.
-		jitter := time.Duration(rand.Int63n(int64(m.config.ElectionTimeout / 2)))
+		jitter, err := cryptoJitter(m.config.ElectionTimeout / 2)
+		if err != nil {
+			jitter = 0
+		}
 		timeout := m.config.ElectionTimeout + jitter
 
 		select {
@@ -269,6 +389,18 @@ func (m *Manager) electionLoop(ctx context.Context) {
 
 		m.startElection()
 	}
+}
+
+func cryptoJitter(max time.Duration) (time.Duration, error) {
+	if max <= 0 {
+		return 0, nil
+	}
+
+	n, err := crand.Int(crand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		return 0, err
+	}
+	return time.Duration(n.Int64()), nil
 }
 
 func (m *Manager) startElection() {
@@ -422,33 +554,68 @@ func (m *Manager) syncLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 
+		m.syncStateNow()
+	}
+}
+
+func (m *Manager) discoveryLoop(ctx context.Context) {
+	if len(m.config.Seeds) == 0 {
+		return
+	}
+
+	interval := m.config.SyncInterval
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+		}
+
 		m.mu.RLock()
-		if m.self.Role != RoleLeader {
-			m.mu.RUnlock()
+		shouldRetry := len(m.nodes) <= 1
+		m.mu.RUnlock()
+		if !shouldRetry {
 			continue
 		}
-		peers := m.peerAddressesLocked()
+		_ = m.Join(m.config.Seeds)
+	}
+}
+
+func (m *Manager) syncStateNow() {
+	m.mu.RLock()
+	if m.self.Role != RoleLeader {
 		m.mu.RUnlock()
+		return
+	}
+	peers := m.peerAddressesLocked()
+	m.mu.RUnlock()
 
-		snap := m.state.Snapshot()
-		req := &SyncRequest{Entries: snap}
+	snap := m.state.Snapshot()
+	req := &SyncRequest{Entries: snap}
 
-		for _, addr := range peers {
-			go func(a string) {
-				reply, err := m.sendSync(a, req)
-				if err != nil {
-					return
+	for _, addr := range peers {
+		go func(a string) {
+			reply, err := m.sendSync(a, req)
+			if err != nil {
+				return
+			}
+			// Merge follower data (higher version wins).
+			m.state.mu.Lock()
+			for k, v := range reply.Entries {
+				if existing, ok := m.state.data[k]; !ok || v.Version > existing.Version {
+					m.state.data[k] = v
 				}
-				// Merge follower data (higher version wins).
-				m.state.mu.Lock()
-				for k, v := range reply.Entries {
-					if existing, ok := m.state.data[k]; !ok || v.Version > existing.Version {
-						m.state.data[k] = v
-					}
-				}
-				m.state.mu.Unlock()
-			}(addr)
-		}
+			}
+			m.state.mu.Unlock()
+		}(addr)
 	}
 }
 
@@ -459,8 +626,7 @@ func (m *Manager) syncLoop(ctx context.Context) {
 func (m *Manager) nodeListLocked() []*Node {
 	nodes := make([]*Node, 0, len(m.nodes))
 	for _, n := range m.nodes {
-		cp := *n
-		nodes = append(nodes, &cp)
+		nodes = append(nodes, cloneNode(n))
 	}
 	return nodes
 }

@@ -23,6 +23,14 @@ extern "C" {
 
 /* Maximum address length */
 #define SESSION_MAX_ADDR 256
+#define SESSION_MAX_INSTANCE_ID 64
+#define SESSION_MAX_STORE_PATH 256
+#define SESSION_MAX_CLIENT_VERSION 256
+#define SESSION_MAX_DEVICE_OS 64
+#define SESSION_MAX_DEVICE_FINGERPRINT 64
+#define SESSION_MAX_LDAP_ATTR 256
+#define SESSION_MAX_LDAP_DN 512
+#define SESSION_MAX_LDAP_GROUPS 2048
 
 /* Session states */
 typedef enum {
@@ -57,6 +65,13 @@ typedef struct session_metadata {
     char target_addr[SESSION_MAX_ADDR];
     uint16_t target_port;
     session_auth_method_t auth_method;
+    char client_version[SESSION_MAX_CLIENT_VERSION];
+    char client_os[SESSION_MAX_DEVICE_OS];
+    char device_fingerprint[SESSION_MAX_DEVICE_FINGERPRINT];
+    char ldap_email[SESSION_MAX_LDAP_ATTR];
+    char ldap_department[SESSION_MAX_LDAP_ATTR];
+    char ldap_manager[SESSION_MAX_LDAP_DN];
+    char ldap_groups[SESSION_MAX_LDAP_GROUPS];
 } session_metadata_t;
 
 /* Session statistics */
@@ -67,11 +82,39 @@ typedef struct session_stats {
     time_t last_activity;       /* Last activity timestamp */
 } session_stats_t;
 
+/* Serializable active session snapshot used by admin/status endpoints. */
+typedef struct session_snapshot {
+    uint64_t id;
+    session_state_t state;
+    char username[SESSION_MAX_USERNAME];
+    char client_addr[SESSION_MAX_ADDR];
+    uint16_t client_port;
+    char target_addr[SESSION_MAX_ADDR];
+    uint16_t target_port;
+    char client_version[SESSION_MAX_CLIENT_VERSION];
+    char client_os[SESSION_MAX_DEVICE_OS];
+    char device_fingerprint[SESSION_MAX_DEVICE_FINGERPRINT];
+    uint64_t bytes_sent;
+    uint64_t bytes_received;
+    time_t start_time;
+    time_t last_activity;
+    char instance_id[SESSION_MAX_INSTANCE_ID];
+} session_snapshot_t;
+
+typedef enum {
+    SESSION_MANAGER_STORE_LOCAL = 0,
+    SESSION_MANAGER_STORE_FILE
+} session_manager_store_type_t;
+
 /* Session manager configuration */
 typedef struct session_manager_config {
     size_t max_sessions;        /* Maximum concurrent sessions */
     uint32_t session_timeout;   /* Session idle timeout (seconds) */
     uint32_t auth_timeout;      /* Authentication timeout (seconds) */
+    session_manager_store_type_t store_type; /* Shared session backend */
+    char store_path[SESSION_MAX_STORE_PATH]; /* Shared store path for file backend */
+    char instance_id[SESSION_MAX_INSTANCE_ID]; /* Stable node identifier */
+    int sync_interval_sec; /* Shared-store sync cadence */
 } session_manager_config_t;
 
 /**
@@ -110,6 +153,31 @@ void session_manager_remove_session(session_manager_t *manager,
  * @return Number of active sessions
  */
 size_t session_manager_get_count(const session_manager_t *manager);
+
+/**
+ * @brief Estimate the snapshot buffer size required for visible sessions.
+ * @param manager Session manager instance
+ * @return Snapshot capacity covering local and shared sessions
+ */
+size_t session_manager_snapshot_capacity(session_manager_t *manager);
+
+/**
+ * @brief Copy active sessions into a stable snapshot array.
+ * @param manager Session manager instance
+ * @param snapshots Output array
+ * @param max_snapshots Maximum number of entries to copy
+ * @return Number of snapshots copied
+ */
+int session_manager_snapshot(session_manager_t *manager, session_snapshot_t *snapshots,
+                             int max_snapshots);
+
+/**
+ * @brief Count authenticated sessions for a user, including shared backends.
+ * @param manager Session manager instance
+ * @param username Username to count
+ * @return Number of authenticated sessions for the user
+ */
+int session_manager_count_user(session_manager_t *manager, const char *username);
 
 /**
  * @brief Find session by ID
@@ -190,6 +258,12 @@ session_metadata_t *session_get_metadata(session_t *session);
  * @return Pointer to session statistics
  */
 session_stats_t *session_get_stats(session_t *session);
+
+/**
+ * @brief Flush the current session metadata/statistics into the session store.
+ * @param session Session instance
+ */
+void session_sync(session_t *session);
 
 /**
  * @brief Update session activity timestamp

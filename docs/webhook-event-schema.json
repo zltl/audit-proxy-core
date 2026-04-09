@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ssh-proxy-core/ssh-proxy-core/docs/webhook-event-schema.json",
+  "title": "SSH Proxy Webhook Event",
+  "description": "Schema for webhook payloads emitted by the SSH Proxy Core data plane.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event",
+    "timestamp",
+    "username",
+    "client_addr",
+    "detail"
+  ],
+  "properties": {
+    "event": {
+      "type": "string",
+      "description": "Event name identifying the webhook notification type.",
+      "enum": [
+        "auth.success",
+        "auth.failure",
+        "session.start",
+        "session.end",
+        "rate_limit.triggered",
+        "ip_acl.denied",
+        "upstream.unhealthy",
+        "upstream.healthy",
+        "config.reloaded",
+        "user.created",
+        "user.updated",
+        "user.deleted",
+        "policy.updated",
+        "certificate.issued",
+        "unknown"
+      ]
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix epoch timestamp in seconds when the event was generated."
+    },
+    "username": {
+      "type": "string",
+      "description": "Associated username when available; empty string otherwise."
+    },
+    "client_addr": {
+      "type": "string",
+      "description": "Client IP address or source address when available; empty string otherwise."
+    },
+    "detail": {
+      "type": "string",
+      "description": "Freeform event detail payload."
+    }
+  }
+}

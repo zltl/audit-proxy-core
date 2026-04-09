@@ -211,6 +211,18 @@ func DefaultRules() []*Rule {
 				GroupBy:    "username",
 			},
 		},
+		{
+			ID:          "high_risk_access",
+			Name:        "High-Risk Access",
+			Description: "Multi-factor contextual risk score exceeded the high-risk threshold",
+			Type:        RuleAnomaly,
+			Severity:    SeverityHigh,
+			Enabled:     true,
+			Conditions: RuleConditions{
+				EventTypes: []string{"auth_success", "connection"},
+				Threshold:  60,
+			},
+		},
 	}
 	for _, r := range rules {
 		r.compilePattern()

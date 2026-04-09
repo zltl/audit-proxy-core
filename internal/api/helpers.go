@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 )
 
 // APIResponse is the standard envelope for all API responses.
@@ -50,18 +49,6 @@ func readJSON(r *http.Request, dst interface{}) error {
 		return fmt.Errorf("invalid JSON: %w", err)
 	}
 	return nil
-}
-
-// getPathParam extracts the trailing part of a URL path after a given prefix.
-// For example, getPathParam(r, "/api/v2/sessions/") returns the session ID.
-func getPathParam(r *http.Request, prefix string) string {
-	p := strings.TrimPrefix(r.URL.Path, prefix)
-	p = strings.TrimSuffix(p, "/")
-	// If there's a sub-path, only return the first segment
-	if idx := strings.Index(p, "/"); idx != -1 {
-		return p[:idx]
-	}
-	return p
 }
 
 // parsePagination extracts page and per_page query parameters with defaults.

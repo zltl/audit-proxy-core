@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -25,8 +26,9 @@ const oidcStateTTL = 10 * time.Minute
 
 // oidcState is stored (HMAC-signed) in a cookie while the user is at the IdP.
 type oidcState struct {
-	State    string `json:"s"`
-	Verifier string `json:"v"`
+	State        string `json:"s"`
+	Verifier     string `json:"v"`
+	CLIChallenge string `json:"c,omitempty"`
 }
 
 // registerOIDCRoutes adds OIDC-specific HTTP routes to the mux.
@@ -41,6 +43,12 @@ func (s *Server) registerOIDCRoutes() {
 func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 	if s.oidcProvider == nil {
 		http.Error(w, "OIDC is not configured", http.StatusNotFound)
+		return
+	}
+
+	cliChallenge := r.URL.Query().Get("cli_challenge")
+	if cliChallenge != "" && (s.cliLogin == nil || !s.cliLogin.exists(cliChallenge)) {
+		http.Error(w, "CLI login challenge is invalid or expired", http.StatusBadRequest)
 		return
 	}
 
@@ -59,7 +67,7 @@ func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store state+verifier in a signed cookie.
-	stObj := oidcState{State: state, Verifier: verifier}
+	stObj := oidcState{State: state, Verifier: verifier, CLIChallenge: cliChallenge}
 	stJSON, _ := json.Marshal(stObj)
 	signed := signOIDCState(string(stJSON), s.config.SessionSecret)
 
@@ -160,8 +168,20 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	log.Printf("oidc: user %q (%s) authenticated with role %q", username, idToken.Subject, role)
 
 	// Create a session cookie (reuse existing HMAC-signed cookie mechanism).
-	cookie := middleware.CreateSessionCookie(username, s.config.SessionSecret, sessionTTL)
+	cookie := middleware.CreateSessionCookieWithRole(username, role, s.config.SessionSecret, sessionTTL)
+	cookie.Secure = r.TLS != nil
 	http.SetCookie(w, cookie)
+
+	if stObj.CLIChallenge != "" {
+		if s.cliLogin == nil || !s.cliLogin.complete(stObj.CLIChallenge, username, cookie.Value) {
+			s.renderOIDCError(w, r, "CLI login session expired. Please run `sshproxy login` again.")
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<!doctype html><html><head><meta charset="utf-8"><title>SSH Proxy CLI Login</title></head><body><h1>Authentication successful</h1><p>You can return to the <code>sshproxy</code> CLI and close this window.</p></body></html>`)
+		return
+	}
 
 	http.Redirect(w, r, "/dashboard", http.StatusFound)
 }
@@ -198,18 +218,18 @@ func (s *Server) handleOIDCLogout(w http.ResponseWriter, r *http.Request) {
 // renderOIDCError displays a user-friendly error page for OIDC failures.
 func (s *Server) renderOIDCError(w http.ResponseWriter, r *http.Request, message string) {
 	w.WriteHeader(http.StatusUnauthorized)
-	s.render(w, r, "pages/login.html", map[string]interface{}{
-		"Title": "Login",
+	s.render(w, r, "pages/login.html", s.loginPageData(map[string]interface{}{
 		"Error": message,
-	})
+	}))
 }
 
 // signOIDCState produces "payload|hmac_hex".
 func signOIDCState(payload, secret string) string {
+	encodedPayload := base64.RawURLEncoding.EncodeToString([]byte(payload))
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(payload))
+	mac.Write([]byte(encodedPayload))
 	sig := hex.EncodeToString(mac.Sum(nil))
-	return payload + "|" + sig
+	return encodedPayload + "|" + sig
 }
 
 // verifyOIDCState checks the HMAC and returns the payload.
@@ -229,7 +249,11 @@ func verifyOIDCState(raw, secret string) (string, error) {
 	if !hmac.Equal([]byte(sig), []byte(expected)) {
 		return "", fmt.Errorf("state cookie HMAC mismatch")
 	}
-	return payload, nil
+	decoded, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return "", fmt.Errorf("decode state cookie: %w", err)
+	}
+	return string(decoded), nil
 }
 
 // recoverOIDCState reads and validates the OIDC state cookie.

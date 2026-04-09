@@ -58,6 +58,18 @@
                 </button>
             </form>
 
+            {{if or .OIDCEnabled .SAMLEnabled}}
+            <div class="login-divider"><span>or continue with SSO</span></div>
+            <div class="login-sso-actions">
+                {{if .OIDCEnabled}}
+                <a class="btn btn-secondary btn-lg" href="/auth/oidc/login">Sign in with OIDC</a>
+                {{end}}
+                {{if .SAMLEnabled}}
+                <a class="btn btn-secondary btn-lg" href="/auth/saml/login">Sign in with SAML</a>
+                {{end}}
+            </div>
+            {{end}}
+
             <div class="login-footer">
                 SSH Proxy Core &copy; {{.Year}}
             </div>

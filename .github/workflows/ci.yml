@@ -31,6 +31,36 @@ jobs:
         if: matrix.build_type == 'debug'
         run: make check || true
 
+  go-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build Go control plane
+        run: go build ./...
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Install analyzers
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.25.0
+
+      - name: Run staticcheck
+        run: |
+          "$(go env GOPATH)/bin/staticcheck" ./...
+
+      - name: Run gosec
+        run: |
+          "$(go env GOPATH)/bin/gosec" -severity high -confidence high ./...
+
   build-docker:
     runs-on: ubuntu-latest
     steps:

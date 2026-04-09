@@ -1,0 +1,248 @@
+syntax = "proto3";
+
+package sshproxy.v1;
+
+option go_package = "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1;sshproxyv1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
+// SystemService exposes health and lifecycle-oriented control-plane state.
+service SystemService {
+  rpc GetHealth(google.protobuf.Empty) returns (SystemHealth);
+}
+
+// SessionService manages active SSH sessions and their recordings.
+service SessionService {
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc GetSession(ResourceID) returns (Session);
+  rpc KillSession(ResourceID) returns (OperationStatus);
+  rpc GetSessionRecording(ResourceID) returns (SessionRecordingMetadata);
+  rpc DownloadSessionRecording(ResourceID) returns (RecordingContent);
+}
+
+// UserService manages control-plane user accounts.
+service UserService {
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc GetUser(ResourceID) returns (User);
+  rpc CreateUser(CreateUserRequest) returns (User);
+  rpc UpdateUser(UpdateUserRequest) returns (User);
+  rpc DeleteUser(ResourceID) returns (OperationStatus);
+}
+
+// ServerService manages upstream SSH servers.
+service ServerService {
+  rpc ListServers(ListServersRequest) returns (ListServersResponse);
+  rpc GetServer(ResourceID) returns (Server);
+  rpc CreateServer(CreateServerRequest) returns (Server);
+  rpc UpdateServer(UpdateServerRequest) returns (Server);
+  rpc DeleteServer(ResourceID) returns (OperationStatus);
+  rpc GetHealthSummary(google.protobuf.Empty) returns (ServerHealthSummary);
+}
+
+// ConfigService manages the running data-plane configuration and version history.
+service ConfigService {
+  rpc GetConfig(google.protobuf.Empty) returns (ConfigDocument);
+  rpc UpdateConfig(UpdateConfigRequest) returns (OperationStatus);
+  rpc ListConfigVersions(google.protobuf.Empty) returns (ListConfigVersionsResponse);
+  rpc GetConfigVersion(GetConfigVersionRequest) returns (ConfigVersionContent);
+  rpc RollbackConfig(RollbackConfigRequest) returns (OperationStatus);
+  rpc ReloadConfig(google.protobuf.Empty) returns (OperationStatus);
+}
+
+// CertificateAuthorityService exposes the SSH CA functions consumed by automation.
+service CertificateAuthorityService {
+  rpc SignUserCertificate(SignUserCertificateRequest) returns (SignedCertificate);
+  rpc GetCAPublicKeys(google.protobuf.Empty) returns (CAPublicKeys);
+}
+
+message ResourceID {
+  string id = 1;
+}
+
+message PageInfo {
+  int32 total = 1;
+  int32 page = 2;
+  int32 per_page = 3;
+}
+
+message OperationStatus {
+  string message = 1;
+}
+
+message SystemHealth {
+  string status = 1;
+  string data_plane = 2;
+  int64 uptime_seconds = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message Session {
+  string id = 1;
+  string username = 2;
+  string source_ip = 3;
+  string target_host = 4;
+  int32 target_port = 5;
+  google.protobuf.Timestamp start_time = 6;
+  string duration = 7;
+  int64 bytes_in = 8;
+  int64 bytes_out = 9;
+  string status = 10;
+  string recording_file = 11;
+}
+
+message ListSessionsRequest {
+  string status = 1;
+  string user = 2;
+  string ip = 3;
+  int32 page = 4;
+  int32 per_page = 5;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+  PageInfo page = 2;
+}
+
+message SessionRecordingMetadata {
+  string session_id = 1;
+  string recording_file = 2;
+}
+
+message RecordingContent {
+  string filename = 1;
+  string content_type = 2;
+  bytes content = 3;
+}
+
+message User {
+  string username = 1;
+  string display_name = 2;
+  string email = 3;
+  string role = 4;
+  bool enabled = 5;
+  bool mfa_enabled = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  google.protobuf.Timestamp last_login = 9;
+  repeated string allowed_ips = 10;
+}
+
+message ListUsersRequest {
+  int32 page = 1;
+  int32 per_page = 2;
+}
+
+message ListUsersResponse {
+  repeated User users = 1;
+  PageInfo page = 2;
+}
+
+message CreateUserRequest {
+  User user = 1;
+  string password = 2;
+}
+
+message UpdateUserRequest {
+  User user = 1;
+  google.protobuf.FieldMask update_mask = 2;
+}
+
+message Server {
+  string id = 1;
+  string host = 2;
+  int32 port = 3;
+  string name = 4;
+  string group = 5;
+  string status = 6;
+  bool healthy = 7;
+  bool maintenance = 8;
+  int32 weight = 9;
+  int32 max_sessions = 10;
+  int32 sessions = 11;
+  map<string, string> tags = 12;
+  google.protobuf.Timestamp checked_at = 13;
+}
+
+message ListServersRequest {
+  int32 page = 1;
+  int32 per_page = 2;
+}
+
+message ListServersResponse {
+  repeated Server servers = 1;
+  PageInfo page = 2;
+}
+
+message CreateServerRequest {
+  Server server = 1;
+}
+
+message UpdateServerRequest {
+  Server server = 1;
+  google.protobuf.FieldMask update_mask = 2;
+}
+
+message ServerHealthSummary {
+  int32 total = 1;
+  int32 healthy = 2;
+  int32 unhealthy = 3;
+  int32 maintenance = 4;
+}
+
+message ConfigDocument {
+  google.protobuf.Struct config = 1;
+}
+
+message UpdateConfigRequest {
+  google.protobuf.Struct config = 1;
+}
+
+message ConfigVersionMetadata {
+  string version = 1;
+  int64 size = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message ListConfigVersionsResponse {
+  repeated ConfigVersionMetadata versions = 1;
+}
+
+message GetConfigVersionRequest {
+  string version = 1;
+}
+
+message ConfigVersionContent {
+  string version = 1;
+  oneof content {
+    google.protobuf.Struct config = 2;
+    string raw_content = 3;
+  }
+}
+
+message RollbackConfigRequest {
+  string version = 1;
+}
+
+message CAPublicKeys {
+  string user_ca_public_key = 1;
+  string host_ca_public_key = 2;
+}
+
+message SignUserCertificateRequest {
+  string public_key = 1;
+  repeated string principals = 2;
+  string ttl = 3;
+  google.protobuf.StringValue force_command = 4;
+  repeated string source_addresses = 5;
+}
+
+message SignedCertificate {
+  string certificate = 1;
+  uint64 serial = 2;
+  string key_id = 3;
+  string expires_at = 4;
+}

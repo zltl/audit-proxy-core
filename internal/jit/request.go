@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,32 +27,76 @@ const (
 	StatusRevoked  RequestStatus = "revoked"
 )
 
+// ErrApproverRoleNotAllowed is returned when the caller's role cannot approve the current stage.
+var ErrApproverRoleNotAllowed = errors.New("approver role not allowed for current stage")
+
+// ApprovalStage defines one stage in a multi-step approval workflow.
+type ApprovalStage struct {
+	Name              string   `json:"name,omitempty"`
+	ApproverRoles     []string `json:"approver_roles"`
+	RequiredApprovals int      `json:"required_approvals,omitempty"`
+}
+
+// ApprovalDecision records a stage-level approval or denial.
+type ApprovalDecision struct {
+	Stage        int       `json:"stage"`
+	StageName    string    `json:"stage_name,omitempty"`
+	Approver     string    `json:"approver"`
+	ApproverRole string    `json:"approver_role,omitempty"`
+	Decision     string    `json:"decision"`
+	Reason       string    `json:"reason,omitempty"`
+	Timestamp    time.Time `json:"timestamp"`
+}
+
+// AutoApproveRule matches requests that should skip manual approval.
+type AutoApproveRule struct {
+	Name        string        `json:"name,omitempty"`
+	Requesters  []string      `json:"requesters,omitempty"`
+	Targets     []string      `json:"targets,omitempty"`
+	Roles       []string      `json:"roles,omitempty"`
+	MaxDuration time.Duration `json:"max_duration,omitempty"`
+}
+
 // AccessRequest represents a JIT access request from a user.
 type AccessRequest struct {
-	ID         string        `json:"id"`
-	Requester  string        `json:"requester"`
-	Target     string        `json:"target"`
-	Role       string        `json:"role"`
-	Reason     string        `json:"reason"`
-	Duration   time.Duration `json:"duration"`
-	Status     RequestStatus `json:"status"`
-	Approver   string        `json:"approver,omitempty"`
-	CreatedAt  time.Time     `json:"created_at"`
-	ApprovedAt time.Time     `json:"approved_at,omitempty"`
-	ExpiresAt  time.Time     `json:"expires_at,omitempty"`
-	DeniedAt   time.Time     `json:"denied_at,omitempty"`
-	DenyReason string        `json:"deny_reason,omitempty"`
+	ID                    string             `json:"id"`
+	Requester             string             `json:"requester"`
+	Target                string             `json:"target"`
+	Role                  string             `json:"role"`
+	Reason                string             `json:"reason"`
+	Ticket                string             `json:"ticket,omitempty"`
+	BreakGlass            bool               `json:"break_glass,omitempty"`
+	Duration              time.Duration      `json:"duration"`
+	Status                RequestStatus      `json:"status"`
+	Approver              string             `json:"approver,omitempty"`
+	ApprovalStages        []ApprovalStage    `json:"approval_stages,omitempty"`
+	CurrentStage          int                `json:"current_stage,omitempty"`
+	CurrentApproverRoles  []string           `json:"current_approver_roles,omitempty"`
+	ApprovalHistory       []ApprovalDecision `json:"approval_history,omitempty"`
+	ReviewRequired        bool               `json:"review_required,omitempty"`
+	BreakGlassActivatedAt time.Time          `json:"break_glass_activated_at,omitempty"`
+	CreatedAt             time.Time          `json:"created_at"`
+	ApprovedAt            time.Time          `json:"approved_at,omitempty"`
+	ExpiresAt             time.Time          `json:"expires_at,omitempty"`
+	DeniedAt              time.Time          `json:"denied_at,omitempty"`
+	DenyReason            string             `json:"deny_reason,omitempty"`
 }
 
 // Policy controls JIT access behaviour.
 type Policy struct {
-	MaxDuration     time.Duration `json:"max_duration"`
-	AutoApprove     bool          `json:"auto_approve"`
-	AutoApproveFor  []string      `json:"auto_approve_for"`
-	RequireReason   bool          `json:"require_reason"`
-	ApproverRoles   []string      `json:"approver_roles"`
-	NotifyOnRequest bool          `json:"notify_on_request"`
-	NotifyOnApprove bool          `json:"notify_on_approve"`
+	MaxDuration           time.Duration     `json:"max_duration"`
+	AutoApprove           bool              `json:"auto_approve"`
+	AutoApproveFor        []string          `json:"auto_approve_for"`
+	AutoApproveRules      []AutoApproveRule `json:"auto_approve_rules,omitempty"`
+	RequireReason         bool              `json:"require_reason"`
+	ApproverRoles         []string          `json:"approver_roles"`
+	ApprovalStages        []ApprovalStage   `json:"approval_stages,omitempty"`
+	BreakGlassEnabled     bool              `json:"break_glass_enabled,omitempty"`
+	BreakGlassMaxDuration time.Duration     `json:"break_glass_max_duration,omitempty"`
+	BreakGlassRoles       []string          `json:"break_glass_roles,omitempty"`
+	BreakGlassTargets     []string          `json:"break_glass_targets,omitempty"`
+	NotifyOnRequest       bool              `json:"notify_on_request"`
+	NotifyOnApprove       bool              `json:"notify_on_approve"`
 }
 
 // AccessGrant represents an active access grant derived from an approved request.
@@ -119,15 +166,198 @@ func (s *Store) SetNotifier(n *Notifier) {
 func (s *Store) GetPolicy() Policy {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return *s.policy
+	return clonePolicy(s.policy)
 }
 
 // SetPolicy replaces the current policy and persists it.
 func (s *Store) SetPolicy(p *Policy) error {
+	if err := validatePolicy(p); err != nil {
+		return err
+	}
 	s.mu.Lock()
-	s.policy = p
+	s.policy = normalizePolicy(p)
 	s.mu.Unlock()
 	return s.save()
+}
+
+func clonePolicy(p *Policy) Policy {
+	if p == nil {
+		return Policy{}
+	}
+	clone := *p
+	clone.AutoApproveFor = cloneStringSlice(p.AutoApproveFor)
+	clone.ApproverRoles = cloneStringSlice(p.ApproverRoles)
+	clone.ApprovalStages = cloneApprovalStages(p.ApprovalStages)
+	clone.AutoApproveRules = cloneAutoApproveRules(p.AutoApproveRules)
+	clone.BreakGlassRoles = cloneStringSlice(p.BreakGlassRoles)
+	clone.BreakGlassTargets = cloneStringSlice(p.BreakGlassTargets)
+	return clone
+}
+
+func cloneStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	clone := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		clone = append(clone, value)
+	}
+	return clone
+}
+
+func cloneApprovalStages(stages []ApprovalStage) []ApprovalStage {
+	if len(stages) == 0 {
+		return nil
+	}
+	clone := make([]ApprovalStage, 0, len(stages))
+	for _, stage := range stages {
+		copied := stage
+		copied.ApproverRoles = cloneStringSlice(stage.ApproverRoles)
+		clone = append(clone, copied)
+	}
+	return clone
+}
+
+func cloneAutoApproveRules(rules []AutoApproveRule) []AutoApproveRule {
+	if len(rules) == 0 {
+		return nil
+	}
+	clone := make([]AutoApproveRule, 0, len(rules))
+	for _, rule := range rules {
+		copied := rule
+		copied.Requesters = cloneStringSlice(rule.Requesters)
+		copied.Targets = cloneStringSlice(rule.Targets)
+		copied.Roles = cloneStringSlice(rule.Roles)
+		clone = append(clone, copied)
+	}
+	return clone
+}
+
+func validatePolicy(p *Policy) error {
+	if p == nil {
+		return errors.New("policy is required")
+	}
+	for i, stage := range p.ApprovalStages {
+		if len(stage.ApproverRoles) == 0 {
+			return fmt.Errorf("approval stage %d must define approver_roles", i+1)
+		}
+		if stage.RequiredApprovals < 0 {
+			return fmt.Errorf("approval stage %d required_approvals must be >= 0", i+1)
+		}
+	}
+	for i, rule := range p.AutoApproveRules {
+		if rule.MaxDuration < 0 {
+			return fmt.Errorf("auto approve rule %d max_duration must be >= 0", i+1)
+		}
+	}
+	if p.BreakGlassMaxDuration < 0 {
+		return errors.New("break_glass_max_duration must be >= 0")
+	}
+	return nil
+}
+
+func normalizePolicy(p *Policy) *Policy {
+	clone := clonePolicy(p)
+	clone.ApproverRoles = normalizeStringSlice(clone.ApproverRoles)
+	clone.AutoApproveFor = normalizeStringSlice(clone.AutoApproveFor)
+	clone.ApprovalStages = normalizeApprovalStages(clone.ApprovalStages, clone.ApproverRoles)
+	clone.AutoApproveRules = normalizeAutoApproveRules(clone.AutoApproveRules)
+	clone.BreakGlassRoles = normalizeStringSlice(clone.BreakGlassRoles)
+	clone.BreakGlassTargets = normalizeStringSlice(clone.BreakGlassTargets)
+	if len(clone.ApproverRoles) == 0 && len(clone.ApprovalStages) > 0 {
+		roleSet := map[string]struct{}{}
+		for _, stage := range clone.ApprovalStages {
+			for _, role := range stage.ApproverRoles {
+				if _, ok := roleSet[role]; ok {
+					continue
+				}
+				roleSet[role] = struct{}{}
+				clone.ApproverRoles = append(clone.ApproverRoles, role)
+			}
+		}
+	}
+	if len(clone.ApproverRoles) == 0 {
+		clone.ApproverRoles = []string{"admin"}
+	}
+	return &clone
+}
+
+func normalizeStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func normalizeApprovalStages(stages []ApprovalStage, fallbackRoles []string) []ApprovalStage {
+	if len(stages) == 0 {
+		roles := normalizeStringSlice(fallbackRoles)
+		if len(roles) == 0 {
+			roles = []string{"admin"}
+		}
+		return []ApprovalStage{{
+			Name:              "approval",
+			ApproverRoles:     roles,
+			RequiredApprovals: 1,
+		}}
+	}
+	result := make([]ApprovalStage, 0, len(stages))
+	for i, stage := range stages {
+		roles := normalizeStringSlice(stage.ApproverRoles)
+		if len(roles) == 0 {
+			continue
+		}
+		required := stage.RequiredApprovals
+		if required <= 0 {
+			required = 1
+		}
+		name := strings.TrimSpace(stage.Name)
+		if name == "" {
+			name = fmt.Sprintf("stage-%d", i+1)
+		}
+		result = append(result, ApprovalStage{
+			Name:              name,
+			ApproverRoles:     roles,
+			RequiredApprovals: required,
+		})
+	}
+	if len(result) == 0 {
+		return normalizeApprovalStages(nil, fallbackRoles)
+	}
+	return result
+}
+
+func normalizeAutoApproveRules(rules []AutoApproveRule) []AutoApproveRule {
+	if len(rules) == 0 {
+		return nil
+	}
+	result := make([]AutoApproveRule, 0, len(rules))
+	for _, rule := range rules {
+		result = append(result, AutoApproveRule{
+			Name:        strings.TrimSpace(rule.Name),
+			Requesters:  normalizeStringSlice(rule.Requesters),
+			Targets:     normalizeStringSlice(rule.Targets),
+			Roles:       normalizeStringSlice(rule.Roles),
+			MaxDuration: rule.MaxDuration,
+		})
+	}
+	return result
 }
 
 func grantKey(username, target string) string {
@@ -158,7 +388,7 @@ func (s *Store) CreateRequest(req *AccessRequest) error {
 	}
 
 	s.mu.RLock()
-	policy := s.policy
+	policy := normalizePolicy(s.policy)
 	s.mu.RUnlock()
 
 	if policy.RequireReason && req.Reason == "" {
@@ -166,6 +396,11 @@ func (s *Store) CreateRequest(req *AccessRequest) error {
 	}
 	if policy.MaxDuration > 0 && req.Duration > policy.MaxDuration {
 		return fmt.Errorf("requested duration %s exceeds maximum %s", req.Duration, policy.MaxDuration)
+	}
+	if req.BreakGlass {
+		if err := validateBreakGlassRequest(policy, req); err != nil {
+			return err
+		}
 	}
 
 	id, err := generateID()
@@ -175,24 +410,25 @@ func (s *Store) CreateRequest(req *AccessRequest) error {
 	req.ID = id
 	req.Status = StatusPending
 	req.CreatedAt = s.now().UTC()
+	req.ApprovalStages = cloneApprovalStages(policy.ApprovalStages)
+	req.CurrentStage = 0
+	if len(req.ApprovalStages) > 0 {
+		req.CurrentApproverRoles = cloneStringSlice(req.ApprovalStages[0].ApproverRoles)
+	}
 
 	s.mu.Lock()
 	s.requests[req.ID] = req
 
 	// Check auto-approve
-	autoApprove := false
-	if policy.AutoApprove {
-		for _, role := range policy.AutoApproveFor {
-			if role == req.Role {
-				autoApprove = true
-				break
-			}
-		}
-	}
+	autoApprove := shouldAutoApprove(policy, req)
 	s.mu.Unlock()
 
-	if autoApprove {
-		if err := s.ApproveRequest(req.ID, "system"); err != nil {
+	if req.BreakGlass {
+		if err := s.activateBreakGlass(req.ID); err != nil {
+			return fmt.Errorf("break-glass activation failed: %w", err)
+		}
+	} else if autoApprove {
+		if err := s.ApproveRequestWithRole(req.ID, "system", "system"); err != nil {
 			return fmt.Errorf("auto-approve failed: %w", err)
 		}
 	} else {
@@ -207,6 +443,11 @@ func (s *Store) CreateRequest(req *AccessRequest) error {
 
 // ApproveRequest approves a pending request and creates an access grant.
 func (s *Store) ApproveRequest(id, approver string) error {
+	return s.ApproveRequestWithRole(id, approver, "")
+}
+
+// ApproveRequestWithRole approves the current stage for a pending request.
+func (s *Store) ApproveRequestWithRole(id, approver, approverRole string) error {
 	s.mu.Lock()
 	req, ok := s.requests[id]
 	if !ok {
@@ -218,12 +459,197 @@ func (s *Store) ApproveRequest(id, approver string) error {
 		return fmt.Errorf("request %s is not pending (status: %s)", id, req.Status)
 	}
 
+	policy := normalizePolicy(s.policy)
+	if len(req.ApprovalStages) == 0 {
+		req.ApprovalStages = cloneApprovalStages(policy.ApprovalStages)
+	}
+	stage, err := currentApprovalStage(req)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	if approverRole != "" && approverRole != "system" && !roleAllowed(stage.ApproverRoles, approverRole) {
+		s.mu.Unlock()
+		return fmt.Errorf("%w: %s", ErrApproverRoleNotAllowed, approverRole)
+	}
+	if hasDecision(req, req.CurrentStage, approver, "approved") {
+		s.mu.Unlock()
+		return fmt.Errorf("approver %s already approved stage %d", approver, req.CurrentStage+1)
+	}
+
+	now := s.now().UTC()
+	req.Approver = approver
+	req.ApprovalHistory = append(req.ApprovalHistory, ApprovalDecision{
+		Stage:        req.CurrentStage,
+		StageName:    stage.Name,
+		Approver:     approver,
+		ApproverRole: approverRole,
+		Decision:     "approved",
+		Timestamp:    now,
+	})
+
+	eventType := ""
+	if approvalsForStage(req, req.CurrentStage) >= stage.RequiredApprovals {
+		if req.CurrentStage+1 < len(req.ApprovalStages) {
+			req.CurrentStage++
+			req.CurrentApproverRoles = cloneStringSlice(req.ApprovalStages[req.CurrentStage].ApproverRoles)
+			eventType = "request_stage_advanced"
+		} else {
+			req.Status = StatusApproved
+			req.ApprovedAt = now
+			req.ExpiresAt = now.Add(req.Duration)
+			req.CurrentApproverRoles = nil
+
+			grant := &AccessGrant{
+				RequestID: req.ID,
+				Username:  req.Requester,
+				Target:    req.Target,
+				Role:      req.Role,
+				GrantedAt: now,
+				ExpiresAt: req.ExpiresAt,
+			}
+			s.grants[grantKey(req.Requester, req.Target)] = grant
+			eventType = "request_approved"
+		}
+	}
+	s.mu.Unlock()
+
+	if eventType != "" {
+		s.notifyAsync(eventType, req, approver)
+	}
+
+	if err := s.save(); err != nil {
+		return fmt.Errorf("failed to persist approval: %w", err)
+	}
+	return nil
+}
+
+// DenyRequest denies a pending request.
+func (s *Store) DenyRequest(id, approver, reason string) error {
+	return s.DenyRequestWithRole(id, approver, "", reason)
+}
+
+// DenyRequestWithRole denies the current stage for a pending request.
+func (s *Store) DenyRequestWithRole(id, approver, approverRole, reason string) error {
+	s.mu.Lock()
+	req, ok := s.requests[id]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("request %s not found", id)
+	}
+	if req.Status != StatusPending {
+		s.mu.Unlock()
+		return fmt.Errorf("request %s is not pending (status: %s)", id, req.Status)
+	}
+
+	policy := normalizePolicy(s.policy)
+	if len(req.ApprovalStages) == 0 {
+		req.ApprovalStages = cloneApprovalStages(policy.ApprovalStages)
+	}
+	stage, err := currentApprovalStage(req)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	if approverRole != "" && approverRole != "system" && !roleAllowed(stage.ApproverRoles, approverRole) {
+		s.mu.Unlock()
+		return fmt.Errorf("%w: %s", ErrApproverRoleNotAllowed, approverRole)
+	}
+
+	req.Status = StatusDenied
+	req.Approver = approver
+	req.DeniedAt = s.now().UTC()
+	req.DenyReason = reason
+	req.CurrentApproverRoles = nil
+	req.ApprovalHistory = append(req.ApprovalHistory, ApprovalDecision{
+		Stage:        req.CurrentStage,
+		StageName:    stage.Name,
+		Approver:     approver,
+		ApproverRole: approverRole,
+		Decision:     "denied",
+		Reason:       reason,
+		Timestamp:    req.DeniedAt,
+	})
+	s.mu.Unlock()
+
+	s.notifyAsync("request_denied", req, approver)
+
+	if err := s.save(); err != nil {
+		return fmt.Errorf("failed to persist denial: %w", err)
+	}
+	return nil
+}
+
+func shouldAutoApprove(policy *Policy, req *AccessRequest) bool {
+	for _, rule := range policy.AutoApproveRules {
+		if matchesAutoApproveRule(rule, req) {
+			return true
+		}
+	}
+	if policy.AutoApprove {
+		for _, role := range policy.AutoApproveFor {
+			if role == req.Role {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func validateBreakGlassRequest(policy *Policy, req *AccessRequest) error {
+	if !policy.BreakGlassEnabled {
+		return errors.New("break-glass access is not enabled")
+	}
+	if strings.TrimSpace(req.Reason) == "" {
+		return errors.New("reason is required for break-glass access")
+	}
+	if strings.TrimSpace(req.Ticket) == "" {
+		return errors.New("ticket is required for break-glass access")
+	}
+	if policy.BreakGlassMaxDuration > 0 && req.Duration > policy.BreakGlassMaxDuration {
+		return fmt.Errorf("break-glass duration %s exceeds maximum %s", req.Duration, policy.BreakGlassMaxDuration)
+	}
+	if len(policy.BreakGlassRoles) > 0 && !matchesAnyPattern(policy.BreakGlassRoles, req.Role) {
+		return fmt.Errorf("role %s is not eligible for break-glass access", req.Role)
+	}
+	if len(policy.BreakGlassTargets) > 0 && !matchesAnyPattern(policy.BreakGlassTargets, req.Target) {
+		return fmt.Errorf("target %s is not eligible for break-glass access", req.Target)
+	}
+	return nil
+}
+
+func (s *Store) activateBreakGlass(id string) error {
+	s.mu.Lock()
+	req, ok := s.requests[id]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("request %s not found", id)
+	}
+	if !req.BreakGlass {
+		s.mu.Unlock()
+		return fmt.Errorf("request %s is not a break-glass request", id)
+	}
+	if req.Status != StatusPending {
+		s.mu.Unlock()
+		return fmt.Errorf("request %s is not pending (status: %s)", id, req.Status)
+	}
+
 	now := s.now().UTC()
 	req.Status = StatusApproved
-	req.Approver = approver
+	req.Approver = "break-glass"
 	req.ApprovedAt = now
 	req.ExpiresAt = now.Add(req.Duration)
-
+	req.ReviewRequired = true
+	req.BreakGlassActivatedAt = now
+	req.CurrentApproverRoles = nil
+	req.ApprovalHistory = append(req.ApprovalHistory, ApprovalDecision{
+		Stage:     0,
+		StageName: "break-glass",
+		Approver:  "break-glass",
+		Decision:  "break_glass",
+		Reason:    req.Ticket,
+		Timestamp: now,
+	})
 	grant := &AccessGrant{
 		RequestID: req.ID,
 		Username:  req.Requester,
@@ -235,39 +661,82 @@ func (s *Store) ApproveRequest(id, approver string) error {
 	s.grants[grantKey(req.Requester, req.Target)] = grant
 	s.mu.Unlock()
 
-	s.notifyAsync("request_approved", req, approver)
+	s.notifyAsync("request_break_glass", req, req.Requester)
 
 	if err := s.save(); err != nil {
-		return fmt.Errorf("failed to persist approval: %w", err)
+		return fmt.Errorf("failed to persist break-glass approval: %w", err)
 	}
 	return nil
 }
 
-// DenyRequest denies a pending request.
-func (s *Store) DenyRequest(id, approver, reason string) error {
-	s.mu.Lock()
-	req, ok := s.requests[id]
-	if !ok {
-		s.mu.Unlock()
-		return fmt.Errorf("request %s not found", id)
+func matchesAutoApproveRule(rule AutoApproveRule, req *AccessRequest) bool {
+	if len(rule.Requesters) > 0 && !matchesAnyPattern(rule.Requesters, req.Requester) {
+		return false
 	}
-	if req.Status != StatusPending {
-		s.mu.Unlock()
-		return fmt.Errorf("request %s is not pending (status: %s)", id, req.Status)
+	if len(rule.Targets) > 0 && !matchesAnyPattern(rule.Targets, req.Target) {
+		return false
 	}
-
-	req.Status = StatusDenied
-	req.Approver = approver
-	req.DeniedAt = s.now().UTC()
-	req.DenyReason = reason
-	s.mu.Unlock()
-
-	s.notifyAsync("request_denied", req, approver)
-
-	if err := s.save(); err != nil {
-		return fmt.Errorf("failed to persist denial: %w", err)
+	if len(rule.Roles) > 0 && !matchesAnyPattern(rule.Roles, req.Role) {
+		return false
 	}
-	return nil
+	if rule.MaxDuration > 0 && req.Duration > rule.MaxDuration {
+		return false
+	}
+	return true
+}
+
+func matchesAnyPattern(patterns []string, value string) bool {
+	for _, patternValue := range patterns {
+		if patternValue == value {
+			return true
+		}
+		matched, err := path.Match(patternValue, value)
+		if err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
+
+func currentApprovalStage(req *AccessRequest) (ApprovalStage, error) {
+	if len(req.ApprovalStages) == 0 {
+		return ApprovalStage{}, errors.New("request approval workflow is not configured")
+	}
+	if req.CurrentStage < 0 || req.CurrentStage >= len(req.ApprovalStages) {
+		return ApprovalStage{}, fmt.Errorf("request current stage %d is invalid", req.CurrentStage)
+	}
+	if len(req.CurrentApproverRoles) == 0 {
+		req.CurrentApproverRoles = cloneStringSlice(req.ApprovalStages[req.CurrentStage].ApproverRoles)
+	}
+	return req.ApprovalStages[req.CurrentStage], nil
+}
+
+func roleAllowed(roles []string, role string) bool {
+	for _, candidate := range roles {
+		if candidate == role {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDecision(req *AccessRequest, stage int, approver, decision string) bool {
+	for _, item := range req.ApprovalHistory {
+		if item.Stage == stage && item.Approver == approver && item.Decision == decision {
+			return true
+		}
+	}
+	return false
+}
+
+func approvalsForStage(req *AccessRequest, stage int) int {
+	count := 0
+	for _, item := range req.ApprovalHistory {
+		if item.Stage == stage && item.Decision == "approved" {
+			count++
+		}
+	}
+	return count
 }
 
 // RevokeRequest revokes an approved request and removes its grant.
@@ -420,20 +889,26 @@ func (s *Store) notifyAsync(eventType string, req *AccessRequest, actor string) 
 
 	shouldNotify := false
 	switch eventType {
-	case "request_created":
+	case "request_created", "request_stage_advanced":
 		shouldNotify = policy.NotifyOnRequest
 	case "request_approved":
 		shouldNotify = policy.NotifyOnApprove
+	case "request_break_glass":
+		shouldNotify = true
 	default:
 		shouldNotify = true
 	}
 
 	if shouldNotify {
-		go n.Notify(context.Background(), &JITEvent{
-			Type:    eventType,
-			Request: req,
-			Actor:   actor,
-		})
+		go func() {
+			if err := n.Notify(context.Background(), &JITEvent{
+				Type:    eventType,
+				Request: req,
+				Actor:   actor,
+			}); err != nil {
+				log.Printf("jit: notify %s: %v", eventType, err)
+			}
+		}()
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -16,6 +17,7 @@ const (
 	ActionDeny    ActionType = "deny"
 	ActionAudit   ActionType = "audit"   // allow but flag for review
 	ActionApprove ActionType = "approve" // require real-time approval
+	ActionRewrite ActionType = "rewrite" // allow with command substitution
 )
 
 // CommandRule defines a pattern-based command control rule.
@@ -24,6 +26,7 @@ type CommandRule struct {
 	Name     string     `json:"name"`
 	Pattern  string     `json:"pattern"`
 	Action   ActionType `json:"action"`
+	Rewrite  string     `json:"rewrite,omitempty"`
 	Severity string     `json:"severity"`
 	Message  string     `json:"message"`
 	Roles    []string   `json:"roles"`
@@ -34,9 +37,10 @@ type CommandRule struct {
 
 // Decision is the result of evaluating a command against the policy engine.
 type Decision struct {
-	Action  ActionType   `json:"action"`
-	Rule    *CommandRule `json:"rule,omitempty"`
-	Message string       `json:"message"`
+	Action           ActionType   `json:"action"`
+	Rule             *CommandRule `json:"rule,omitempty"`
+	Message          string       `json:"message"`
+	RewrittenCommand string       `json:"rewritten_command,omitempty"`
 }
 
 // PolicyEngine evaluates commands against an ordered list of rules.
@@ -122,11 +126,15 @@ func (pe *PolicyEngine) Evaluate(cmd, username, role, target string) *Decision {
 			continue
 		}
 		if r.compiled != nil && r.compiled.MatchString(cmd) {
-			return &Decision{
+			decision := &Decision{
 				Action:  r.Action,
 				Rule:    r,
 				Message: r.Message,
 			}
+			if r.Action == ActionRewrite {
+				decision.RewrittenCommand = rewriteCommand(r.Rewrite, cmd, username, role, target)
+			}
+			return decision
 		}
 	}
 
@@ -143,6 +151,9 @@ func (pe *PolicyEngine) AddRule(rule *CommandRule) error {
 	}
 	if rule.Pattern == "" {
 		return fmt.Errorf("rule pattern is required")
+	}
+	if rule.Action == ActionRewrite && rule.Rewrite == "" {
+		return fmt.Errorf("rewrite action requires rewrite template")
 	}
 
 	compiled, err := regexp.Compile(rule.Pattern)
@@ -168,6 +179,9 @@ func (pe *PolicyEngine) AddRule(rule *CommandRule) error {
 func (pe *PolicyEngine) UpdateRule(id string, rule *CommandRule) error {
 	if rule.Pattern == "" {
 		return fmt.Errorf("rule pattern is required")
+	}
+	if rule.Action == ActionRewrite && rule.Rewrite == "" {
+		return fmt.Errorf("rewrite action requires rewrite template")
 	}
 
 	compiled, err := regexp.Compile(rule.Pattern)
@@ -255,4 +269,17 @@ func matchesTargets(ruleTargets []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func rewriteCommand(template, cmd, username, role, target string) string {
+	if template == "" {
+		return cmd
+	}
+	replacer := strings.NewReplacer(
+		"{{command}}", cmd,
+		"{{username}}", username,
+		"{{role}}", role,
+		"{{target}}", target,
+	)
+	return replacer.Replace(template)
 }

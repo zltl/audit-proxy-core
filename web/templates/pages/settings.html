@@ -11,6 +11,8 @@
     <button class="tab-item" data-tab="tab-ldap">LDAP</button>
     <button class="tab-item" data-tab="tab-routes">Routes</button>
     <button class="tab-item" data-tab="tab-policies">Policies</button>
+    <button class="tab-item" data-tab="tab-templates">Templates</button>
+    <button class="tab-item" data-tab="tab-import-export">Import / Export</button>
 </div>
 
 <!-- General -->
@@ -273,6 +275,99 @@
     </div>
 </div>
 
+<!-- Templates -->
+<div class="tab-content" id="tab-templates">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Environment Templates</h3>
+        </div>
+        <div class="card-body">
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">Template</label>
+                    <select class="form-control" id="config-template-select" onchange="onTemplateChange()" style="width:260px;">
+                        <option value="">Loading…</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Environment</label>
+                    <input type="text" class="form-control" id="config-template-environment" readonly>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Description</label>
+                <textarea class="form-control" id="config-template-description" rows="2" readonly></textarea>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Template Preview</label>
+                <pre id="config-template-preview" style="background:var(--terminal-bg);color:var(--terminal-text);padding:16px;border-radius:var(--radius-md);font-size:12px;max-height:320px;overflow:auto;white-space:pre-wrap;">Loading…</pre>
+                <div class="form-hint">Templates overlay the current config, then reuse the existing diff / approval workflow before apply.</div>
+            </div>
+        </div>
+        <div class="card-footer">
+            <button class="btn btn-secondary" onclick="loadConfigTemplates()">Refresh Templates</button>
+            <button class="btn btn-primary" onclick="previewTemplate()">Preview &amp; Apply Template</button>
+        </div>
+    </div>
+</div>
+
+<!-- Import / Export -->
+<div class="tab-content" id="tab-import-export">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Export Current Configuration</h3>
+        </div>
+        <div class="card-body">
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">Format</label>
+                    <select class="form-control" id="config-export-format" style="width:200px;">
+                        <option value="json">JSON</option>
+                        <option value="yaml">YAML</option>
+                        <option value="ini">INI</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Export Preview</label>
+                <textarea class="form-control" id="config-export-content" rows="10" readonly placeholder="Exported configuration will appear here"></textarea>
+            </div>
+        </div>
+        <div class="card-footer">
+            <button class="btn btn-secondary" onclick="loadConfigExport()">Load Export</button>
+            <button class="btn btn-primary" onclick="downloadConfigExport()">Download</button>
+        </div>
+    </div>
+
+    <div class="card mt-lg">
+        <div class="card-header">
+            <h3 class="card-title">Import Configuration</h3>
+        </div>
+        <div class="card-body">
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">Format</label>
+                    <select class="form-control" id="config-import-format" style="width:220px;">
+                        <option value="">Auto-detect</option>
+                        <option value="json">JSON</option>
+                        <option value="yaml">YAML</option>
+                        <option value="ini">INI</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Configuration Content</label>
+                <textarea class="form-control" id="config-import-content" rows="14" placeholder="Paste JSON, YAML, or INI here"></textarea>
+                <div class="form-hint">Import only prepares a preview. Final apply still goes through the existing diff, approval, and leader-only validation flow.</div>
+            </div>
+        </div>
+        <div class="card-footer">
+            <button class="btn btn-secondary" onclick="clearImportedConfig()">Clear</button>
+            <button class="btn btn-primary" onclick="previewImportedConfig()">Preview Import</button>
+        </div>
+    </div>
+</div>
+
 <!-- Config Version History -->
 <div class="mt-lg">
     <div class="card">
@@ -302,7 +397,7 @@
 <div class="modal-overlay" id="diff-modal-overlay">
     <div class="modal modal-lg">
         <div class="modal-header">
-            <h3 class="modal-title">Configuration Diff</h3>
+            <h3 class="modal-title" id="diff-modal-title">Configuration Diff</h3>
             <button class="modal-close" onclick="closeDiffModal()">✕</button>
         </div>
         <div class="modal-body">
@@ -320,10 +415,13 @@
 <script>
 (function() {
     var configData = {};
+    var configTemplates = [];
     var pendingSection = '';
+    var pendingConfig = null;
+    var pendingDiffChanged = false;
 
     window.loadConfig = function() {
-        App.api('GET', '/api/v1/config').then(function(data) {
+        App.apiData('GET', '/api/v2/config').then(function(data) {
             configData = data;
             // General
             document.getElementById('cfg-bind-addr').value = data.bind_addr || '';
@@ -366,8 +464,8 @@
         });
 
         // Config history
-        App.api('GET', '/api/v1/config/history').then(function(data) {
-            var items = data.versions || data.history || data || [];
+        App.apiPage('GET', '/api/v2/config/versions').then(function(page) {
+            var items = page.items || [];
             var tbody = document.getElementById('config-history-body');
             if (!items.length) {
                 tbody.innerHTML = '<tr><td colspan="5" class="table-empty">No history</td></tr>';
@@ -380,7 +478,7 @@
                     '<td>' + App.formatTime(v.timestamp || v.date) + '</td>' +
                     '<td>' + App.escapeHtml(v.summary || v.message || '—') + '</td>' +
                     '<td class="col-actions">' +
-                        '<button class="btn btn-ghost btn-sm" onclick="viewDiff(\'' + App.escapeHtml(v.version || v.id || '') + '\')" title="View">👁</button> ' +
+                        '<button class="btn btn-ghost btn-sm" onclick="viewDiff(\'' + App.escapeHtml(v.version || v.id || '') + '\')" title="Compare with current">👁</button> ' +
                         '<button class="btn btn-ghost btn-sm" onclick="rollbackConfig(\'' + App.escapeHtml(v.version || v.id || '') + '\')" title="Rollback" style="color:var(--color-warning);">↩</button>' +
                     '</td></tr>';
             }).join('');
@@ -388,6 +486,8 @@
             document.getElementById('config-history-body').innerHTML =
                 '<tr><td colspan="5" class="table-empty">Failed to load history</td></tr>';
         });
+
+        loadConfigTemplates();
     };
 
     function renderRoutes(routes) {
@@ -426,6 +526,132 @@
                 '</tr>';
         }).join('');
     }
+
+    function renderTemplatePreview(template) {
+        document.getElementById('config-template-environment').value = template ? (template.environment || '') : '';
+        document.getElementById('config-template-description').value = template ? (template.description || '') : '';
+        document.getElementById('config-template-preview').textContent = template ? JSON.stringify(template.config || {}, null, 2) : 'No template selected';
+    }
+
+    window.loadConfigTemplates = function() {
+        App.apiPage('GET', '/api/v2/config/templates').then(function(page) {
+            configTemplates = page.items || [];
+            var select = document.getElementById('config-template-select');
+            if (!configTemplates.length) {
+                select.innerHTML = '<option value="">No templates available</option>';
+                renderTemplatePreview(null);
+                return;
+            }
+            select.innerHTML = configTemplates.map(function(template) {
+                return '<option value="' + App.escapeHtml(template.name || '') + '">' + App.escapeHtml(template.name || '') + '</option>';
+            }).join('');
+            window.onTemplateChange();
+        }).catch(function(e) {
+            document.getElementById('config-template-select').innerHTML = '<option value="">Failed to load templates</option>';
+            document.getElementById('config-template-preview').textContent = 'Failed to load templates';
+            App.notify('Failed to load config templates: ' + e.message, 'error');
+        });
+    };
+
+    window.onTemplateChange = function() {
+        var name = document.getElementById('config-template-select').value;
+        var template = null;
+        configTemplates.forEach(function(item) {
+            if (item.name === name) {
+                template = item;
+            }
+        });
+        renderTemplatePreview(template);
+    };
+
+    window.previewTemplate = async function() {
+        var name = document.getElementById('config-template-select').value;
+        if (!name) {
+            App.notify('Select a template first', 'warning');
+            return;
+        }
+
+        pendingSection = 'template:' + name;
+        try {
+            var template = await App.apiData('GET', '/api/v2/config/templates/' + encodeURIComponent(name));
+            pendingConfig = template.resolved_config || null;
+            if (!pendingConfig) {
+                App.notify('Template did not return a resolved configuration', 'error');
+                return;
+            }
+            var diff = await App.apiData('POST', '/api/v2/config/diff', { to_config: pendingConfig });
+            pendingDiffChanged = !!diff.changed;
+            document.getElementById('diff-modal-title').textContent = 'Configuration Diff (' + name + ' template)';
+            document.getElementById('diff-content').textContent = diff.diff || '';
+            document.getElementById('diff-apply-btn').style.display = pendingDiffChanged ? '' : 'none';
+            document.getElementById('diff-modal-overlay').classList.add('show');
+        } catch (e) {
+            pendingConfig = null;
+            pendingDiffChanged = false;
+            App.notify('Failed to preview template: ' + e.message, 'error');
+        }
+    };
+
+    window.loadConfigExport = function() {
+        var format = document.getElementById('config-export-format').value || 'json';
+        return App.apiData('GET', '/api/v2/config/export?format=' + encodeURIComponent(format)).then(function(data) {
+            document.getElementById('config-export-content').value = data.content || '';
+        }).catch(function(e) {
+            App.notify('Failed to export config: ' + e.message, 'error');
+            throw e;
+        });
+    };
+
+    window.downloadConfigExport = async function() {
+        var format = document.getElementById('config-export-format').value || 'json';
+        await window.loadConfigExport();
+        var content = document.getElementById('config-export-content').value;
+        if (!content) {
+            App.notify('Nothing to download', 'warning');
+            return;
+        }
+        var mime = format === 'json' ? 'application/json' : (format === 'yaml' ? 'application/yaml' : 'text/plain');
+        var blob = new Blob([content], { type: mime });
+        var link = document.createElement('a');
+        var url = URL.createObjectURL(blob);
+        link.href = url;
+        link.download = 'ssh-proxy-config.' + format;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
+
+    window.clearImportedConfig = function() {
+        document.getElementById('config-import-content').value = '';
+    };
+
+    window.previewImportedConfig = async function() {
+        var format = document.getElementById('config-import-format').value;
+        var content = document.getElementById('config-import-content').value;
+        if (!content.trim()) {
+            App.notify('Paste configuration content first', 'warning');
+            return;
+        }
+
+        pendingSection = 'import:' + (format || 'auto');
+        try {
+            var result = await App.apiData('POST', '/api/v2/config/import', {
+                format: format,
+                content: content
+            });
+            pendingConfig = result.config || null;
+            pendingDiffChanged = !!result.changed;
+            document.getElementById('diff-modal-title').textContent = 'Configuration Diff (import preview)';
+            document.getElementById('diff-content').textContent = result.diff || '';
+            document.getElementById('diff-apply-btn').style.display = pendingDiffChanged ? '' : 'none';
+            document.getElementById('diff-modal-overlay').classList.add('show');
+        } catch (e) {
+            pendingConfig = null;
+            pendingDiffChanged = false;
+            App.notify('Failed to preview import: ' + e.message, 'error');
+        }
+    };
 
     window.addRouteRow = function() {
         var tbody = document.getElementById('routes-body');
@@ -478,14 +704,18 @@
             payload.policies = collectTableData('policies-body', ['pattern', 'allow', 'deny']);
         }
 
-        // Show diff
+        pendingConfig = mergeSection(section, payload);
         try {
-            var diff = await App.api('POST', '/api/v1/config/preview', { section: section, changes: payload });
-            document.getElementById('diff-content').textContent = diff.diff || JSON.stringify(payload, null, 2);
+            var diff = await App.apiData('POST', '/api/v2/config/diff', { to_config: pendingConfig });
+            pendingDiffChanged = !!diff.changed;
+            document.getElementById('diff-modal-title').textContent = 'Configuration Diff (current → pending)';
+            document.getElementById('diff-content').textContent = diff.diff || '';
+            document.getElementById('diff-apply-btn').style.display = pendingDiffChanged ? '' : 'none';
             document.getElementById('diff-modal-overlay').classList.add('show');
-        } catch(e) {
-            // If preview not available, save directly
-            applyConfig();
+        } catch (e) {
+            pendingConfig = null;
+            pendingDiffChanged = false;
+            App.notify('Failed to generate config diff: ' + e.message, 'error');
         }
     };
 
@@ -503,11 +733,33 @@
         return rows;
     }
 
+    function mergeSection(section, changes) {
+        var merged = Object.assign({}, configData);
+        if (section === 'routes' || section === 'policies') {
+            merged[section] = changes[section];
+            return merged;
+        }
+        Object.keys(changes).forEach(function(key) {
+            merged[key] = changes[key];
+        });
+        return merged;
+    }
+
     window.applyConfig = async function() {
         closeDiffModal();
         try {
-            await App.api('POST', '/api/v1/config', { section: pendingSection });
+            if (!pendingConfig) {
+                App.notify('No pending configuration changes', 'warning');
+                return;
+            }
+            if (!pendingDiffChanged) {
+                App.notify('No configuration changes to apply', 'info');
+                return;
+            }
+            await App.api('PUT', '/api/v2/config', pendingConfig);
             App.notify('Configuration saved. Reloading…', 'success');
+            pendingConfig = null;
+            pendingDiffChanged = false;
             loadConfig();
         } catch(e) {
             App.notify('Failed: ' + e.message, 'error');
@@ -516,11 +768,14 @@
 
     window.closeDiffModal = function() {
         document.getElementById('diff-modal-overlay').classList.remove('show');
+        document.getElementById('diff-modal-title').textContent = 'Configuration Diff';
+        document.getElementById('diff-apply-btn').style.display = '';
     };
 
     window.viewDiff = function(version) {
-        App.api('GET', '/api/v1/config/history/' + encodeURIComponent(version)).then(function(data) {
-            document.getElementById('diff-content').textContent = data.diff || JSON.stringify(data, null, 2);
+        App.apiData('POST', '/api/v2/config/diff', { from_version: version, to_version: 'current' }).then(function(data) {
+            document.getElementById('diff-modal-title').textContent = 'Configuration Diff (' + version + ' → current)';
+            document.getElementById('diff-content').textContent = data.diff || '';
             document.getElementById('diff-apply-btn').style.display = 'none';
             document.getElementById('diff-modal-overlay').classList.add('show');
         }).catch(function(e) {
@@ -532,7 +787,7 @@
         var ok = await App.confirm('Rollback configuration to version ' + version + '?');
         if (!ok) return;
         try {
-            await App.api('POST', '/api/v1/config/rollback', { version: version });
+            await App.api('POST', '/api/v2/config/rollback', { version: version });
             App.notify('Configuration rolled back', 'success');
             loadConfig();
         } catch(e) {
@@ -541,17 +796,7 @@
     };
 
     window.testLdap = async function() {
-        try {
-            var data = await App.api('POST', '/api/v1/config/test-ldap', {
-                ldap_uri: document.getElementById('cfg-ldap-uri').value,
-                ldap_base_dn: document.getElementById('cfg-ldap-basedn').value,
-                ldap_bind_dn: document.getElementById('cfg-ldap-binddn').value,
-                ldap_bind_pw: document.getElementById('cfg-ldap-bindpw').value,
-            });
-            App.notify('LDAP connection successful!', 'success');
-        } catch(e) {
-            App.notify('LDAP test failed: ' + e.message, 'error');
-        }
+        App.notify('LDAP connectivity testing is not exposed by the current control-plane API yet', 'info');
     };
 
     loadConfig();

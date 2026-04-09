@@ -39,6 +39,7 @@ type Alert struct {
 	RuleID      string      `json:"rule_id"`
 	RuleName    string      `json:"rule_name"`
 	Severity    Severity    `json:"severity"`
+	Score       int         `json:"score"`
 	Status      AlertStatus `json:"status"`
 	Username    string      `json:"username,omitempty"`
 	SourceIP    string      `json:"source_ip,omitempty"`
@@ -66,6 +67,7 @@ type DetectorConfig struct {
 	MaxAlertsPerRule int
 	WebhookURL       string
 	DataDir          string
+	GeoResolver      GeoResolver
 	// SuppressionWindow is how long to suppress duplicate alerts for the same
 	// rule + grouping key. Default: 10 minutes.
 	SuppressionWindow time.Duration
@@ -92,14 +94,16 @@ func (c *DetectorConfig) defaults() {
 
 // Detector is the behavioural threat detection engine.
 type Detector struct {
-	rules       []*Rule
-	alerts      map[string]*Alert
-	mu          sync.RWMutex
-	trackers    map[string]*behaviorTracker
-	config      *DetectorConfig
-	alertCh     chan *Alert
-	stopCh      chan struct{}
-	suppression map[string]time.Time // ruleID:groupKey → last alert time
+	rules        []*Rule
+	alerts       map[string]*Alert
+	mu           sync.RWMutex
+	trackers     map[string]*behaviorTracker
+	assessments  map[string]*RiskAssessment
+	riskProfiles map[string]*riskProfile
+	config       *DetectorConfig
+	alertCh      chan *Alert
+	stopCh       chan struct{}
+	suppression  map[string]time.Time // ruleID:groupKey → last alert time
 }
 
 // NewDetector creates a new threat detection engine.
@@ -109,13 +113,15 @@ func NewDetector(cfg *DetectorConfig) *Detector {
 	}
 	cfg.defaults()
 	d := &Detector{
-		rules:       DefaultRules(),
-		alerts:      make(map[string]*Alert),
-		trackers:    make(map[string]*behaviorTracker),
-		config:      cfg,
-		alertCh:     make(chan *Alert, 256),
-		stopCh:      make(chan struct{}),
-		suppression: make(map[string]time.Time),
+		rules:        DefaultRules(),
+		alerts:       make(map[string]*Alert),
+		trackers:     make(map[string]*behaviorTracker),
+		assessments:  make(map[string]*RiskAssessment),
+		riskProfiles: make(map[string]*riskProfile),
+		config:       cfg,
+		alertCh:      make(chan *Alert, 256),
+		stopCh:       make(chan struct{}),
+		suppression:  make(map[string]time.Time),
 	}
 	if cfg.DataDir != "" {
 		d.loadAlerts()
@@ -151,9 +157,13 @@ func (d *Detector) ProcessEvent(event *Event) []*Alert {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now()
 	}
+	d.enrichGeo(event)
 
 	// Record event in per-group trackers.
 	d.recordEvent(event)
+
+	assessment := d.assessRisk(event)
+	d.attachRiskAssessment(event, assessment)
 
 	var alerts []*Alert
 	for _, rule := range d.rules {
@@ -166,6 +176,10 @@ func (d *Detector) ProcessEvent(event *Event) []*Alert {
 		if alert := d.evaluate(rule, event); alert != nil {
 			alerts = append(alerts, alert)
 		}
+	}
+	if assessment != nil {
+		d.storeRiskAssessment(assessment)
+		d.updateRiskProfile(event)
 	}
 	return alerts
 }
@@ -270,10 +284,38 @@ func (d *Detector) Stats() map[string]interface{} {
 		AlertResolved: 0, AlertFalsePositive: 0,
 	}
 	byRule := make(map[string]int)
+	riskScore := 0
+	activeScoreTotal := 0
+	byRiskLevel := map[RiskLevel]int{
+		RiskLevelLow: 0, RiskLevelMedium: 0,
+		RiskLevelHigh: 0, RiskLevelCritical: 0,
+	}
 	for _, a := range d.alerts {
 		bySeverity[a.Severity]++
 		byStatus[a.Status]++
 		byRule[a.RuleID]++
+		if a.Status == AlertActive {
+			activeScoreTotal += a.Score
+			if a.Score > riskScore {
+				riskScore = a.Score
+			}
+		}
+	}
+	assessments := make([]*RiskAssessment, 0, len(d.assessments))
+	dynamicRiskScore := 0
+	for _, assessment := range d.assessments {
+		assessments = append(assessments, cloneRiskAssessment(assessment))
+		byRiskLevel[assessment.Level]++
+		if assessment.Score > dynamicRiskScore {
+			dynamicRiskScore = assessment.Score
+		}
+	}
+	sortRiskAssessments(assessments)
+	if len(assessments) > 10 {
+		assessments = assessments[:10]
+	}
+	if dynamicRiskScore > riskScore {
+		riskScore = dynamicRiskScore
 	}
 	// Top rules by alert count.
 	type ruleCount struct {
@@ -296,11 +338,17 @@ func (d *Detector) Stats() map[string]interface{} {
 		topRules = topRules[:10]
 	}
 	return map[string]interface{}{
-		"total_alerts": len(d.alerts),
-		"by_severity":  bySeverity,
-		"by_status":    byStatus,
-		"top_rules":    topRules,
-		"rules_count":  len(d.rules),
+		"total_alerts":          len(d.alerts),
+		"by_severity":           bySeverity,
+		"by_status":             byStatus,
+		"top_rules":             topRules,
+		"rules_count":           len(d.rules),
+		"risk_score":            riskScore,
+		"dynamic_risk_score":    dynamicRiskScore,
+		"active_score_total":    activeScoreTotal,
+		"risk_assessment_count": len(d.assessments),
+		"by_risk_level":         byRiskLevel,
+		"top_risk_entities":     assessments,
 	}
 }
 
@@ -458,6 +506,9 @@ func (d *Detector) evalAnomaly(rule *Rule, event *Event) *Alert {
 		if bt == nil {
 			return nil
 		}
+		if evidence := d.geoImpossibleTravelEvidence(bt, rule.Conditions.Window, event); evidence != "" {
+			return d.createAlert(rule, event, evidence)
+		}
 		ips := bt.UniqueValuesInWindow("source_ip", rule.Conditions.Window)
 		if len(ips) < 2 {
 			return nil
@@ -487,6 +538,13 @@ func (d *Detector) evalAnomaly(rule *Rule, event *Event) *Alert {
 		}
 		return d.createAlert(rule, event, fmt.Sprintf(
 			"Session duration %.0fs exceeds threshold %ds", dur, rule.Conditions.Threshold))
+
+	case "high_risk_access":
+		assessment := riskAssessmentFromEvent(event)
+		if assessment == nil || assessment.Score < rule.Conditions.Threshold || len(assessment.Factors) < 2 {
+			return nil
+		}
+		return d.createAlert(rule, event, assessment.Summary)
 
 	default:
 		return nil
@@ -543,6 +601,135 @@ func (d *Detector) fieldValue(field string, event *Event) string {
 	return ""
 }
 
+func (d *Detector) enrichGeo(event *Event) {
+	if d.config == nil || d.config.GeoResolver == nil || event == nil || event.SourceIP == "" {
+		return
+	}
+	if existing, ok := geoLocationFromDetails(event.Details); ok && existing.locationKey() != "" {
+		return
+	}
+	location, ok := d.config.GeoResolver.Lookup(event.SourceIP)
+	if !ok {
+		return
+	}
+	if event.Details == nil {
+		event.Details = make(map[string]interface{})
+	}
+	enrichDetailsWithGeo(event.Details, location)
+}
+
+func (d *Detector) geoImpossibleTravelEvidence(bt *behaviorTracker, window time.Duration, event *Event) string {
+	currentLoc, ok := geoLocationFromDetails(event.Details)
+	if !ok {
+		return ""
+	}
+	events := bt.EventsInWindow(window)
+	for _, prior := range events {
+		if prior.Timestamp.After(event.Timestamp) || prior.SourceIP == "" || prior.SourceIP == event.SourceIP {
+			continue
+		}
+		if prior.Type != "auth_success" && prior.Type != "connection" {
+			continue
+		}
+		priorLoc, ok := geoLocationFromDetails(prior.Details)
+		if !ok {
+			continue
+		}
+		if evidence, matched := impossibleTravelEvidence(prior, event, priorLoc, currentLoc); matched {
+			return evidence
+		}
+	}
+	return ""
+}
+
+func impossibleTravelEvidence(prior trackedEvent, current *Event, priorLoc, currentLoc GeoLocation) (string, bool) {
+	if current == nil || current.Timestamp.Before(prior.Timestamp) {
+		return "", false
+	}
+	if priorLoc.locationKey() == "" || currentLoc.locationKey() == "" || priorLoc.locationKey() == currentLoc.locationKey() {
+		return "", false
+	}
+
+	elapsed := current.Timestamp.Sub(prior.Timestamp)
+	if elapsed <= 0 {
+		return "", false
+	}
+
+	if distanceKM, ok := priorLoc.distanceKM(currentLoc); ok {
+		if distanceKM < 500 {
+			return "", false
+		}
+		speedKMH := distanceKM / elapsed.Hours()
+		if speedKMH < 900 {
+			return "", false
+		}
+		return fmt.Sprintf(
+			"GeoIP anomaly for user %q: %s → %s in %s (%.0f km, %.0f km/h)",
+			current.Username, priorLoc.label(), currentLoc.label(), elapsed.Round(time.Minute), distanceKM, speedKMH,
+		), true
+	}
+
+	if priorLoc.countryKey() == "" || priorLoc.countryKey() == currentLoc.countryKey() {
+		return "", false
+	}
+	return fmt.Sprintf(
+		"GeoIP anomaly for user %q: country changed from %s to %s in %s",
+		current.Username, priorLoc.label(), currentLoc.label(), elapsed.Round(time.Minute),
+	), true
+}
+
+func enrichDetailsWithGeo(details map[string]interface{}, location GeoLocation) {
+	if details == nil {
+		return
+	}
+	if location.CountryCode != "" {
+		details["geo_country_code"] = location.CountryCode
+	}
+	if location.Country != "" {
+		details["geo_country"] = location.Country
+	}
+	if location.Region != "" {
+		details["geo_region"] = location.Region
+	}
+	if location.City != "" {
+		details["geo_city"] = location.City
+	}
+	if location.HasCoordinates {
+		details["geo_latitude"] = location.Latitude
+		details["geo_longitude"] = location.Longitude
+	}
+}
+
+func geoLocationFromDetails(details map[string]interface{}) (GeoLocation, bool) {
+	if details == nil {
+		return GeoLocation{}, false
+	}
+	location := GeoLocation{
+		CountryCode: stringFromDetails(details["geo_country_code"]),
+		Country:     stringFromDetails(details["geo_country"]),
+		Region:      stringFromDetails(details["geo_region"]),
+		City:        stringFromDetails(details["geo_city"]),
+	}
+	lat, latOK := toFloat64(details["geo_latitude"])
+	lon, lonOK := toFloat64(details["geo_longitude"])
+	if latOK && lonOK {
+		location.Latitude = lat
+		location.Longitude = lon
+		location.HasCoordinates = true
+	}
+	if location.locationKey() == "" {
+		return GeoLocation{}, false
+	}
+	return location, true
+}
+
+func stringFromDetails(value interface{}) string {
+	if s, ok := value.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
 func (d *Detector) createAlert(rule *Rule, event *Event, evidence string) *Alert {
 	// Deduplication: suppress if we recently fired the same rule for the same group key.
 	groupKey := d.groupKey(rule, event)
@@ -574,6 +761,7 @@ func (d *Detector) createAlert(rule *Rule, event *Event, evidence string) *Alert
 		RuleID:      rule.ID,
 		RuleName:    rule.Name,
 		Severity:    rule.Severity,
+		Score:       scoreForRule(rule),
 		Status:      AlertActive,
 		Username:    event.Username,
 		SourceIP:    event.SourceIP,
@@ -594,6 +782,35 @@ func (d *Detector) createAlert(rule *Rule, event *Event, evidence string) *Alert
 	}
 
 	return alert
+}
+
+func scoreForRule(rule *Rule) int {
+	base := severityBaseScore(rule.Severity)
+	switch rule.Type {
+	case RuleSequence:
+		base += 10
+	case RuleAnomaly:
+		base += 5
+	}
+	if base > 100 {
+		return 100
+	}
+	return base
+}
+
+func severityBaseScore(severity Severity) int {
+	switch severity {
+	case SeverityCritical:
+		return 95
+	case SeverityHigh:
+		return 80
+	case SeverityMedium:
+		return 60
+	case SeverityLow:
+		return 35
+	default:
+		return 20
+	}
 }
 
 func (d *Detector) groupKey(rule *Rule, event *Event) string {
@@ -655,6 +872,25 @@ func (d *Detector) cleanup() {
 	// Clean trackers.
 	for _, bt := range d.trackers {
 		bt.Cleanup(1 * time.Hour)
+	}
+	for key, assessment := range d.assessments {
+		if assessment.UpdatedAt.Before(cutoff) {
+			delete(d.assessments, key)
+		}
+	}
+	for username, profile := range d.riskProfiles {
+		if profile == nil {
+			delete(d.riskProfiles, username)
+			continue
+		}
+		for fingerprint, seenAt := range profile.KnownDevices {
+			if seenAt.Before(cutoff) {
+				delete(profile.KnownDevices, fingerprint)
+			}
+		}
+		if profile.LastSuccessfulEventAt.Before(cutoff) && len(profile.KnownDevices) == 0 {
+			delete(d.riskProfiles, username)
+		}
 	}
 }
 

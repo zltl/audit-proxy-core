@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
 )
 
 // helper: create a temp dir with a minimal config file
@@ -72,6 +74,74 @@ tls_enabled = true
 tls_cert = /etc/cert.pem
 tls_key = /etc/key.pem
 `
+}
+
+type mockSubjectDataProvider struct {
+	user       models.User
+	userExists bool
+	sessions   []models.Session
+	events     []models.AuditEvent
+	servers    []models.Server
+}
+
+func (m mockSubjectDataProvider) GetUser(username string) (models.User, bool, error) {
+	if !m.userExists || m.user.Username != username {
+		return models.User{}, false, nil
+	}
+	return m.user, true, nil
+}
+
+func (m mockSubjectDataProvider) ListSessions(username string, start, end time.Time) ([]models.Session, error) {
+	var out []models.Session
+	for _, session := range m.sessions {
+		if session.Username != username {
+			continue
+		}
+		if !start.IsZero() && session.StartTime.Before(start) {
+			continue
+		}
+		if !end.IsZero() && session.StartTime.After(end) {
+			continue
+		}
+		out = append(out, session)
+	}
+	return out, nil
+}
+
+func (m mockSubjectDataProvider) ListAuditEvents(username string, start, end time.Time) ([]models.AuditEvent, error) {
+	var out []models.AuditEvent
+	for _, event := range m.events {
+		if event.Username != username {
+			continue
+		}
+		if !start.IsZero() && event.Timestamp.Before(start) {
+			continue
+		}
+		if !end.IsZero() && event.Timestamp.After(end) {
+			continue
+		}
+		out = append(out, event)
+	}
+	return out, nil
+}
+
+func (m mockSubjectDataProvider) SnapshotUsers() ([]models.User, error) {
+	if !m.userExists {
+		return []models.User{}, nil
+	}
+	return []models.User{m.user}, nil
+}
+
+func (m mockSubjectDataProvider) SnapshotSessions() ([]models.Session, error) {
+	return append([]models.Session(nil), m.sessions...), nil
+}
+
+func (m mockSubjectDataProvider) SnapshotAuditEvents() ([]models.AuditEvent, error) {
+	return append([]models.AuditEvent(nil), m.events...), nil
+}
+
+func (m mockSubjectDataProvider) SnapshotServers() ([]models.Server, error) {
+	return append([]models.Server(nil), m.servers...), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -166,6 +236,41 @@ func TestGenerateISO27001(t *testing.T) {
 	}
 	if report.TotalCount != 3 {
 		t.Errorf("total controls = %d, want 3", report.TotalCount)
+	}
+}
+
+func TestGenerateMLPS20(t *testing.T) {
+	auditDir, configPath, dataDir := setupTestEnv(t, fullConfig())
+	os.WriteFile(filepath.Join(auditDir, "test.jsonl"), []byte(`{"id":"1"}`+"\n"), 0644)
+	os.WriteFile(filepath.Join(auditDir, "test.sig"), []byte("sig"), 0644)
+
+	rg := NewReportGenerator(auditDir, configPath, dataDir)
+	report, err := rg.Generate(FrameworkMLPS20, time.Now().AddDate(0, -1, 0), time.Now(), "tester")
+	if err != nil {
+		t.Fatalf("Generate MLPS20: %v", err)
+	}
+	if report.TotalCount != 4 {
+		t.Errorf("total controls = %d, want 4", report.TotalCount)
+	}
+}
+
+func TestGenerateMLPS30(t *testing.T) {
+	auditDir, configPath, dataDir := setupTestEnv(t, fullConfig())
+	os.WriteFile(filepath.Join(auditDir, "test.jsonl"), []byte(`{"id":"1"}`+"\n"), 0644)
+	os.WriteFile(filepath.Join(auditDir, "test.sig"), []byte("sig"), 0644)
+	os.MkdirAll(filepath.Join(dataDir, "config_versions"), 0755)
+	os.WriteFile(filepath.Join(dataDir, "sessions.db"), []byte("sqlite"), 0644)
+
+	rg := NewReportGenerator(auditDir, configPath, dataDir)
+	report, err := rg.Generate(FrameworkMLPS30, time.Now().AddDate(0, -1, 0), time.Now(), "tester")
+	if err != nil {
+		t.Fatalf("Generate MLPS30: %v", err)
+	}
+	if report.TotalCount != 5 {
+		t.Errorf("total controls = %d, want 5", report.TotalCount)
+	}
+	if report.Score != 100 {
+		t.Errorf("score = %.1f, want 100", report.Score)
 	}
 }
 
@@ -357,8 +462,8 @@ func TestControlRemediationOnFail(t *testing.T) {
 
 func TestAllFrameworks(t *testing.T) {
 	frameworks := AllFrameworks()
-	if len(frameworks) != 5 {
-		t.Errorf("AllFrameworks() = %d, want 5", len(frameworks))
+	if len(frameworks) != 7 {
+		t.Errorf("AllFrameworks() = %d, want 7", len(frameworks))
 	}
 }
 
@@ -415,5 +520,199 @@ func TestExportCSVRoundTrip(t *testing.T) {
 	}
 	if count != report.TotalCount {
 		t.Errorf("csv data rows = %d, want %d", count, report.TotalCount)
+	}
+}
+
+func TestGenerateGDPRDataAccessReport(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	rg := NewReportGenerator("", "", "")
+	rg.SetSubjectDataProvider(mockSubjectDataProvider{
+		userExists: true,
+		user: models.User{
+			Username:    "alice",
+			DisplayName: "Alice",
+			Email:       "alice@example.com",
+			Role:        "operator",
+			Enabled:     true,
+			MFAEnabled:  true,
+		},
+		sessions: []models.Session{
+			{ID: "s1", Username: "alice", TargetHost: "db-1", StartTime: start.Add(time.Hour), Status: "closed"},
+		},
+		events: []models.AuditEvent{
+			{ID: "ev1", Username: "alice", EventType: "login", Timestamp: start.Add(2 * time.Hour)},
+		},
+	})
+
+	report, err := rg.GenerateGDPRDataReport(GDPRDataReportAccess, "alice", start, end, "tester")
+	if err != nil {
+		t.Fatalf("GenerateGDPRDataReport(access): %v", err)
+	}
+	if report.Kind != GDPRDataReportAccess {
+		t.Fatalf("report.Kind = %q, want access", report.Kind)
+	}
+	if report.Account == nil || report.Account.Email != "alice@example.com" {
+		t.Fatalf("unexpected account snapshot: %+v", report.Account)
+	}
+	if len(report.Artifacts) != 3 {
+		t.Fatalf("artifacts = %d, want 3", len(report.Artifacts))
+	}
+	if len(report.Sessions) != 1 || len(report.AuditEvents) != 1 {
+		t.Fatalf("sessions=%d audit=%d, want 1/1", len(report.Sessions), len(report.AuditEvents))
+	}
+}
+
+func TestGenerateGDPRDataDeletionReport(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	rg := NewReportGenerator("", "", "")
+	rg.SetSubjectDataProvider(mockSubjectDataProvider{
+		userExists: false,
+		sessions: []models.Session{
+			{ID: "s1", Username: "alice", TargetHost: "db-1", StartTime: start.Add(time.Hour), Status: "closed"},
+		},
+		events: []models.AuditEvent{
+			{ID: "ev1", Username: "alice", EventType: "session_end", Timestamp: start.Add(2 * time.Hour)},
+		},
+	})
+
+	report, err := rg.GenerateGDPRDataReport(GDPRDataReportDeletion, "alice", start, end, "tester")
+	if err != nil {
+		t.Fatalf("GenerateGDPRDataReport(deletion): %v", err)
+	}
+	if report.Account != nil {
+		t.Fatalf("expected nil account, got %+v", report.Account)
+	}
+	if len(report.DeletionChecks) != 3 {
+		t.Fatalf("deletion checks = %d, want 3", len(report.DeletionChecks))
+	}
+	if len(report.RetentionNotes) != 2 {
+		t.Fatalf("retention notes = %d, want 2", len(report.RetentionNotes))
+	}
+	if report.DeletionChecks[0].Status != "removed" {
+		t.Fatalf("user account deletion status = %q, want removed", report.DeletionChecks[0].Status)
+	}
+}
+
+func TestExportGDPRDataCSV(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	rg := NewReportGenerator("", "", "")
+	rg.SetSubjectDataProvider(mockSubjectDataProvider{
+		userExists: true,
+		user:       models.User{Username: "alice", Email: "alice@example.com", Role: "viewer", Enabled: true},
+		sessions:   []models.Session{{ID: "s1", Username: "alice", StartTime: start.Add(time.Hour), TargetHost: "db-1", Status: "closed"}},
+		events:     []models.AuditEvent{{ID: "ev1", Username: "alice", EventType: "login", Timestamp: start.Add(2 * time.Hour)}},
+	})
+
+	report, err := rg.GenerateGDPRDataReport(GDPRDataReportDeletion, "alice", start, end, "tester")
+	if err != nil {
+		t.Fatalf("GenerateGDPRDataReport(): %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := rg.ExportGDPRDataCSV(report, &buf); err != nil {
+		t.Fatalf("ExportGDPRDataCSV: %v", err)
+	}
+	rows, err := csv.NewReader(&buf).ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(rows) < 5 {
+		t.Fatalf("csv rows = %d, want at least 5", len(rows))
+	}
+	if rows[0][0] != "record_type" {
+		t.Fatalf("header[0] = %q, want record_type", rows[0][0])
+	}
+}
+
+func TestExportGDPRDataJSON(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	rg := NewReportGenerator("", "", "")
+	rg.SetSubjectDataProvider(mockSubjectDataProvider{
+		userExists: true,
+		user:       models.User{Username: "alice", Email: "alice@example.com"},
+	})
+
+	report, err := rg.GenerateGDPRDataReport(GDPRDataReportAccess, "alice", start, end, "tester")
+	if err != nil {
+		t.Fatalf("GenerateGDPRDataReport(): %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := rg.ExportGDPRDataJSON(report, &buf); err != nil {
+		t.Fatalf("ExportGDPRDataJSON: %v", err)
+	}
+	var decoded GDPRDataReport
+	if err := json.NewDecoder(&buf).Decode(&decoded); err != nil {
+		t.Fatalf("Decode(): %v", err)
+	}
+	if decoded.Subject != "alice" || decoded.Kind != GDPRDataReportAccess {
+		t.Fatalf("decoded report = %+v", decoded)
+	}
+}
+
+func TestValidateCustomReportTemplateRejectsMutations(t *testing.T) {
+	rg := NewReportGenerator("", "", "")
+	err := rg.ValidateCustomReportTemplate(CustomReportTemplate{
+		Name:          "bad",
+		Query:         "DELETE FROM audit_events",
+		DefaultFormat: "csv",
+	})
+	if err == nil {
+		t.Fatal("expected mutation query to be rejected")
+	}
+}
+
+func TestExecuteCustomReportTemplate(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	rg := NewReportGenerator("", "", "")
+	rg.SetQueryDataProvider(mockSubjectDataProvider{
+		userExists: true,
+		user:       models.User{Username: "alice", Email: "alice@example.com", Role: "operator"},
+		sessions: []models.Session{
+			{ID: "s1", Username: "alice", TargetHost: "db-1", Status: "active", StartTime: start},
+		},
+		events: []models.AuditEvent{
+			{ID: "ev1", Username: "alice", EventType: "login", Timestamp: start},
+		},
+		servers: []models.Server{
+			{ID: "srv1", Name: "db-1", Host: "10.0.0.10", Port: 22, Healthy: true},
+		},
+	})
+
+	result, err := rg.ExecuteCustomReportTemplate(CustomReportTemplate{
+		ID:            "tpl-1",
+		Name:          "Active sessions by user",
+		Query:         "SELECT username, COUNT(*) AS sessions FROM sessions GROUP BY username",
+		DefaultFormat: "csv",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteCustomReportTemplate: %v", err)
+	}
+	if len(result.Columns) != 2 || result.Columns[0] != "username" {
+		t.Fatalf("unexpected columns: %+v", result.Columns)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][0] != "alice" || result.Rows[0][1] != "1" {
+		t.Fatalf("unexpected rows: %+v", result.Rows)
+	}
+}
+
+func TestExportCustomReportPDF(t *testing.T) {
+	rg := NewReportGenerator("", "", "")
+	var buf bytes.Buffer
+	if err := rg.ExportCustomReportPDF(&CustomReportResult{
+		TemplateID:   "tpl-1",
+		TemplateName: "Test Template",
+		GeneratedAt:  time.Now().UTC(),
+		Columns:      []string{"username", "sessions"},
+		Rows:         [][]string{{"alice", "1"}},
+	}, &buf); err != nil {
+		t.Fatalf("ExportCustomReportPDF: %v", err)
+	}
+	if !strings.HasPrefix(buf.String(), "%PDF-1.4") {
+		t.Fatalf("expected PDF header, got %q", buf.String()[:min(len(buf.String()), 8)])
 	}
 }

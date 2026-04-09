@@ -1,0 +1,129 @@
+{{template "base" .}}
+
+{{define "title"}}Webhook Deliveries{{end}}
+
+{{define "page-title"}}Webhook Deliveries{{end}}
+
+{{define "content"}}
+<div class="toolbar">
+    <div class="toolbar-left">
+        <div class="search-input">
+            <input type="text" id="webhook-search" placeholder="Search event or payload…" oninput="renderWebhookDeliveries()">
+        </div>
+    </div>
+    <div class="toolbar-right">
+        <button class="btn btn-secondary btn-sm" onclick="retryWebhookDeliveries()">↻ Retry Selected</button>
+        <button class="btn btn-primary btn-sm" onclick="retryWebhookDeliveries([], true)">⟳ Retry All</button>
+        <button class="btn btn-secondary btn-sm" onclick="loadWebhookDeliveries()">Refresh</button>
+    </div>
+</div>
+
+<div class="card">
+    <div class="table-wrapper">
+        <table id="webhook-deliveries-table">
+            <thead>
+                <tr>
+                    <th style="width:32px;"><input type="checkbox" id="webhook-select-all" onchange="toggleAllWebhookDeliveries(this.checked)"></th>
+                    <th>Failed At</th>
+                    <th>Event</th>
+                    <th>Attempts</th>
+                    <th>Payload</th>
+                    <th class="col-actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="webhook-deliveries-body">
+                <tr><td colspan="6" class="table-empty">
+                    <div class="skeleton skeleton-row"></div>
+                    <div class="skeleton skeleton-row"></div>
+                    <div class="skeleton skeleton-row"></div>
+                </td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+(function() {
+    var allDeliveries = [];
+
+    function payloadPreview(delivery) {
+        var source = delivery.payload_json || delivery.payload || '';
+        var text = typeof source === 'string' ? source : JSON.stringify(source);
+        if (!text) return '—';
+        return text.length > 140 ? text.slice(0, 140) + '…' : text;
+    }
+
+    window.loadWebhookDeliveries = function() {
+        App.apiPage('GET', '/api/v2/webhooks/deliveries?per_page=200').then(function(page) {
+            allDeliveries = page.items || [];
+            renderWebhookDeliveries();
+        }).catch(function(e) {
+            document.getElementById('webhook-deliveries-body').innerHTML =
+                '<tr><td colspan="6" class="table-empty">Failed to load: ' + App.escapeHtml(e.message) + '</td></tr>';
+        });
+    };
+
+    window.renderWebhookDeliveries = function() {
+        var q = document.getElementById('webhook-search').value.toLowerCase();
+        var items = allDeliveries.filter(function(item) {
+            if (!q) return true;
+            return (item.event || '').toLowerCase().includes(q) || payloadPreview(item).toLowerCase().includes(q);
+        });
+
+        var tbody = document.getElementById('webhook-deliveries-body');
+        if (!items.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No failed webhook deliveries</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = items.map(function(item) {
+            return '<tr>' +
+                '<td><input type="checkbox" class="webhook-select" value="' + App.escapeHtml(item.id) + '"></td>' +
+                '<td>' + App.formatTime(item.failed_at ? new Date(item.failed_at * 1000).toISOString() : null) + '</td>' +
+                '<td><span class="badge badge-warning">' + App.escapeHtml(item.event || 'unknown') + '</span></td>' +
+                '<td>' + (item.attempts || 0) + '</td>' +
+                '<td><code style="white-space:pre-wrap;word-break:break-word;">' + App.escapeHtml(payloadPreview(item)) + '</code></td>' +
+                '<td class="col-actions"><button class="btn btn-ghost btn-sm" onclick="retryWebhookDeliveries([\'' + App.escapeHtml(item.id) + '\'])">Retry</button></td>' +
+            '</tr>';
+        }).join('');
+        App.table('#webhook-deliveries-table');
+    };
+
+    window.toggleAllWebhookDeliveries = function(checked) {
+        App.qsa('.webhook-select').forEach(function(box) {
+            box.checked = checked;
+        });
+    };
+
+    window.retryWebhookDeliveries = function(ids, all) {
+        if (!ids || !ids.length) {
+            if (all) {
+                ids = [];
+            } else {
+                ids = App.qsa('.webhook-select:checked').map(function(box) { return box.value; });
+            }
+        }
+        if (!all && !ids.length) {
+            App.notify('Select at least one failed delivery', 'info');
+            return;
+        }
+
+        App.api('POST', '/api/v2/webhooks/deliveries/retry', { ids: ids }).then(function(result) {
+            var failed = result.failed || [];
+            if (failed.length) {
+                App.notify('Retried with ' + failed.length + ' failures remaining', 'warning');
+            } else {
+                App.notify('Webhook deliveries retried successfully', 'success');
+            }
+            loadWebhookDeliveries();
+        }).catch(function(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        });
+    };
+
+    loadWebhookDeliveries();
+})();
+</script>
+{{end}}

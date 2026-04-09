@@ -15,6 +15,7 @@ High-performance, extensible SSH protocol proxy server core library, implemented
 - [Architecture](#architecture)
 - [Project Structure](#project-structure)
 - [Build](#build)
+- [Terraform Bridge](#terraform-bridge)
 - [API Reference](#api-reference)
 - [Development](#development)
 - [Deployment](#deployment)
@@ -33,7 +34,7 @@ High-performance, extensible SSH protocol proxy server core library, implemented
 ### Security & Access Control
 
 - **Filter Chain** — Envoy-style ordered, extensible filter architecture
-- **Authentication** — Password (crypt) and public key authentication
+- **Authentication** — Password (crypt), public key, and SSH certificate authentication
 - **LDAP Authentication** — Raw-socket LDAP simple bind backend with zero external dependencies *(v0.3.0)*
 - **TOTP/MFA Two-Factor Authentication** — Self-contained SHA1/HMAC-SHA1 TOTP implementation *(v0.3.0)*
 - **RBAC** — Role-based access control with glob-pattern matching
@@ -206,6 +207,7 @@ motd = Welcome {username} from {client_ip}!  # Post-auth message (v0.3.0)
 [logging]
 level = info                             # Log level: debug, info, warn, error
 audit_dir = /var/log/ssh-proxy/audit     # Audit log and recording directory
+audit_encryption_key = 001122...eeff     # Optional: 64 hex chars for AES-256-GCM
 format = text                            # Output format: text | json (v0.3.0)
 ```
 
@@ -214,6 +216,9 @@ When `format = json`, all log output uses NDJSON (one JSON object per line):
 ```json
 {"timestamp":"2025-01-05T12:00:00Z","level":"INFO","message":"Server started","port":2222}
 ```
+
+When `audit_encryption_key` or `audit_encryption_key_file` is configured, event and command audit
+logs are wrapped per line with AES-256-GCM while keeping the existing rotation/archival behavior.
 
 ### `[limits]` — Connection Limits
 
@@ -237,6 +242,28 @@ pubkey_file = /etc/ssh-proxy/authorized_keys/admin  # Authorized keys file
 enabled = true                           # Enable/disable user
 totp_secret = JBSWY3DPEHPK3PXP          # Base32 TOTP secret (v0.3.0)
 mfa_enabled = true                       # Enable MFA for this user (v0.3.0)
+```
+
+Sensitive data in the current data-plane config supports three forms:
+
+1. Plaintext for backward compatibility
+2. `${env:NAME}` / `${file:/path/to/value}`
+3. `enc:v1:<nonce_hex>:<ciphertext_hex>:<tag_hex>` protected by `[security].master_key` or `master_key_file`
+
+The encrypted-value path currently covers `password_hash`, `[admin].auth_token`,
+`[webhook].hmac_secret`, and `[logging].audit_encryption_key`.
+
+To enable SSH certificate authentication, configure `trusted_user_ca_key` or
+`trusted_user_ca_keys_file` in `[security]`. With a trusted user CA configured, users can
+authenticate with short-lived CA-signed certificates; the proxy enforces the `source-address`
+critical option and rejects unsupported critical options. To enforce revocations, export revoked
+serials from `/api/v2/ca/crl` and configure `revoked_user_cert_serial` or
+`revoked_user_cert_serials_file` in the data plane `[security]` section.
+
+```ini
+[security]
+master_key = ${env:SSH_PROXY_MASTER_KEY}      # 64 hex chars (AES-256)
+# master_key_file = /etc/ssh-proxy/master_key.hex
 ```
 
 ### `[route:*]` — User-to-Upstream Routing
@@ -339,15 +366,23 @@ In **whitelist** mode, only IPs matching an `allow` rule are permitted. In **bla
 backend = local                          # local | ldap
 
 # LDAP settings (when backend = ldap)
-ldap_uri = ldap://ldap.example.com:389   # LDAP server URI
+ldap_uri = ldap://ldap-a.example.com:389,ldap://ldap-b.example.com:389  # LDAP server URIs
 ldap_base_dn = dc=example,dc=com        # Base DN for user search
-ldap_bind_dn = cn=proxy,dc=example,dc=com  # Bind DN
-ldap_bind_pw = secret                    # Bind password
+ldap_bind_dn = cn=proxy,dc=example,dc=com  # Optional bind DN for identity lookups
+ldap_bind_pw = ${env:LDAP_BIND_PASSWORD}
 ldap_user_filter = uid=%s                # User search filter (%s = username)
 ldap_timeout = 5                         # Connection timeout in seconds
+ldap_group_attr = memberOf               # Group membership attribute
+ldap_email_attr = mail
+ldap_department_attr = department
+ldap_manager_attr = manager
 ```
 
-The LDAP backend uses raw TCP socket BER encoding — no libldap dependency required.
+The LDAP backend uses raw TCP socket BER encoding — no libldap dependency required. Multiple
+`ldap_uri` values enable endpoint failover, and the most recently successful endpoint is tried
+first on later binds. After a successful password bind, the filter also loads
+`memberOf/mail/department/manager` from the user entry (attribute names are configurable) and
+stores them in session metadata for downstream role-mapping or audit consumers.
 
 ### `[mfa]` — TOTP Two-Factor Authentication *(v0.3.0)*
 
@@ -396,7 +431,7 @@ timeout_ms = 5000                        # HTTP request timeout
 ```ini
 [admin]
 enabled = true                           # Enable admin API endpoints
-auth_token = your-secret-token           # Bearer token for API authentication
+auth_token = your-secret-token           # Bearer token for API authentication (or enc:v1:...)
 ```
 
 See [Admin REST API](#admin-rest-api) in the Operations section for endpoint details.
@@ -406,18 +441,32 @@ See [Admin REST API](#admin-rest-api) in the Operations section for endpoint det
 ```ini
 [router]
 # Connection retry with exponential backoff
-max_retries = 3                          # Maximum retry attempts
+retry_max = 3                            # Maximum retry attempts
 retry_initial_delay_ms = 100             # Initial retry delay
 retry_max_delay_ms = 5000                # Maximum retry delay
 retry_backoff_factor = 2.0               # Backoff multiplier
 
+# Per-route circuit breaker
+circuit_breaker_enabled = true           # Temporarily skip repeatedly failing routes
+circuit_breaker_failure_threshold = 3
+circuit_breaker_open_seconds = 30
+
 # Connection pooling
-pool_enabled = true                      # Enable connection pooling
+pool_enabled = false                     # Enable connection pooling
 pool_max_idle = 10                       # Max idle connections per upstream
 pool_max_idle_time = 300                 # Max idle time in seconds
 ```
 
+Retries use exponential backoff and re-run route selection each round. Routes
+whose circuit breaker is still open are skipped, and once the cool-down window
+expires only one half-open recovery probe is allowed through at a time.
+
 ### `[session_store]` — Session Storage Backend *(v0.3.0)*
+
+When a shared backend is enabled, the admin session list merges local and remote
+active sessions and exposes the owning `instance_id`. The `per_user_max_sessions`
+limit also evaluates against the shared authenticated-session view, so cluster
+nodes enforce the same concurrent-session ceiling.
 
 ```ini
 [session_store]
@@ -684,6 +733,41 @@ curl -X POST -H "Authorization: Bearer <token>" http://localhost:9090/api/v1/rel
 
 Hot reload updates users, routes, policies, and ACL rules. Existing sessions are not interrupted.
 
+### `sshproxy` Control-Plane CLI
+
+`cmd/sshproxy` provides a control-plane CLI for OIDC login, short-lived SSH certificate issuance, session discovery, and proxied `ssh` / `scp` access:
+
+```bash
+go build ./cmd/sshproxy
+
+# Initial control-plane configuration
+./sshproxy config set server https://proxy.example.com
+./sshproxy config set ssh_addr proxy.example.com:2222
+
+# Browser-based OIDC login and automatic SSH certificate issuance
+./sshproxy login
+
+# Common commands
+./sshproxy ls servers
+./sshproxy ls sessions
+./sshproxy ssh alice@db-prod
+./sshproxy scp ./backup.tgz alice@db-prod:/tmp/
+./sshproxy completion bash
+```
+
+`sshproxy login` stores the authenticated control-plane session in `~/.sshproxy/config.json`, generates or reuses `~/.sshproxy/id_ed25519`, and requests a short-lived user certificate from the built-in SSH CA. Later `sshproxy ssh` / `scp` commands automatically inject that identity file. To pin the control-plane HTTPS server key, set `pinned_server_pubkey_sha256` in that config file using the `sha256/<base64-spki-hash>` format.
+
+### Web SSO (OIDC / SAML)
+
+The control-plane login page supports both OIDC and SAML 2.0 Web SSO. The
+SAML path is metadata-driven: configure `saml_root_url`,
+`saml_idp_metadata_url` (or `saml_idp_metadata_file`), `saml_sp_cert`, and
+`saml_sp_key`, then the server exposes `/auth/saml/login` (SP-initiated),
+`/auth/saml/acs` (ACS / IdP-initiated), and `/auth/saml/metadata` (SP
+metadata). Assertion attributes can be mapped into local `admin`,
+`operator`, and `viewer` roles, and the flow is intended to interoperate with
+enterprise IdPs such as ADFS, Shibboleth, and OneLogin.
+
 ### CLI Reference
 
 | Flag | Description |
@@ -856,6 +940,40 @@ If the system package is unavailable or too old:
 | `make format` | Format source code (clang-format) |
 | `make check` | Static analysis (cppcheck) |
 | `make help` | Show all available targets |
+
+## Terraform Bridge
+
+The control plane ships with a lightweight Terraform bridge at
+`cmd/terraform-provider`. It is designed for `external` data sources,
+`local-exec`, or thin wrappers that want to reuse the current REST API without
+requiring a full Terraform plugin runtime.
+
+### Environment Variables
+
+- `SSHPROXY_SERVER` — control-plane URL, for example `https://proxy.example.com:8443`
+- `SSHPROXY_TOKEN` — API Bearer token
+
+### Supported Actions
+
+- Read: `read-users`, `read-user <username>`, `read-servers`, `read-server <id>`, `read-config`
+- Mutate: `create-user`, `update-user`, `delete-user`, `create-server`, `update-server`, `delete-server`, `apply-config`
+
+### Examples
+
+```bash
+# Read the current config
+SSHPROXY_SERVER=https://proxy.example.com:8443 \
+SSHPROXY_TOKEN=$TOKEN \
+go run ./cmd/terraform-provider read-config
+
+# "Import" an existing user / server by identifier for Terraform state alignment
+go run ./cmd/terraform-provider read-user alice
+go run ./cmd/terraform-provider read-server srv-1
+
+# Create a user
+printf '{"username":"alice","password":"Str0ngPass!","role":"operator"}' \
+  | go run ./cmd/terraform-provider create-user
+```
 
 ## API Reference
 

@@ -2,8 +2,8 @@
  * @file password_policy.h
  * @brief SSH Proxy Core - Password Policy Module
  *
- * Validates passwords against configurable complexity requirements.
- * Used when passwords are set (e.g., admin creates user), not during login.
+ * Validates passwords against configurable complexity requirements and
+ * enforces password age during login.
  */
 
 #ifndef SSH_PROXY_PASSWORD_POLICY_H
@@ -11,6 +11,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,12 +22,12 @@ extern "C" {
 
 /* Password policy configuration */
 typedef struct password_policy {
-    uint32_t min_length;            /* Minimum password length (default: 8) */
-    bool require_uppercase;         /* Require at least one uppercase letter */
-    bool require_lowercase;         /* Require at least one lowercase letter */
-    bool require_digit;             /* Require at least one digit */
-    bool require_special;           /* Require at least one special character */
-    uint32_t max_age_days;          /* Max password age in days (0 = no expiry) */
+    uint32_t min_length;    /* Minimum password length (default: 8) */
+    bool require_uppercase; /* Require at least one uppercase letter */
+    bool require_lowercase; /* Require at least one lowercase letter */
+    bool require_digit;     /* Require at least one digit */
+    bool require_special;   /* Require at least one special character */
+    uint32_t max_age_days;  /* Max password age in days (0 = no expiry) */
 } password_policy_t;
 
 /**
@@ -43,14 +44,27 @@ password_policy_t password_policy_defaults(void);
  *
  * Use password_policy_error() to get the descriptive error after failure.
  */
-int password_policy_check(const password_policy_t *policy,
-                          const char *password);
+int password_policy_check(const password_policy_t *policy, const char *password);
 
 /**
  * @brief Get the last error message from password_policy_check()
  * @return Descriptive error string (thread-local, valid until next check)
  */
 const char *password_policy_error(void);
+
+/**
+ * @brief Check whether a password is expired under the current policy
+ * @param policy Password policy to check against
+ * @param has_last_changed Whether a last-changed timestamp is available
+ * @param last_changed_at Password last-changed timestamp (Unix epoch seconds)
+ * @param now Current time to evaluate against
+ * @return 0 if password is still valid, -1 if it is expired
+ *
+ * If password expiry is disabled or no timestamp is available, this returns 0.
+ * Use password_policy_error() to get the descriptive error after failure.
+ */
+int password_policy_check_expiry(const password_policy_t *policy, bool has_last_changed,
+                                 time_t last_changed_at, time_t now);
 
 #ifdef __cplusplus
 }

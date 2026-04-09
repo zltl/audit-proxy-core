@@ -33,7 +33,7 @@ type Node struct {
 	Version  string            `json:"version"`
 	Metadata map[string]string `json:"metadata,omitempty"`
 	Sessions int               `json:"sessions"` // active session count
-	Load     float64           `json:"load"`      // CPU load
+	Load     float64           `json:"load"`     // CPU load
 }
 
 // ClusterConfig holds the configuration for the cluster manager.
@@ -42,10 +42,15 @@ type ClusterConfig struct {
 	NodeName          string
 	BindAddr          string        // cluster communication address (host:port)
 	APIAddr           string        // this node's public API address
-	Seeds             []string      // seed node addresses for joining
+	Region            string        // logical deployment region (for example us-east-1)
+	Zone              string        // availability zone / fault domain (for example us-east-1a)
+	Seeds             []string      // seed addresses or discovery URIs (dns://, k8s://, consul://)
 	HeartbeatInterval time.Duration // default: 5s
 	ElectionTimeout   time.Duration // default: 15s
 	SyncInterval      time.Duration // default: 10s
+	TLSCert           string        // PEM certificate used for both server and client auth
+	TLSKey            string        // PEM private key paired with TLSCert
+	TLSCA             string        // PEM CA bundle used to verify and require peer certificates
 }
 
 // defaults fills in zero-valued fields with sensible defaults.
@@ -59,4 +64,8 @@ func (c *ClusterConfig) defaults() {
 	if c.SyncInterval == 0 {
 		c.SyncInterval = 10 * time.Second
 	}
+}
+
+func (c *ClusterConfig) mtlsEnabled() bool {
+	return c.TLSCert != "" || c.TLSKey != "" || c.TLSCA != ""
 }

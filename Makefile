@@ -14,6 +14,15 @@ LIBSSH_LIBS := $(shell pkg-config --libs libssh 2>/dev/null)
 CFLAGS += $(LIBSSH_CFLAGS)
 LIBS += $(LIBSSH_LIBS)
 
+# libcrypto is required directly for SSH certificate signature verification.
+LIBCRYPTO_CFLAGS := $(shell pkg-config --cflags libcrypto 2>/dev/null)
+LIBCRYPTO_LIBS := $(shell pkg-config --libs libcrypto 2>/dev/null)
+ifeq ($(strip $(LIBCRYPTO_LIBS)),)
+    LIBCRYPTO_LIBS := -lcrypto
+endif
+CFLAGS += $(LIBCRYPTO_CFLAGS)
+LIBS += $(LIBCRYPTO_LIBS)
+
 # pthread and crypt for session/auth
 LIBS += -lpthread -lcrypt
 

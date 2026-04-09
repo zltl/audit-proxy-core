@@ -101,7 +101,7 @@ func TestPrintTable_UnevenRows(t *testing.T) {
 	noColor = true
 	headers := []string{"A", "B", "C"}
 	rows := [][]string{
-		{"1"},        // fewer columns than headers
+		{"1"}, // fewer columns than headers
 		{"1", "2", "3"},
 	}
 	printTable(headers, rows)

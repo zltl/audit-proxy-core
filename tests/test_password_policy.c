@@ -3,16 +3,16 @@
  * @brief Unit tests for password policy module
  */
 
+#include "logger.h"
+#include "password_policy.h"
+#include "test_utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "password_policy.h"
-#include "logger.h"
-#include "test_utils.h"
+#include <time.h>
 
 /* Test: defaults */
-static int test_defaults(void)
-{
+static int test_defaults(void) {
     TEST_START();
 
     password_policy_t p = password_policy_defaults();
@@ -27,8 +27,7 @@ static int test_defaults(void)
 }
 
 /* Test: valid password passes */
-static int test_valid_password(void)
-{
+static int test_valid_password(void) {
     TEST_START();
 
     password_policy_t p = password_policy_defaults();
@@ -38,8 +37,7 @@ static int test_valid_password(void)
 }
 
 /* Test: too short fails */
-static int test_too_short(void)
-{
+static int test_too_short(void) {
     TEST_START();
 
     password_policy_t p = password_policy_defaults();
@@ -53,8 +51,7 @@ static int test_too_short(void)
 }
 
 /* Test: missing uppercase fails */
-static int test_missing_uppercase(void)
-{
+static int test_missing_uppercase(void) {
     TEST_START();
 
     password_policy_t p = password_policy_defaults();
@@ -67,8 +64,7 @@ static int test_missing_uppercase(void)
 }
 
 /* Test: missing lowercase fails */
-static int test_missing_lowercase(void)
-{
+static int test_missing_lowercase(void) {
     TEST_START();
 
     password_policy_t p = password_policy_defaults();
@@ -81,8 +77,7 @@ static int test_missing_lowercase(void)
 }
 
 /* Test: missing digit fails */
-static int test_missing_digit(void)
-{
+static int test_missing_digit(void) {
     TEST_START();
 
     password_policy_t p = password_policy_defaults();
@@ -95,8 +90,7 @@ static int test_missing_digit(void)
 }
 
 /* Test: missing special char fails when required */
-static int test_missing_special(void)
-{
+static int test_missing_special(void) {
     TEST_START();
 
     password_policy_t p = password_policy_defaults();
@@ -113,8 +107,7 @@ static int test_missing_special(void)
 }
 
 /* Test: NULL inputs */
-static int test_null_inputs(void)
-{
+static int test_null_inputs(void) {
     TEST_START();
 
     password_policy_t p = password_policy_defaults();
@@ -127,8 +120,7 @@ static int test_null_inputs(void)
 }
 
 /* Test: empty password */
-static int test_empty_password(void)
-{
+static int test_empty_password(void) {
     TEST_START();
 
     password_policy_t p = password_policy_defaults();
@@ -138,8 +130,7 @@ static int test_empty_password(void)
 }
 
 /* Test: relaxed policy */
-static int test_relaxed_policy(void)
-{
+static int test_relaxed_policy(void) {
     TEST_START();
 
     password_policy_t p;
@@ -158,8 +149,7 @@ static int test_relaxed_policy(void)
 }
 
 /* Test: exact min length boundary */
-static int test_exact_min_length(void)
-{
+static int test_exact_min_length(void) {
     TEST_START();
 
     password_policy_t p = password_policy_defaults();
@@ -173,8 +163,34 @@ static int test_exact_min_length(void)
     TEST_PASS();
 }
 
-int main(void)
-{
+/* Test: password expiry check */
+static int test_password_expiry(void) {
+    TEST_START();
+
+    password_policy_t p = password_policy_defaults();
+    p.max_age_days = 30;
+
+    time_t now = (time_t)1710000000;
+    ASSERT_EQ(password_policy_check_expiry(&p, true, now - (29 * 86400), now), 0);
+    ASSERT_EQ(password_policy_check_expiry(&p, true, now - (31 * 86400), now), -1);
+    ASSERT_TRUE(strstr(password_policy_error(), "expired") != NULL);
+
+    TEST_PASS();
+}
+
+/* Test: expiry disabled without metadata */
+static int test_password_expiry_without_timestamp(void) {
+    TEST_START();
+
+    password_policy_t p = password_policy_defaults();
+    p.max_age_days = 30;
+
+    ASSERT_EQ(password_policy_check_expiry(&p, false, (time_t)0, (time_t)1710000000), 0);
+
+    TEST_PASS();
+}
+
+int main(void) {
     log_init(LOG_LEVEL_WARN, NULL);
 
     TEST_BEGIN("Password Policy Module Tests");
@@ -190,6 +206,8 @@ int main(void)
     RUN_TEST(test_empty_password);
     RUN_TEST(test_relaxed_policy);
     RUN_TEST(test_exact_min_length);
+    RUN_TEST(test_password_expiry);
+    RUN_TEST(test_password_expiry_without_timestamp);
 
     log_shutdown();
 

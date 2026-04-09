@@ -98,7 +98,7 @@
         params.set('sort', 'timestamp');
         params.set('order', 'desc');
 
-        if (currentEventType) params.set('event_type', currentEventType);
+        if (currentEventType) params.set('type', currentEventType);
 
         var search = document.getElementById('audit-search').value.trim();
         if (search) params.set('q', search);
@@ -120,10 +120,12 @@
             if (toVal) params.set('to', new Date(toVal).toISOString());
         }
 
-        App.api('GET', '/api/v1/audit?' + params.toString()).then(function(data) {
+        var path = search ? '/api/v2/audit/search?' + params.toString() : '/api/v2/audit/events?' + params.toString();
+
+        App.apiPage('GET', path).then(function(page) {
             var tbody = document.getElementById('audit-body');
-            var items = data.events || data.items || data || [];
-            var total = data.total || items.length;
+            var items = page.items || [];
+            var total = page.total || items.length;
 
             if (!items.length) {
                 tbody.innerHTML = '<tr><td colspan="8" class="table-empty"><div class="table-empty-icon">📋</div>No events found</td></tr>';
@@ -143,17 +145,14 @@
                 if ((ev.details || ev.message || '').length > 80) detail += '…';
 
                 var actions = '<button class="btn btn-ghost btn-sm" onclick="toggleDetail(' + idx + ')" title="Expand">▶</button>';
-                if (ev.session_id && ev.recording_url) {
-                    actions += ' <a href="' + App.escapeHtml(ev.recording_url) + '" class="btn btn-ghost btn-sm" title="Playback">▶️</a>';
-                }
 
                 return '<tr class="expandable-row" data-idx="' + idx + '">' +
                     '<td><span class="expand-icon" id="expand-icon-' + idx + '">▶</span></td>' +
                     '<td>' + App.formatTime(ev.timestamp) + '</td>' +
                     '<td><span class="badge ' + typeCls + '">' + App.escapeHtml(ev.event_type || ev.type || '—') + '</span></td>' +
-                    '<td>' + App.escapeHtml(ev.user || '—') + '</td>' +
-                    '<td>' + App.escapeHtml(ev.source_ip || ev.client_ip || '—') + '</td>' +
-                    '<td>' + App.escapeHtml(ev.target || '—') + '</td>' +
+                    '<td>' + App.escapeHtml(ev.username || '—') + '</td>' +
+                    '<td>' + App.escapeHtml(ev.source_ip || '—') + '</td>' +
+                    '<td>' + App.escapeHtml(ev.target_host || '—') + '</td>' +
                     '<td class="text-muted">' + detail + '</td>' +
                     '<td class="col-actions">' + actions + '</td>' +
                     '</tr>' +
@@ -195,9 +194,7 @@
     };
 
     window.exportAudit = function() {
-        var params = new URLSearchParams(window.location.search);
-        params.set('format', 'csv');
-        window.location.href = '/api/v1/audit/export?' + params.toString();
+        window.location.href = '/api/v2/audit/export';
     };
 
     loadAudit();

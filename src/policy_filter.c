@@ -24,6 +24,44 @@ static filter_status_t policy_on_data_upstream(filter_t *filter, filter_context_
 static void policy_on_close(filter_t *filter, filter_context_t *ctx);
 static void policy_destroy(filter_t *filter);
 
+static int init_transfer_log_strings(struct transfer_log *entry)
+{
+    if (entry == NULL) {
+        return -1;
+    }
+
+    entry->username = sstr_new();
+    entry->event = sstr_new();
+    entry->direction = sstr_new();
+    entry->protocol = sstr_new();
+    entry->path = sstr_new();
+    entry->checksum = sstr_new();
+    if (entry->username == NULL || entry->event == NULL || entry->direction == NULL ||
+        entry->protocol == NULL || entry->path == NULL || entry->checksum == NULL) {
+        transfer_log_clear(entry);
+        return -1;
+    }
+    return 0;
+}
+
+static int init_port_forward_log_strings(struct port_forward_log *entry)
+{
+    if (entry == NULL) {
+        return -1;
+    }
+
+    entry->username = sstr_new();
+    entry->type = sstr_new();
+    entry->bind_host = sstr_new();
+    entry->target_host = sstr_new();
+    if (entry->username == NULL || entry->type == NULL || entry->bind_host == NULL ||
+        entry->target_host == NULL) {
+        port_forward_log_clear(entry);
+        return -1;
+    }
+    return 0;
+}
+
 /* Filter callbacks */
 static const filter_callbacks_t policy_callbacks = {
     .on_connect = NULL,
@@ -115,6 +153,11 @@ static void write_transfer_log(const policy_filter_config_t *config,
     /* Use json-gen-c for JSON serialization */
     struct transfer_log log_entry;
     transfer_log_init(&log_entry);
+    if (init_transfer_log_strings(&log_entry) != 0) {
+        LOG_ERROR("Failed to allocate transfer log serialization buffers");
+        fclose(fp);
+        return;
+    }
     
     log_entry.timestamp = (long)record->timestamp;
     log_entry.session_id = (long)record->session_id;
@@ -171,6 +214,11 @@ static void write_port_forward_log(const policy_filter_config_t *config,
     /* Use json-gen-c for JSON serialization */
     struct port_forward_log log_entry;
     port_forward_log_init(&log_entry);
+    if (init_port_forward_log_strings(&log_entry) != 0) {
+        LOG_ERROR("Failed to allocate port forward log serialization buffers");
+        fclose(fp);
+        return;
+    }
     
     log_entry.timestamp = (long)record->timestamp;
     log_entry.session_id = (long)record->session_id;

@@ -7,6 +7,7 @@
  */
 
 #include "webhook.h"
+#include "audit_sign.h"
 #include "logger.h"
 
 #include <stdio.h>
@@ -103,11 +104,110 @@ static int parse_url(const char *url, char *host, size_t host_len,
     return 0;
 }
 
+static void write_json_escaped(FILE *fp, const char *value)
+{
+    if (fp == NULL || value == NULL) {
+        return;
+    }
+    for (const unsigned char *p = (const unsigned char *)value; *p != '\0'; p++) {
+        switch (*p) {
+        case '"':
+            fputs("\\\"", fp);
+            break;
+        case '\\':
+            fputs("\\\\", fp);
+            break;
+        case '\n':
+            fputs("\\n", fp);
+            break;
+        case '\r':
+            fputs("\\r", fp);
+            break;
+        case '\t':
+            fputs("\\t", fp);
+            break;
+        default:
+            if (*p >= 32 && *p < 127) {
+                fputc(*p, fp);
+            } else {
+                fprintf(fp, "\\u%04x", *p);
+            }
+            break;
+        }
+    }
+}
+
+static void sync_dead_letter(FILE *fp, const char *path)
+{
+    if (fp == NULL) {
+        return;
+    }
+    if (fflush(fp) != 0) {
+        LOG_ERROR("Webhook: failed to flush dead-letter queue %s: %s",
+                  path != NULL ? path : "-", strerror(errno));
+        return;
+    }
+    if (fsync(fileno(fp)) != 0) {
+        LOG_ERROR("Webhook: failed to sync dead-letter queue %s: %s",
+                  path != NULL ? path : "-", strerror(errno));
+    }
+}
+
+static void write_dead_letter(const webhook_config_t *config,
+                              webhook_event_type_t event_type,
+                              const char *payload,
+                              int attempts)
+{
+    if (config == NULL || config->dead_letter_path[0] == '\0' ||
+        payload == NULL) {
+        return;
+    }
+
+    FILE *fp = fopen(config->dead_letter_path, "a");
+    if (fp == NULL) {
+        LOG_ERROR("Webhook: failed to open dead-letter queue %s: %s",
+                  config->dead_letter_path, strerror(errno));
+        return;
+    }
+
+    fprintf(fp,
+            "{\"failed_at\":%ld,\"event\":\"%s\",\"attempts\":%d,\"payload\":\"",
+            (long)time(NULL), webhook_event_name(event_type), attempts);
+    write_json_escaped(fp, payload);
+    fputs("\"}\n", fp);
+    sync_dead_letter(fp, config->dead_letter_path);
+    fclose(fp);
+}
+
+int webhook_sign_payload(const webhook_config_t *config,
+                         const char *payload,
+                         char *signature_hex,
+                         size_t signature_hex_len)
+{
+    if (config == NULL || payload == NULL || signature_hex == NULL ||
+        signature_hex_len < SHA256_HEX_SIZE + 1 ||
+        config->hmac_secret[0] == '\0') {
+        return -1;
+    }
+
+    uint8_t digest[SHA256_DIGEST_SIZE];
+    hmac_sha256((const uint8_t *)config->hmac_secret,
+                strlen(config->hmac_secret),
+                (const uint8_t *)payload,
+                strlen(payload),
+                digest);
+    hex_encode(digest, sizeof(digest), signature_hex);
+    return SHA256_HEX_SIZE;
+}
+
 /* Send an HTTP POST with the given JSON payload.  Returns 0 on 2xx. */
 static int send_http_post(const webhook_config_t *config, const char *payload)
 {
     char host[256], path[256];
     uint16_t port;
+    char signature[SHA256_HEX_SIZE + 1];
+    bool has_signature = webhook_sign_payload(config, payload, signature,
+                                              sizeof(signature)) > 0;
 
     if (parse_url(config->url, host, sizeof(host), &port,
                   path, sizeof(path)) != 0) {
@@ -162,6 +262,7 @@ static int send_http_post(const webhook_config_t *config, const char *payload)
         "Content-Type: application/json\r\n"
         "Content-Length: %d\r\n"
         "%s%s%s"
+        "%s%s%s"
         "Connection: close\r\n"
         "\r\n"
         "%s",
@@ -169,6 +270,9 @@ static int send_http_post(const webhook_config_t *config, const char *payload)
         config->auth_header[0] ? "Authorization: " : "",
         config->auth_header[0] ? config->auth_header : "",
         config->auth_header[0] ? "\r\n" : "",
+        has_signature ? "X-SSH-Proxy-Signature: sha256=" : "",
+        has_signature ? signature : "",
+        has_signature ? "\r\n" : "",
         payload);
 
     ssize_t sent = write(fd, request, (size_t)req_len);
@@ -246,6 +350,8 @@ static void *webhook_worker(void *arg)
         if (!delivered) {
             LOG_WARN("Webhook: Failed to send %s event after %d attempts",
                      webhook_event_name(event.event_type), max_retries + 1);
+            write_dead_letter(&mgr->config, event.event_type, event.payload,
+                              max_retries + 1);
         }
     }
 
@@ -319,8 +425,9 @@ int webhook_notify(webhook_manager_t *mgr, webhook_event_type_t event_type,
 
     if (mgr->queue_count >= mgr->queue_capacity) {
         pthread_mutex_unlock(&mgr->lock);
-        LOG_WARN("Webhook: Event queue full, dropping %s event",
+        LOG_WARN("Webhook: Event queue full, spilling %s event to dead-letter queue",
                  webhook_event_name(event_type));
+        write_dead_letter(&mgr->config, event_type, json_payload, 0);
         return -1;
     }
 
@@ -372,6 +479,11 @@ const char *webhook_event_name(webhook_event_type_t event_type)
     case WEBHOOK_EVENT_UPSTREAM_UNHEALTHY: return "upstream.unhealthy";
     case WEBHOOK_EVENT_UPSTREAM_HEALTHY:   return "upstream.healthy";
     case WEBHOOK_EVENT_CONFIG_RELOADED:    return "config.reloaded";
+    case WEBHOOK_EVENT_USER_CREATED:       return "user.created";
+    case WEBHOOK_EVENT_USER_UPDATED:       return "user.updated";
+    case WEBHOOK_EVENT_USER_DELETED:       return "user.deleted";
+    case WEBHOOK_EVENT_POLICY_UPDATED:     return "policy.updated";
+    case WEBHOOK_EVENT_CERT_ISSUED:        return "certificate.issued";
     default:                              return "unknown";
     }
 }

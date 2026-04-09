@@ -66,12 +66,12 @@ type SyncReply struct {
 
 // StatusResponse is returned by GET /cluster/status.
 type StatusResponse struct {
-	NodeID   string  `json:"node_id"`
-	Role     string  `json:"role"`
-	Leader   string  `json:"leader"`
-	Term     uint64  `json:"term"`
-	Nodes    []*Node `json:"nodes"`
-	Healthy  bool    `json:"healthy"`
+	NodeID  string  `json:"node_id"`
+	Role    string  `json:"role"`
+	Leader  string  `json:"leader"`
+	Term    uint64  `json:"term"`
+	Nodes   []*Node `json:"nodes"`
+	Healthy bool    `json:"healthy"`
 }
 
 // --- HTTP handlers (cluster-internal, served on the cluster port) ---
@@ -124,9 +124,14 @@ func (m *Manager) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			m.emitEvent("node_joined", n.ID, nil)
 			m.mu.Lock()
 		} else {
+			existing.Name = n.Name
+			existing.Address = n.Address
+			existing.APIAddr = n.APIAddr
 			existing.Status = n.Status
 			existing.LastSeen = n.LastSeen
 			existing.Role = n.Role
+			existing.Version = n.Version
+			existing.Metadata = cloneMetadata(n.Metadata)
 			existing.Sessions = n.Sessions
 			existing.Load = n.Load
 		}
@@ -178,9 +183,10 @@ func (m *Manager) handleJoinRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	m.mu.Lock()
-	req.Node.Status = StatusHealthy
-	req.Node.LastSeen = time.Now()
-	m.nodes[req.Node.ID] = req.Node
+	node := cloneNode(req.Node)
+	node.Status = StatusHealthy
+	node.LastSeen = time.Now()
+	m.nodes[node.ID] = node
 
 	reply := JoinReply{
 		Success: true,
@@ -236,6 +242,9 @@ func (m *Manager) handleSyncRequest(w http.ResponseWriter, r *http.Request) {
 		reply.Entries[k] = v
 	}
 	m.state.mu.Unlock()
+	if m.configSync != nil {
+		m.configSync.Reconcile()
+	}
 
 	encodeJSON(w, reply)
 }
@@ -298,8 +307,13 @@ func (m *Manager) postJSON(addr, path string, body, reply interface{}) error {
 		return fmt.Errorf("marshal: %w", err)
 	}
 
-	url := "http://" + addr + path
-	resp, err := m.httpClient.Post(url, "application/json", bytes.NewReader(data))
+	url := clusterBaseURL(m.config, addr) + path
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("post %s: create request: %w", path, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("post %s: %w", path, err)
 	}

@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rsa"
@@ -15,16 +16,16 @@ import (
 
 // JSONWebKey represents a single key from a JWKS document.
 type JSONWebKey struct {
-	Kid string `json:"kid"` // Key ID
-	Kty string `json:"kty"` // Key type (RSA, EC)
-	Alg string `json:"alg"` // Algorithm (RS256, ES256)
-	Use string `json:"use"` // Key use (sig)
-	N   string `json:"n"`   // RSA modulus (base64url)
-	E   string `json:"e"`   // RSA exponent (base64url)
-	Crv string `json:"crv"` // EC curve name (P-256)
-	X   string `json:"x"`   // EC X coordinate (base64url)
-	Y   string `json:"y"`   // EC Y coordinate (base64url)
-	key interface{}          // parsed crypto key (cached)
+	Kid string      `json:"kid"` // Key ID
+	Kty string      `json:"kty"` // Key type (RSA, EC)
+	Alg string      `json:"alg"` // Algorithm (RS256, ES256)
+	Use string      `json:"use"` // Key use (sig)
+	N   string      `json:"n"`   // RSA modulus (base64url)
+	E   string      `json:"e"`   // RSA exponent (base64url)
+	Crv string      `json:"crv"` // EC curve name (P-256)
+	X   string      `json:"x"`   // EC X coordinate (base64url)
+	Y   string      `json:"y"`   // EC Y coordinate (base64url)
+	key interface{} // parsed crypto key (cached)
 }
 
 // PublicKey returns the parsed public key (either *rsa.PublicKey or
@@ -170,7 +171,7 @@ func VerifySignature(token string, keys []JSONWebKey) error {
 			if !ok {
 				continue
 			}
-			if err := rsa.VerifyPKCS1v15(rsaKey, 0, hash[:], sigBytes); err == nil {
+			if err := rsa.VerifyPKCS1v15(rsaKey, crypto.SHA256, hash[:], sigBytes); err == nil {
 				return nil
 			}
 		case "ES256":

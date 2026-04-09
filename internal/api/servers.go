@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,9 +60,133 @@ func (ss *serverStore) save() error {
 	return os.WriteFile(ss.path, data, 0644)
 }
 
+func (ss *serverStore) list() []models.Server {
+	ss.mu.RLock()
+	defer ss.mu.RUnlock()
+
+	servers := make([]models.Server, 0, len(ss.servers))
+	for _, srv := range ss.servers {
+		servers = append(servers, srv)
+	}
+	return servers
+}
+
+func serverEndpointKey(host string, port int) string {
+	return strings.ToLower(host) + ":" + strconv.Itoa(port)
+}
+
+func mergeServerState(configured, runtime models.Server) models.Server {
+	merged := configured
+
+	if merged.ID == "" {
+		merged.ID = runtime.ID
+	}
+	if merged.Name == "" {
+		merged.Name = runtime.Name
+	}
+	if merged.Host == "" {
+		merged.Host = runtime.Host
+	}
+	if merged.Port == 0 {
+		merged.Port = runtime.Port
+	}
+	if merged.Group == "" {
+		merged.Group = runtime.Group
+	}
+	if merged.Status == "" {
+		merged.Status = runtime.Status
+	}
+	if merged.Weight == 0 {
+		merged.Weight = runtime.Weight
+	}
+	if merged.MaxSessions == 0 {
+		merged.MaxSessions = runtime.MaxSessions
+	}
+	if merged.Tags == nil && runtime.Tags != nil {
+		merged.Tags = runtime.Tags
+	}
+
+	if runtime.Status != "" {
+		merged.Status = runtime.Status
+	}
+	merged.Healthy = runtime.Healthy
+	if runtime.Maintenance {
+		merged.Maintenance = true
+	}
+	if runtime.Sessions > 0 {
+		merged.Sessions = runtime.Sessions
+	}
+	if !runtime.CheckedAt.IsZero() {
+		merged.CheckedAt = runtime.CheckedAt
+	}
+
+	return merged
+}
+
+func mergeManagedServers(configured, runtime []models.Server) []models.Server {
+	merged := make([]models.Server, 0, len(configured)+len(runtime))
+	byID := make(map[string]int)
+	byEndpoint := make(map[string]int)
+
+	add := func(srv models.Server) {
+		idx := len(merged)
+		merged = append(merged, srv)
+		if srv.ID != "" {
+			byID[srv.ID] = idx
+		}
+		if srv.Host != "" && srv.Port > 0 {
+			byEndpoint[serverEndpointKey(srv.Host, srv.Port)] = idx
+		}
+	}
+
+	for _, srv := range configured {
+		add(srv)
+	}
+
+	for _, srv := range runtime {
+		if idx, ok := byID[srv.ID]; ok {
+			merged[idx] = mergeServerState(merged[idx], srv)
+			continue
+		}
+
+		key := serverEndpointKey(srv.Host, srv.Port)
+		if idx, ok := byEndpoint[key]; ok {
+			merged[idx] = mergeServerState(merged[idx], srv)
+			if srv.ID != "" {
+				byID[srv.ID] = idx
+			}
+			continue
+		}
+
+		add(srv)
+	}
+
+	sort.SliceStable(merged, func(i, j int) bool {
+		left := merged[i].Name
+		if left == "" {
+			left = merged[i].Host
+		}
+		right := merged[j].Name
+		if right == "" {
+			right = merged[j].Host
+		}
+		return left < right
+	})
+
+	return merged
+}
+
+func (a *API) listManagedServers() ([]models.Server, error) {
+	runtimeServers, err := a.dp.ListUpstreams()
+	if err != nil {
+		return nil, err
+	}
+	return mergeManagedServers(a.servers.list(), runtimeServers), nil
+}
+
 // handleListServers lists upstream servers from the data plane.
 func (a *API) handleListServers(w http.ResponseWriter, r *http.Request) {
-	servers, err := a.dp.ListUpstreams()
+	servers, err := a.listManagedServers()
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to fetch servers: "+err.Error())
 		return
@@ -150,7 +277,7 @@ func (a *API) handleGetServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	servers, err := a.dp.ListUpstreams()
+	servers, err := a.listManagedServers()
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to fetch servers: "+err.Error())
 		return
@@ -175,13 +302,13 @@ func (a *API) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name        *string            `json:"name"`
-		Host        *string            `json:"host"`
-		Port        *int               `json:"port"`
-		Group       *string            `json:"group"`
-		Weight      *int               `json:"weight"`
-		MaxSessions *int               `json:"max_sessions"`
-		Tags        map[string]string  `json:"tags"`
+		Name        *string           `json:"name"`
+		Host        *string           `json:"host"`
+		Port        *int              `json:"port"`
+		Group       *string           `json:"group"`
+		Weight      *int              `json:"weight"`
+		MaxSessions *int              `json:"max_sessions"`
+		Tags        map[string]string `json:"tags"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -305,7 +432,7 @@ func (a *API) handleToggleMaintenance(w http.ResponseWriter, r *http.Request) {
 
 // handleServersHealth returns a health summary for all servers.
 func (a *API) handleServersHealth(w http.ResponseWriter, r *http.Request) {
-	servers, err := a.dp.ListUpstreams()
+	servers, err := a.listManagedServers()
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to fetch servers: "+err.Error())
 		return

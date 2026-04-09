@@ -51,6 +51,38 @@
     }
   };
 
+  App.apiData = async function (method, url, body) {
+    var res = await App.api(method, url, body);
+    if (res && typeof res === 'object' && Object.prototype.hasOwnProperty.call(res, 'success')) {
+      return res.data;
+    }
+    return res;
+  };
+
+  App.apiPage = async function (method, url, body) {
+    var res = await App.api(method, url, body);
+    if (res && typeof res === 'object' && Object.prototype.hasOwnProperty.call(res, 'success')) {
+      var items = Array.isArray(res.data) ? res.data : [];
+      return {
+        items: items,
+        total: res.total || items.length,
+        page: res.page || 1,
+        perPage: res.per_page || res.perPage || items.length,
+        raw: res.data,
+        response: res,
+      };
+    }
+    var items = Array.isArray(res) ? res : [];
+    return {
+      items: items,
+      total: items.length,
+      page: 1,
+      perPage: items.length,
+      raw: res,
+      response: res,
+    };
+  };
+
   // ── Toast Notifications ───────────────────────────────────
   const toastIcons = {
     success: '✓',
@@ -241,9 +273,11 @@
     });
   };
 
-  App.formatDuration = function (seconds) {
-    if (seconds == null || isNaN(seconds)) return '—';
-    seconds = Math.floor(seconds);
+  App.formatDuration = function (value) {
+    if (value == null || value === '') return '—';
+    if (typeof value === 'string') return value;
+    if (isNaN(value)) return '—';
+    var seconds = Math.floor(value);
     if (seconds < 60) return seconds + 's';
     if (seconds < 3600) return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
     var h = Math.floor(seconds / 3600);

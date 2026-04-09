@@ -14,41 +14,159 @@
             </div>
             <select id="terminal-host-select">
                 <option value="">Select a server…</option>
-                {{range .Servers}}
-                <option value="{{.Host}}:{{.Port}}">{{.Host}}:{{.Port}}</option>
-                {{end}}
             </select>
             <button onclick="connectTerminal()" id="terminal-connect-btn">Connect</button>
         </div>
         <div class="terminal-toolbar-right">
             <button onclick="changeFontSize(-1)" title="Decrease font size">A-</button>
             <button onclick="changeFontSize(1)" title="Increase font size">A+</button>
+            <button onclick="copyTerminalSelection()" title="Copy selected terminal text">Copy</button>
+            <button onclick="pasteClipboard()" title="Paste clipboard into terminal">Paste</button>
+            <button onclick="chooseTerminalUpload()" title="Queue files for rz / zmodem upload">Upload</button>
             <button onclick="toggleFullscreen()" title="Fullscreen">⛶</button>
             <button onclick="disconnectTerminal()" id="terminal-disconnect-btn" disabled>Disconnect</button>
         </div>
     </div>
 
+    <div class="terminal-transfer-status" id="terminal-transfer-status">Drag files onto the terminal, then run <code>rz</code> on the remote host to upload. Run <code>sz</code> remotely to download.</div>
+    <div class="terminal-recording-status">
+        <span id="terminal-recording-text">Audit recording will appear here after you connect.</span>
+        <a id="terminal-recording-download" class="hidden" href="#" download>Download audit cast</a>
+    </div>
     <div id="terminal"></div>
+    <div class="terminal-drop-overlay hidden" id="terminal-drop-overlay">
+        <div class="terminal-drop-title">Drop files to queue upload</div>
+        <div class="terminal-drop-subtitle">After dropping, run <code>rz</code> in the remote terminal to begin transfer.</div>
+    </div>
+    <input type="file" id="terminal-upload-input" class="hidden" multiple>
 </div>
 {{end}}
 
 {{define "scripts"}}
-<!-- xterm.js loaded from vendor if available -->
-<link rel="stylesheet" href="/static/vendor/xterm.css" onerror="">
-<script src="/static/vendor/xterm.js" onerror=""></script>
-<script src="/static/vendor/xterm-addon-fit.js" onerror=""></script>
 <script>
 (function() {
     var term = null;
     var wsConn = null;
     var fontSize = 14;
+    var fitAddon = null;
+    var textDecoder = new TextDecoder();
+    var textEncoder = new TextEncoder();
+    var zmodemSentry = null;
+    var pendingUploadFiles = [];
+    var pendingSendSession = null;
+    var dragDepth = 0;
+
+    function loadScriptWithFallback(id, urls) {
+        return new Promise(function(resolve, reject) {
+            if (document.getElementById(id)) {
+                resolve();
+                return;
+            }
+
+            function tryNext(index) {
+                if (index >= urls.length) {
+                    reject(new Error('failed to load ' + id));
+                    return;
+                }
+
+                var script = document.createElement('script');
+                script.id = id;
+                script.src = urls[index];
+                script.async = false;
+                script.onload = function() { resolve(); };
+                script.onerror = function() {
+                    script.remove();
+                    tryNext(index + 1);
+                };
+                document.head.appendChild(script);
+            }
+
+            tryNext(0);
+        });
+    }
+
+    function loadStylesheetWithFallback(id, urls) {
+        return new Promise(function(resolve, reject) {
+            if (document.getElementById(id)) {
+                resolve();
+                return;
+            }
+
+            function tryNext(index) {
+                if (index >= urls.length) {
+                    reject(new Error('failed to load ' + id));
+                    return;
+                }
+
+                var link = document.createElement('link');
+                link.id = id;
+                link.rel = 'stylesheet';
+                link.href = urls[index];
+                link.onload = function() { resolve(); };
+                link.onerror = function() {
+                    link.remove();
+                    tryNext(index + 1);
+                };
+                document.head.appendChild(link);
+            }
+
+            tryNext(0);
+        });
+    }
+
+    function ensureTerminalAssets() {
+        return loadStylesheetWithFallback('xterm-css', [
+            '/static/vendor/xterm.css',
+            'https://unpkg.com/xterm@5.3.0/css/xterm.css'
+        ]).then(function() {
+            return loadScriptWithFallback('xterm-js', [
+                '/static/vendor/xterm.js',
+                'https://unpkg.com/xterm@5.3.0/lib/xterm.js'
+            ]);
+        }).then(function() {
+            return loadScriptWithFallback('xterm-fit-js', [
+                '/static/vendor/xterm-addon-fit.js',
+                'https://unpkg.com/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js'
+            ]);
+        }).then(function() {
+            return loadScriptWithFallback('zmodem-js', [
+                '/static/vendor/zmodem.js',
+                'https://unpkg.com/zmodem.js@0.1.7/dist/zmodem.js'
+            ]);
+        });
+    }
+
+    function loadServers() {
+        App.apiPage('GET', '/api/v2/servers?per_page=200').then(function(page) {
+            var select = document.getElementById('terminal-host-select');
+            var current = select.value;
+            select.innerHTML = '<option value="">Select a server…</option>';
+
+            (page.items || []).forEach(function(server) {
+                var value = (server.host || '') + ':' + (server.port || 22);
+                var option = document.createElement('option');
+                option.value = value;
+                option.textContent = (server.name || server.host || value) + ' (' + value + ')';
+                select.appendChild(option);
+            });
+
+            var requested = new URLSearchParams(window.location.search).get('host');
+            if (requested) {
+                select.value = requested;
+            } else if (current) {
+                select.value = current;
+            }
+        }).catch(function(e) {
+            App.notify('Failed to load servers: ' + e.message, 'error');
+        });
+    }
 
     function initTerminal() {
         if (typeof Terminal === 'undefined') {
             document.getElementById('terminal').innerHTML =
                 '<div style="color:var(--terminal-text);padding:40px;text-align:center;">' +
                 '<p style="font-size:18px;margin-bottom:12px;">⚠ Terminal library not loaded</p>' +
-                '<p style="color:#8b949e;">Place xterm.js files in <code>/static/vendor/</code> to enable the web terminal.</p>' +
+                '<p style="color:#8b949e;">Local vendor files are missing and CDN loading failed.</p>' +
                 '</div>';
             return;
         }
@@ -66,30 +184,61 @@
             allowTransparency: true,
         });
 
-        var fitAddon = null;
         if (typeof FitAddon !== 'undefined') {
             fitAddon = new FitAddon.FitAddon();
             term.loadAddon(fitAddon);
         }
 
-        term.open(document.getElementById('terminal'));
+        var terminalEl = document.getElementById('terminal');
+        term.open(terminalEl);
         if (fitAddon) fitAddon.fit();
 
         term.writeln('SSH Proxy Core — Web Terminal');
         term.writeln('Select a server above and click Connect.\r\n');
+        loadServers();
 
         term.onData(function(data) {
-            if (wsConn) wsConn.send(data);
+            if (wsConn && wsConn.readyState === WebSocket.OPEN) {
+                wsConn.send(data);
+            }
+        });
+
+        terminalEl.addEventListener('copy', function(event) {
+            if (!term || !term.hasSelection || !term.hasSelection() || !event.clipboardData) {
+                return;
+            }
+            event.clipboardData.setData('text/plain', term.getSelection());
+            event.preventDefault();
+        });
+
+        terminalEl.addEventListener('paste', function(event) {
+            if (!wsConn || !event.clipboardData) {
+                return;
+            }
+            var text = event.clipboardData.getData('text/plain');
+            if (!text) {
+                return;
+            }
+            wsConn.send(text);
+            event.preventDefault();
+        });
+
+        terminalEl.addEventListener('dragenter', handleTerminalDragEnter);
+        terminalEl.addEventListener('dragover', handleTerminalDragOver);
+        terminalEl.addEventListener('dragleave', handleTerminalDragLeave);
+        terminalEl.addEventListener('drop', handleTerminalDrop);
+        document.getElementById('terminal-upload-input').addEventListener('change', function(event) {
+            queueUploadFiles(event.target.files);
+            event.target.value = '';
         });
 
         window.addEventListener('resize', function() {
             if (fitAddon) fitAddon.fit();
-            if (wsConn) {
-                wsConn.send(JSON.stringify({
-                    type: 'resize',
+            if (wsConn && wsConn.readyState === WebSocket.OPEN) {
+                sendTerminalControl('resize', {
                     cols: term.cols,
-                    rows: term.rows,
-                }));
+                    rows: term.rows
+                });
             }
         });
     }
@@ -106,46 +255,127 @@
         }
 
         setStatus('connecting');
+        updateTransferStatus('Connecting…');
+        resetRecordingStatus();
         term.clear();
         term.writeln('Connecting to ' + host + '…\r\n');
 
-        wsConn = App.ws('/api/v1/terminal/ws?host=' + encodeURIComponent(host), {
-            onOpen: function() {
-                setStatus('connected');
-                document.getElementById('terminal-disconnect-btn').disabled = false;
-                document.getElementById('terminal-connect-btn').disabled = true;
-                wsConn.send(JSON.stringify({
-                    type: 'resize',
-                    cols: term.cols,
-                    rows: term.rows,
-                }));
-            },
-            onMessage: function(data) {
-                if (typeof data === 'string') {
-                    term.write(data);
-                } else if (data.output) {
-                    term.write(data.output);
+        disconnectTerminal();
+        var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsConn = new WebSocket(protocol + '//' + location.host + '/ws/terminal?host=' + encodeURIComponent(host));
+        wsConn.binaryType = 'arraybuffer';
+
+        wsConn.onopen = function() {
+            setStatus('connected');
+            document.getElementById('terminal-disconnect-btn').disabled = false;
+            document.getElementById('terminal-connect-btn').disabled = true;
+            initZmodemSentry();
+            sendTerminalControl('resize', {
+                cols: term.cols,
+                rows: term.rows
+            });
+        };
+
+        wsConn.onmessage = function(event) {
+            if (typeof event.data === 'string') {
+                var control = parseTerminalControl(event.data);
+                if (control) {
+                    handleTerminalControl(control);
+                    return;
                 }
-            },
-            onClose: function() {
-                setStatus('disconnected');
-                document.getElementById('terminal-disconnect-btn').disabled = true;
-                document.getElementById('terminal-connect-btn').disabled = false;
-                if (term) term.writeln('\r\n\x1b[31mConnection closed.\x1b[0m');
-            },
-            onError: function() {
-                setStatus('disconnected');
-                App.notify('Terminal connection error', 'error');
-            },
-            maxReconnect: 0,
-        });
+                consumeTerminalBytes(textEncoder.encode(event.data));
+                return;
+            }
+
+            if (event.data instanceof ArrayBuffer) {
+                consumeTerminalBytes(new Uint8Array(event.data));
+                return;
+            }
+
+            if (event.data && typeof event.data.arrayBuffer === 'function') {
+                event.data.arrayBuffer().then(function(buffer) {
+                    consumeTerminalBytes(new Uint8Array(buffer));
+                }).catch(function(err) {
+                    App.notify('Failed to process terminal stream: ' + err.message, 'error');
+                });
+            }
+        };
+
+        wsConn.onclose = function() {
+            zmodemSentry = null;
+            pendingSendSession = null;
+            setStatus('disconnected');
+            document.getElementById('terminal-disconnect-btn').disabled = true;
+            document.getElementById('terminal-connect-btn').disabled = false;
+            updateTransferStatus('Disconnected');
+            finalizeRecordingStatus();
+            if (term) {
+                term.writeln('\r\n\x1b[31mConnection closed.\x1b[0m');
+            }
+        };
+
+        wsConn.onerror = function() {
+            setStatus('disconnected');
+            updateTransferStatus('Connection error');
+            App.notify('Terminal connection error', 'error');
+        };
+    };
+
+    window.copyTerminalSelection = async function() {
+        if (!term || !term.hasSelection || !term.hasSelection()) {
+            App.notify('Select terminal text first', 'info');
+            return;
+        }
+        if (!navigator.clipboard || !navigator.clipboard.writeText) {
+            App.notify('Clipboard API not available in this browser', 'warning');
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(term.getSelection());
+            App.notify('Terminal selection copied', 'success');
+        } catch (e) {
+            App.notify('Clipboard copy failed: ' + e.message, 'error');
+        }
+    };
+
+    window.pasteClipboard = async function() {
+        if (!wsConn) {
+            App.notify('Connect to a server before pasting', 'warning');
+            return;
+        }
+        if (!navigator.clipboard || !navigator.clipboard.readText) {
+            App.notify('Clipboard API not available in this browser', 'warning');
+            return;
+        }
+        try {
+            var text = await navigator.clipboard.readText();
+            if (!text) {
+                return;
+            }
+            wsConn.send(text);
+        } catch (e) {
+            App.notify('Clipboard paste failed: ' + e.message, 'error');
+        }
+    };
+
+    window.chooseTerminalUpload = function() {
+        document.getElementById('terminal-upload-input').click();
     };
 
     window.disconnectTerminal = function() {
         if (wsConn) {
+            wsConn.onclose = null;
+            wsConn.onmessage = null;
+            wsConn.onerror = null;
             wsConn.close();
             wsConn = null;
         }
+        zmodemSentry = null;
+        pendingSendSession = null;
+        setStatus('disconnected');
+        document.getElementById('terminal-disconnect-btn').disabled = true;
+        document.getElementById('terminal-connect-btn').disabled = false;
+        updateTransferStatus('Disconnected');
     };
 
     function setStatus(s) {
@@ -169,7 +399,224 @@
         }
     };
 
-    initTerminal();
+    function sendTerminalControl(action, payload) {
+        if (!wsConn || wsConn.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        var message = Object.assign({ type: 'control', action: action }, payload || {});
+        wsConn.send(JSON.stringify(message));
+    }
+
+    function parseTerminalControl(raw) {
+        try {
+            var data = JSON.parse(raw);
+            if (data && data.type === 'control') {
+                return data;
+            }
+        } catch (_) {}
+        return null;
+    }
+
+    function handleTerminalControl(message) {
+        if (!message || !message.action) {
+            return;
+        }
+        if (message.action === 'connected' && message.data) {
+            term.write(message.data);
+            updateTransferStatus('Ready for rz / sz file transfer');
+            if (message.download_url) {
+                setRecordingStatus(
+                    'Audit recording is synced with this terminal session.',
+                    message.download_url,
+                    message.recording_id
+                );
+            } else {
+                setRecordingStatus('Audit recording is not configured on this node.');
+            }
+            return;
+        }
+        if (message.action === 'error') {
+            updateTransferStatus('Transfer unavailable');
+            App.notify(message.data || 'Terminal error', 'error');
+            setRecordingStatus('Audit recording unavailable.');
+            if (message.data && term) {
+                term.writeln('\r\n\x1b[31m' + message.data + '\x1b[0m');
+            }
+        }
+    }
+
+    function initZmodemSentry() {
+        zmodemSentry = null;
+        pendingSendSession = null;
+        if (typeof Zmodem === 'undefined' || !Zmodem.Sentry || !Zmodem.Browser) {
+            updateTransferStatus('zmodem.js unavailable; drag-and-drop upload is disabled');
+            return;
+        }
+        zmodemSentry = new Zmodem.Sentry({
+            to_terminal: function(octets) {
+                term.write(textDecoder.decode(octets, { stream: true }));
+            },
+            sender: function(octets) {
+                if (wsConn && wsConn.readyState === WebSocket.OPEN) {
+                    wsConn.send(octets);
+                }
+            },
+            on_detect: function(detection) {
+                handleZmodemDetection(detection);
+            },
+            on_retract: function() {
+                pendingSendSession = null;
+                if (pendingUploadFiles.length) {
+                    updateTransferStatus('Queued ' + pendingUploadFiles.length + ' file(s). Run rz on the remote host to upload.');
+                    return;
+                }
+                updateTransferStatus('Ready for rz / sz file transfer');
+            }
+        });
+    }
+
+    function consumeTerminalBytes(octets) {
+        if (zmodemSentry) {
+            zmodemSentry.consume(octets);
+            return;
+        }
+        term.write(textDecoder.decode(octets, { stream: true }));
+    }
+
+    function handleZmodemDetection(detection) {
+        var session = detection.confirm();
+        if (session.type === 'send') {
+            if (!pendingUploadFiles.length) {
+                pendingSendSession = session;
+                updateTransferStatus('Remote is ready to receive files. Choose files now to continue.');
+                document.getElementById('terminal-upload-input').click();
+                return;
+            }
+            startUploadSession(session, pendingUploadFiles.slice());
+            return;
+        }
+        startDownloadSession(session);
+    }
+
+    function startUploadSession(session, files) {
+        pendingSendSession = null;
+        pendingUploadFiles = [];
+        updateTransferStatus('Uploading ' + files.length + ' file(s)…');
+        session.on('session_end', function() {
+            updateTransferStatus('Upload complete');
+        });
+        Zmodem.Browser.send_files(session, files).then(function() {
+            updateTransferStatus('Upload complete');
+        }).catch(function(err) {
+            updateTransferStatus('Upload failed');
+            App.notify('Upload failed: ' + err.message, 'error');
+        });
+    }
+
+    function startDownloadSession(session) {
+        updateTransferStatus('Remote started a download…');
+        session.on('offer', function(xfer) {
+            var details = xfer.get_details();
+            updateTransferStatus('Downloading ' + (details.name || 'file') + '…');
+            xfer.accept().then(function() {
+                Zmodem.Browser.save_to_disk(xfer.get_payloads(), details.name);
+                updateTransferStatus('Downloaded ' + (details.name || 'file'));
+            }).catch(function(err) {
+                updateTransferStatus('Download failed');
+                App.notify('Download failed: ' + err.message, 'error');
+            });
+        });
+        session.on('session_end', function() {
+            updateTransferStatus('Download complete');
+        });
+        session.start();
+    }
+
+    function queueUploadFiles(fileList) {
+        pendingUploadFiles = Array.prototype.slice.call(fileList || []);
+        if (!pendingUploadFiles.length) {
+            return;
+        }
+        updateTransferStatus('Queued ' + pendingUploadFiles.length + ' file(s). Run rz on the remote host to upload.');
+        App.notify('Queued ' + pendingUploadFiles.length + ' file(s) for upload', 'info');
+        if (pendingSendSession) {
+            var session = pendingSendSession;
+            startUploadSession(session, pendingUploadFiles.slice());
+        }
+    }
+
+    function updateTransferStatus(message) {
+        document.getElementById('terminal-transfer-status').innerHTML = App.escapeHtml(message || '');
+    }
+
+    function resetRecordingStatus() {
+        setRecordingStatus('Preparing audit recording…');
+    }
+
+    function setRecordingStatus(message, url, recordingId) {
+        document.getElementById('terminal-recording-text').textContent = message || '';
+        var link = document.getElementById('terminal-recording-download');
+        if (url) {
+            link.href = url;
+            link.download = (recordingId || 'web-terminal') + '.cast';
+            link.classList.remove('hidden');
+            return;
+        }
+        link.href = '#';
+        link.classList.add('hidden');
+    }
+
+    function finalizeRecordingStatus() {
+        var link = document.getElementById('terminal-recording-download');
+        if (!link.classList.contains('hidden')) {
+            document.getElementById('terminal-recording-text').textContent =
+                'Audit recording is ready to download.';
+        }
+    }
+
+    function handleTerminalDragEnter(event) {
+        if (!event.dataTransfer || Array.prototype.indexOf.call(event.dataTransfer.types || [], 'Files') === -1) {
+            return;
+        }
+        event.preventDefault();
+        dragDepth++;
+        document.getElementById('terminal-drop-overlay').classList.remove('hidden');
+    }
+
+    function handleTerminalDragOver(event) {
+        if (!event.dataTransfer || Array.prototype.indexOf.call(event.dataTransfer.types || [], 'Files') === -1) {
+            return;
+        }
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+    }
+
+    function handleTerminalDragLeave(event) {
+        if (!event.dataTransfer || Array.prototype.indexOf.call(event.dataTransfer.types || [], 'Files') === -1) {
+            return;
+        }
+        event.preventDefault();
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0) {
+            document.getElementById('terminal-drop-overlay').classList.add('hidden');
+        }
+    }
+
+    function handleTerminalDrop(event) {
+        if (!event.dataTransfer || Array.prototype.indexOf.call(event.dataTransfer.types || [], 'Files') === -1) {
+            return;
+        }
+        event.preventDefault();
+        dragDepth = 0;
+        document.getElementById('terminal-drop-overlay').classList.add('hidden');
+        queueUploadFiles(event.dataTransfer.files);
+    }
+
+    ensureTerminalAssets().then(function() {
+        initTerminal();
+    }).catch(function() {
+        initTerminal();
+    });
 })();
 </script>
 {{end}}

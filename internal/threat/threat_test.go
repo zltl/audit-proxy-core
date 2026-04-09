@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +22,26 @@ func testDetector() *Detector {
 		MaxAlertsPerRule:  100,
 		BusinessHourStart: 6,
 		BusinessHourEnd:   22,
+	})
+}
+
+func testDetectorWithGeo(t *testing.T, data string) *Detector {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "geoip.json")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile(geoip) error = %v", err)
+	}
+	resolver, err := LoadStaticGeoResolver(path)
+	if err != nil {
+		t.Fatalf("LoadStaticGeoResolver() error = %v", err)
+	}
+	return NewDetector(&DetectorConfig{
+		Enabled:           true,
+		SuppressionWindow: 50 * time.Millisecond,
+		MaxAlertsPerRule:  100,
+		BusinessHourStart: 6,
+		BusinessHourEnd:   22,
+		GeoResolver:       resolver,
 	})
 }
 
@@ -57,6 +79,9 @@ func TestBruteForceDetection(t *testing.T) {
 	}
 	if alerts[0].Severity != SeverityHigh {
 		t.Fatalf("expected high severity, got %s", alerts[0].Severity)
+	}
+	if alerts[0].Score < 80 {
+		t.Fatalf("expected high severity score >= 80, got %d", alerts[0].Score)
 	}
 }
 
@@ -302,6 +327,59 @@ func TestSameSubnetNoImpossibleTravel(t *testing.T) {
 		if a.RuleID == "impossible_travel" {
 			t.Fatal("same /16 should not trigger impossible travel")
 		}
+	}
+}
+
+func TestStaticGeoResolverLongestPrefixMatch(t *testing.T) {
+	resolver := testDetectorWithGeo(t, `[
+		{"cidr":"203.0.113.0/24","country_code":"US","country":"United States","region":"California","city":"San Francisco","latitude":37.7749,"longitude":-122.4194},
+		{"cidr":"203.0.113.0/25","country_code":"US","country":"United States","region":"Washington","city":"Seattle","latitude":47.6062,"longitude":-122.3321}
+	]`).config.GeoResolver
+	location, ok := resolver.Lookup("203.0.113.10")
+	if !ok {
+		t.Fatal("expected geoip lookup to succeed")
+	}
+	if location.City != "Seattle" {
+		t.Fatalf("city = %q, want Seattle", location.City)
+	}
+}
+
+func TestImpossibleTravelUsesGeoIPCoordinates(t *testing.T) {
+	d := testDetectorWithGeo(t, `[
+		{"cidr":"203.0.113.0/24","country_code":"US","country":"United States","region":"California","city":"San Francisco","latitude":37.7749,"longitude":-122.4194},
+		{"cidr":"198.51.100.0/24","country_code":"DE","country":"Germany","region":"Hesse","city":"Frankfurt","latitude":50.1109,"longitude":8.6821}
+	]`)
+	now := time.Now().UTC()
+
+	first := &Event{
+		Timestamp: now.Add(-10 * time.Minute),
+		Type:      "auth_success",
+		Username:  "geo-user",
+		SourceIP:  "203.0.113.10",
+	}
+	d.ProcessEvent(first)
+	if got := stringFromDetails(first.Details["geo_city"]); got != "San Francisco" {
+		t.Fatalf("first geo_city = %q, want San Francisco", got)
+	}
+
+	alerts := d.ProcessEvent(&Event{
+		Timestamp: now,
+		Type:      "auth_success",
+		Username:  "geo-user",
+		SourceIP:  "198.51.100.20",
+	})
+	found := false
+	for _, alert := range alerts {
+		if alert.RuleID == "impossible_travel" {
+			found = true
+			if alert.Evidence[0] == "" {
+				t.Fatal("expected impossible_travel evidence to include geo details")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected impossible_travel alert with geoip evidence")
 	}
 }
 
@@ -771,6 +849,81 @@ func TestStats(t *testing.T) {
 	if _, ok := stats["by_severity"]; !ok {
 		t.Fatal("expected by_severity in stats")
 	}
+	if score, ok := stats["risk_score"].(int); !ok || score <= 0 {
+		t.Fatal("expected positive risk_score in stats")
+	}
+}
+
+func TestRiskAssessmentAggregatesContextualSignals(t *testing.T) {
+	d := testDetectorWithGeo(t, `[
+		{"cidr":"10.0.0.0/8","country_code":"US","country":"United States","region":"California","city":"San Francisco","latitude":37.7749,"longitude":-122.4194},
+		{"cidr":"198.51.100.0/24","country_code":"DE","country":"Germany","region":"Hesse","city":"Frankfurt","latitude":50.1109,"longitude":8.6821}
+	]`)
+	now := time.Now().UTC()
+
+	d.ProcessEvent(&Event{
+		Timestamp: now.Add(-10 * time.Minute),
+		Type:      "connection",
+		Username:  "alice",
+		SourceIP:  "10.0.0.15",
+		Target:    "db-a.internal",
+		Details: map[string]interface{}{
+			"source_type":        "office",
+			"device_fingerprint": "sshfp-known",
+		},
+	})
+
+	alerts := d.ProcessEvent(&Event{
+		Timestamp: now,
+		Type:      "connection",
+		Username:  "alice",
+		SourceIP:  "198.51.100.20",
+		Target:    "db-a.internal",
+		Details: map[string]interface{}{
+			"source_type":        "public",
+			"device_fingerprint": "sshfp-new",
+		},
+	})
+
+	assessment := d.CurrentRiskAssessment(&Event{Username: "alice", SourceIP: "198.51.100.20"})
+	if assessment == nil {
+		t.Fatal("expected current risk assessment")
+	}
+	if assessment.Score < 75 {
+		t.Fatalf("expected high dynamic risk score, got %d", assessment.Score)
+	}
+	if assessment.Level != RiskLevelCritical {
+		t.Fatalf("expected critical risk level, got %s", assessment.Level)
+	}
+
+	factors := make(map[string]bool)
+	for _, factor := range assessment.Factors {
+		factors[factor.ID] = true
+	}
+	for _, required := range []string{"public_network", "new_device", "geo_velocity"} {
+		if !factors[required] {
+			t.Fatalf("expected risk factor %q in %#v", required, assessment.Factors)
+		}
+	}
+
+	foundAlert := false
+	for _, alert := range alerts {
+		if alert.RuleID == "high_risk_access" {
+			foundAlert = true
+			break
+		}
+	}
+	if !foundAlert {
+		t.Fatalf("expected high_risk_access alert, got %#v", alerts)
+	}
+
+	stats := d.Stats()
+	if score, ok := stats["dynamic_risk_score"].(int); !ok || score < assessment.Score {
+		t.Fatalf("expected dynamic_risk_score >= %d, got %#v", assessment.Score, stats["dynamic_risk_score"])
+	}
+	if count, ok := stats["risk_assessment_count"].(int); !ok || count == 0 {
+		t.Fatalf("expected positive risk_assessment_count, got %#v", stats["risk_assessment_count"])
+	}
 }
 
 // --- GetAlerts Filter ---
@@ -894,8 +1047,8 @@ func TestThresholdWindowExpiry(t *testing.T) {
 
 func TestDefaultRulesCount(t *testing.T) {
 	rules := DefaultRules()
-	if len(rules) != 10 {
-		t.Fatalf("expected 10 default rules, got %d", len(rules))
+	if len(rules) != 11 {
+		t.Fatalf("expected 11 default rules, got %d", len(rules))
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
-	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -73,8 +72,8 @@ func FormatCertificate(cert *ssh.Certificate) string {
 	for _, p := range cert.ValidPrincipals {
 		fmt.Fprintf(&b, "  - %s\n", p)
 	}
-	fmt.Fprintf(&b, "Valid After: %s\n", time.Unix(int64(cert.ValidAfter), 0).UTC().Format(time.RFC3339))
-	fmt.Fprintf(&b, "Valid Before: %s\n", time.Unix(int64(cert.ValidBefore), 0).UTC().Format(time.RFC3339))
+	fmt.Fprintf(&b, "Valid After: %s\n", FormatUnixTime(cert.ValidAfter))
+	fmt.Fprintf(&b, "Valid Before: %s\n", FormatUnixTime(cert.ValidBefore))
 	fmt.Fprintf(&b, "Public Key: %s %s\n", cert.Key.Type(), PublicKeyFingerprint(cert.Key))
 
 	if len(cert.CriticalOptions) > 0 {

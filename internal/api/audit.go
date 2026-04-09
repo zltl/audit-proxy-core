@@ -14,8 +14,29 @@ import (
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
 )
 
-// loadAuditEvents reads NDJSON audit log files from the configured directory.
+// loadAuditEvents loads audit events from the configured backend. When a SQL
+// audit store is enabled it mirrors local append-only audit files into the
+// database and reads from there; otherwise it falls back to direct file scans.
 func (a *API) loadAuditEvents() ([]models.AuditEvent, error) {
+	if a != nil && a.auditStore != nil {
+		var syncErr error
+		if !a.auditSyncBg.Load() {
+			syncErr = a.syncAuditStore()
+		}
+		events, err := a.auditStore.ListEvents()
+		switch {
+		case err == nil && (syncErr == nil || len(events) > 0):
+			return events, nil
+		case err != nil:
+			return nil, err
+		default:
+			return nil, syncErr
+		}
+	}
+	return a.loadAuditEventsFromFiles()
+}
+
+func (a *API) loadAuditEventsFromFiles() ([]models.AuditEvent, error) {
 	dir := a.config.AuditLogDir
 	if dir == "" {
 		return nil, fmt.Errorf("audit log directory not configured")
@@ -240,10 +261,10 @@ func (a *API) handleAuditStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, APIResponse{
 		Success: true,
 		Data: map[string]interface{}{
-			"total":        len(events),
-			"by_type":      byType,
-			"by_hour":      byHour,
-			"by_user":      byUser,
+			"total":   len(events),
+			"by_type": byType,
+			"by_hour": byHour,
+			"by_user": byUser,
 		},
 	})
 }

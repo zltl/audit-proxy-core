@@ -67,6 +67,8 @@ struct audit_filter_config {
     bool record_commands;       /* Parse and record commands */
     bool enable_asciicast;      /* Enable asciicast recording */
     size_t max_file_size;       /* Max log file size (0 = unlimited) */
+    size_t max_archived_files;  /* Max archived files per log family (0 = unlimited) */
+    uint32_t retention_days;    /* Remove archived logs older than N days (0 = unlimited) */
     uint32_t flush_interval;    /* Flush interval in seconds */
 
     /* Custom callback */
@@ -76,6 +78,7 @@ struct audit_filter_config {
     /* Audit log signing (HMAC-SHA256) */
     const char *signing_key;    /* Hex-encoded HMAC key (NULL = no signing) */
     bool enable_chain_hash;     /* Enable chain hashing (default true when signing) */
+    const char *encryption_key; /* Hex-encoded AES-256-GCM key (NULL = plaintext logs) */
 };
 
 /* Asciicast header (v2 format) */

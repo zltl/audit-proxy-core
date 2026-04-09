@@ -21,6 +21,9 @@ typedef struct account_lock_config {
     bool lockout_enabled;           /* Enable/disable lockout (default: false) */
     uint32_t lockout_threshold;     /* Failures before lockout (default: 5) */
     uint32_t lockout_duration_sec;  /* Lockout duration in seconds (default: 300) */
+    bool ip_ban_enabled;            /* Enable/disable client IP bans (default: false) */
+    uint32_t ip_ban_threshold;      /* Failures before IP ban (default: 10) */
+    uint32_t ip_ban_duration_sec;   /* IP ban duration in seconds (default: 900) */
 } account_lock_config_t;
 
 /**
@@ -29,6 +32,13 @@ typedef struct account_lock_config {
  * @return 0 on success, -1 on error
  */
 int account_lock_init(const account_lock_config_t *config);
+
+/**
+ * @brief Update runtime lockout/ban settings without dropping the module
+ * @param config New settings (NULL resets to defaults)
+ * @return 0 on success, -1 if module is not initialized
+ */
+int account_lock_update_config(const account_lock_config_t *config);
 
 /**
  * @brief Shut down the account lockout system and free resources
@@ -60,6 +70,32 @@ void account_record_success(const char *username);
  * @return Number of failed attempts, or 0 if not tracked
  */
 int account_get_failures(const char *username);
+
+/**
+ * @brief Check if a client IP is temporarily banned
+ * @param client_addr Client IP address
+ * @return true if banned, false otherwise
+ */
+bool account_ip_is_blocked(const char *client_addr);
+
+/**
+ * @brief Record a failed login attempt for a client IP
+ * @param client_addr Client IP address that failed authentication
+ */
+void account_ip_record_failure(const char *client_addr);
+
+/**
+ * @brief Record a successful login for a client IP, resetting failures
+ * @param client_addr Client IP address that authenticated successfully
+ */
+void account_ip_record_success(const char *client_addr);
+
+/**
+ * @brief Get the current failure count for a client IP
+ * @param client_addr Client IP address to query
+ * @return Number of failed attempts, or 0 if not tracked
+ */
+int account_ip_get_failures(const char *client_addr);
 
 #ifdef __cplusplus
 }

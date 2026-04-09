@@ -5,6 +5,7 @@
 // Commands:
 //
 //	status      — show proxy and cluster status
+//	login       — sign in via OIDC and fetch an SSH certificate
 //	sessions    — list/manage sessions
 //	users       — manage users
 //	servers     — manage servers
@@ -50,18 +51,32 @@ func main() {
 	switch command {
 	case "status":
 		runStatus(args)
+	case "login":
+		runLogin(args)
+	case "ssh":
+		runSSH(args)
+	case "scp":
+		runSCP(args)
 	case "sessions":
 		runSessions(args)
+	case "ls":
+		runList(args)
 	case "users":
 		runUsers(args)
 	case "servers":
 		runServers(args)
+	case "play":
+		runPlay(args)
 	case "audit":
 		runAudit(args)
 	case "config":
 		runConfig(args)
 	case "cert":
 		runCert(args)
+	case "proxycommand":
+		runProxyCommand(args)
+	case "completion":
+		runCompletion(args)
 	case "jit":
 		runJIT(args)
 	case "threat":
@@ -84,12 +99,19 @@ func printUsage() {
 
 Commands:
   status      Show proxy and cluster status
+  login       Sign in with OIDC and fetch an SSH certificate
+  ssh         Run local ssh through the proxy
+  scp         Run local scp through the proxy
   sessions    List/manage active sessions
+  ls          Shortcut for listing sessions or servers
   users       Manage users
   servers     Manage backend servers
+  play        Replay a recorded session
   audit       Query audit logs
   config      Manage configuration
   cert        Manage SSH certificates
+  proxycommand  TCP bridge for ~/.ssh/config ProxyCommand usage
+  completion    Generate Bash/Zsh/Fish completion scripts
   jit         Manage JIT access requests
   threat      View threat alerts
   compliance  Generate compliance reports

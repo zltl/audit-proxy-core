@@ -9,10 +9,22 @@
 // Actions:
 //
 //	read-users        — output users as JSON
+//	read-user <id>    — output a single user as JSON
+//	read-routes       — output routes as JSON
+//	read-route ...    — output a single route as JSON
+//	read-policies     — output policies as JSON
+//	read-policy <id>  — output a single policy as JSON
 //	read-servers      — output servers as JSON
+//	read-server <id>  — output a single server as JSON
 //	create-user       — create user from JSON stdin
 //	update-user       — update user from JSON stdin
 //	delete-user <id>  — delete user
+//	create-route      — create route from JSON stdin
+//	update-route      — update route from JSON stdin
+//	delete-route ...  — delete route
+//	create-policy     — create policy from JSON stdin
+//	update-policy     — update policy from JSON stdin
+//	delete-policy <id>— delete policy
 //	create-server     — create server from JSON stdin
 //	update-server     — update server from JSON stdin
 //	delete-server <id>— delete server
@@ -31,7 +43,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -55,7 +69,18 @@ func newClient() (*apiClient, error) {
 	if server == "" {
 		return nil, fmt.Errorf("SSHPROXY_SERVER environment variable is not set")
 	}
-	server = strings.TrimRight(server, "/")
+
+	parsed, err := neturl.Parse(server)
+	if err != nil {
+		return nil, fmt.Errorf("parse SSHPROXY_SERVER: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("SSHPROXY_SERVER must use http or https")
+	}
+	if parsed.Host == "" {
+		return nil, fmt.Errorf("SSHPROXY_SERVER must include a host")
+	}
+	server = strings.TrimRight(parsed.String(), "/")
 
 	return &apiClient{
 		baseURL: server,
@@ -67,9 +92,13 @@ func newClient() (*apiClient, error) {
 }
 
 func (c *apiClient) do(method, path string, body io.Reader) (*apiResponse, error) {
+	if !strings.HasPrefix(path, "/") {
+		return nil, fmt.Errorf("path must start with '/'")
+	}
+
 	url := c.baseURL + path
 
-	req, err := http.NewRequest(method, url, body)
+	req, err := http.NewRequest(method, url, body) // #nosec G704 -- url is built from a validated operator-supplied control-plane endpoint plus fixed API paths.
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -78,7 +107,7 @@ func (c *apiClient) do(method, path string, body io.Reader) (*apiResponse, error
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) // #nosec G704 -- outbound requests intentionally target the validated control-plane endpoint.
 	if err != nil {
 		return nil, fmt.Errorf("request %s %s: %w", method, path, err)
 	}
@@ -116,6 +145,135 @@ func (c *apiClient) delete(path string) (*apiResponse, error) {
 	return c.do("DELETE", path, nil)
 }
 
+func readConfigDocument(client *apiClient) (map[string]interface{}, error) {
+	resp, err := client.get("/api/v2/config")
+	if err != nil {
+		return nil, err
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(resp.Data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse config document: %w", err)
+	}
+	if cfg == nil {
+		cfg = map[string]interface{}{}
+	}
+	return cfg, nil
+}
+
+func writeConfigDocument(client *apiClient, cfg map[string]interface{}) (json.RawMessage, error) {
+	body, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("marshal config document: %w", err)
+	}
+	resp, err := client.put("/api/v2/config", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+func readJSONObject(stdin io.Reader, subject string) (map[string]interface{}, error) {
+	body, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil, fmt.Errorf("read stdin: %w", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("parse %s payload: %w", subject, err)
+	}
+	if payload == nil {
+		return nil, fmt.Errorf("%s payload must be a JSON object", subject)
+	}
+	return payload, nil
+}
+
+func marshalValue(v interface{}) (json.RawMessage, error) {
+	body, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(body), nil
+}
+
+func collectionFromConfig(cfg map[string]interface{}, key string) ([]interface{}, error) {
+	raw, ok := cfg[key]
+	if !ok || raw == nil {
+		return []interface{}{}, nil
+	}
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("config %q is not an array", key)
+	}
+	return items, nil
+}
+
+func objectAt(items []interface{}, index int) (map[string]interface{}, bool) {
+	if index < 0 || index >= len(items) {
+		return nil, false
+	}
+	obj, ok := items[index].(map[string]interface{})
+	return obj, ok
+}
+
+func getStringField(obj map[string]interface{}, key string) string {
+	value, _ := obj[key].(string)
+	return value
+}
+
+func getPortField(obj map[string]interface{}, key string) string {
+	switch v := obj[key].(type) {
+	case float64:
+		return strconv.Itoa(int(v))
+	case int:
+		return strconv.Itoa(v)
+	case int32:
+		return strconv.Itoa(int(v))
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case json.Number:
+		return v.String()
+	case string:
+		return v
+	default:
+		return ""
+	}
+}
+
+func findRouteIndex(items []interface{}, pattern, upstream, port string) (int, map[string]interface{}) {
+	for i := range items {
+		obj, ok := objectAt(items, i)
+		if !ok {
+			continue
+		}
+		if pattern != "" && getStringField(obj, "pattern") != pattern {
+			continue
+		}
+		if upstream != "" && getStringField(obj, "upstream") != upstream {
+			continue
+		}
+		if port != "" && getPortField(obj, "port") != port {
+			continue
+		}
+		return i, obj
+	}
+	return -1, nil
+}
+
+func findPolicyIndex(items []interface{}, pattern string) (int, map[string]interface{}) {
+	for i := range items {
+		obj, ok := objectAt(items, i)
+		if !ok {
+			continue
+		}
+		if getStringField(obj, "pattern") == pattern {
+			return i, obj
+		}
+	}
+	return -1, nil
+}
+
 // dispatch maps the CLI action to the appropriate API call.
 func dispatch(action string, args []string, stdin io.Reader, client *apiClient) (json.RawMessage, error) {
 	switch action {
@@ -126,8 +284,94 @@ func dispatch(action string, args []string, stdin io.Reader, client *apiClient) 
 		}
 		return resp.Data, nil
 
+	case "read-user":
+		if len(args) < 1 {
+			return nil, fmt.Errorf("read-user requires a username argument")
+		}
+		resp, err := client.get("/api/v2/users/" + args[0])
+		if err != nil {
+			return nil, err
+		}
+		return resp.Data, nil
+
+	case "read-routes":
+		cfg, err := readConfigDocument(client)
+		if err != nil {
+			return nil, err
+		}
+		items, err := collectionFromConfig(cfg, "routes")
+		if err != nil {
+			return nil, err
+		}
+		return marshalValue(items)
+
+	case "read-route":
+		if len(args) < 1 {
+			return nil, fmt.Errorf("read-route requires at least a pattern argument")
+		}
+		cfg, err := readConfigDocument(client)
+		if err != nil {
+			return nil, err
+		}
+		items, err := collectionFromConfig(cfg, "routes")
+		if err != nil {
+			return nil, err
+		}
+		upstream := ""
+		if len(args) > 1 {
+			upstream = args[1]
+		}
+		port := ""
+		if len(args) > 2 {
+			port = args[2]
+		}
+		_, route := findRouteIndex(items, args[0], upstream, port)
+		if route == nil {
+			return nil, fmt.Errorf("route not found")
+		}
+		return marshalValue(route)
+
+	case "read-policies":
+		cfg, err := readConfigDocument(client)
+		if err != nil {
+			return nil, err
+		}
+		items, err := collectionFromConfig(cfg, "policies")
+		if err != nil {
+			return nil, err
+		}
+		return marshalValue(items)
+
+	case "read-policy":
+		if len(args) < 1 {
+			return nil, fmt.Errorf("read-policy requires a pattern argument")
+		}
+		cfg, err := readConfigDocument(client)
+		if err != nil {
+			return nil, err
+		}
+		items, err := collectionFromConfig(cfg, "policies")
+		if err != nil {
+			return nil, err
+		}
+		_, policy := findPolicyIndex(items, args[0])
+		if policy == nil {
+			return nil, fmt.Errorf("policy not found")
+		}
+		return marshalValue(policy)
+
 	case "read-servers":
 		resp, err := client.get("/api/v2/servers")
+		if err != nil {
+			return nil, err
+		}
+		return resp.Data, nil
+
+	case "read-server":
+		if len(args) < 1 {
+			return nil, fmt.Errorf("read-server requires a server ID argument")
+		}
+		resp, err := client.get("/api/v2/servers/" + args[0])
 		if err != nil {
 			return nil, err
 		}
@@ -173,6 +417,168 @@ func dispatch(action string, args []string, stdin io.Reader, client *apiClient) 
 			return nil, err
 		}
 		return resp.Data, nil
+
+	case "create-route":
+		payload, err := readJSONObject(stdin, "route")
+		if err != nil {
+			return nil, err
+		}
+		pattern := getStringField(payload, "pattern")
+		upstream := getStringField(payload, "upstream")
+		if pattern == "" || upstream == "" {
+			return nil, fmt.Errorf("route payload must include pattern and upstream")
+		}
+		cfg, err := readConfigDocument(client)
+		if err != nil {
+			return nil, err
+		}
+		items, err := collectionFromConfig(cfg, "routes")
+		if err != nil {
+			return nil, err
+		}
+		if index, _ := findRouteIndex(items, pattern, upstream, getPortField(payload, "port")); index >= 0 {
+			return nil, fmt.Errorf("route already exists")
+		}
+		cfg["routes"] = append(items, payload)
+		if _, err := writeConfigDocument(client, cfg); err != nil {
+			return nil, err
+		}
+		return marshalValue(payload)
+
+	case "update-route":
+		payload, err := readJSONObject(stdin, "route")
+		if err != nil {
+			return nil, err
+		}
+		pattern := getStringField(payload, "pattern")
+		upstream := getStringField(payload, "upstream")
+		if pattern == "" || upstream == "" {
+			return nil, fmt.Errorf("route payload must include pattern and upstream")
+		}
+		cfg, err := readConfigDocument(client)
+		if err != nil {
+			return nil, err
+		}
+		items, err := collectionFromConfig(cfg, "routes")
+		if err != nil {
+			return nil, err
+		}
+		index, _ := findRouteIndex(items, pattern, upstream, getPortField(payload, "port"))
+		if index < 0 {
+			return nil, fmt.Errorf("route not found")
+		}
+		items[index] = payload
+		cfg["routes"] = items
+		if _, err := writeConfigDocument(client, cfg); err != nil {
+			return nil, err
+		}
+		return marshalValue(payload)
+
+	case "delete-route":
+		if len(args) < 1 {
+			return nil, fmt.Errorf("delete-route requires at least a pattern argument")
+		}
+		cfg, err := readConfigDocument(client)
+		if err != nil {
+			return nil, err
+		}
+		items, err := collectionFromConfig(cfg, "routes")
+		if err != nil {
+			return nil, err
+		}
+		upstream := ""
+		if len(args) > 1 {
+			upstream = args[1]
+		}
+		port := ""
+		if len(args) > 2 {
+			port = args[2]
+		}
+		index, _ := findRouteIndex(items, args[0], upstream, port)
+		if index < 0 {
+			return nil, fmt.Errorf("route not found")
+		}
+		cfg["routes"] = append(items[:index], items[index+1:]...)
+		if _, err := writeConfigDocument(client, cfg); err != nil {
+			return nil, err
+		}
+		return marshalValue(map[string]string{"message": "deleted"})
+
+	case "create-policy":
+		payload, err := readJSONObject(stdin, "policy")
+		if err != nil {
+			return nil, err
+		}
+		pattern := getStringField(payload, "pattern")
+		if pattern == "" {
+			return nil, fmt.Errorf("policy payload must include pattern")
+		}
+		cfg, err := readConfigDocument(client)
+		if err != nil {
+			return nil, err
+		}
+		items, err := collectionFromConfig(cfg, "policies")
+		if err != nil {
+			return nil, err
+		}
+		if index, _ := findPolicyIndex(items, pattern); index >= 0 {
+			return nil, fmt.Errorf("policy already exists")
+		}
+		cfg["policies"] = append(items, payload)
+		if _, err := writeConfigDocument(client, cfg); err != nil {
+			return nil, err
+		}
+		return marshalValue(payload)
+
+	case "update-policy":
+		payload, err := readJSONObject(stdin, "policy")
+		if err != nil {
+			return nil, err
+		}
+		pattern := getStringField(payload, "pattern")
+		if pattern == "" {
+			return nil, fmt.Errorf("policy payload must include pattern")
+		}
+		cfg, err := readConfigDocument(client)
+		if err != nil {
+			return nil, err
+		}
+		items, err := collectionFromConfig(cfg, "policies")
+		if err != nil {
+			return nil, err
+		}
+		index, _ := findPolicyIndex(items, pattern)
+		if index < 0 {
+			return nil, fmt.Errorf("policy not found")
+		}
+		items[index] = payload
+		cfg["policies"] = items
+		if _, err := writeConfigDocument(client, cfg); err != nil {
+			return nil, err
+		}
+		return marshalValue(payload)
+
+	case "delete-policy":
+		if len(args) < 1 {
+			return nil, fmt.Errorf("delete-policy requires a pattern argument")
+		}
+		cfg, err := readConfigDocument(client)
+		if err != nil {
+			return nil, err
+		}
+		items, err := collectionFromConfig(cfg, "policies")
+		if err != nil {
+			return nil, err
+		}
+		index, _ := findPolicyIndex(items, args[0])
+		if index < 0 {
+			return nil, fmt.Errorf("policy not found")
+		}
+		cfg["policies"] = append(items[:index], items[index+1:]...)
+		if _, err := writeConfigDocument(client, cfg); err != nil {
+			return nil, err
+		}
+		return marshalValue(map[string]string{"message": "deleted"})
 
 	case "create-server":
 		body, err := io.ReadAll(stdin)
@@ -244,10 +650,22 @@ func usage() {
 
 Actions:
   read-users        Output users as JSON
+  read-user <id>    Output a single user as JSON
+  read-routes       Output routes as JSON
+  read-route ...    Output a single route as JSON
+  read-policies     Output policies as JSON
+  read-policy <id>  Output a single policy as JSON
   read-servers      Output servers as JSON
+  read-server <id>  Output a single server as JSON
   create-user       Create user from JSON stdin
   update-user       Update user from JSON stdin
   delete-user <id>  Delete user
+  create-route      Create route from JSON stdin
+  update-route      Update route from JSON stdin
+  delete-route ...  Delete route
+  create-policy     Create policy from JSON stdin
+  update-policy     Update policy from JSON stdin
+  delete-policy <id>Delete policy
   create-server     Create server from JSON stdin
   update-server     Update server from JSON stdin
   delete-server <id>Delete server

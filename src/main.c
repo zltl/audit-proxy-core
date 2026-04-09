@@ -6,12 +6,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <time.h>
+#include <unistd.h>
 
+#include "admin_runtime.h"
+#include "account_lock.h"
 #include "audit_filter.h"
 #include "auth_filter.h"
 #include "config.h"
+#include "config_auth.h"
 #include "filter.h"
 #include "health_check.h"
 #include "logger.h"
@@ -23,15 +26,17 @@
 #include "session.h"
 #include "ssh_server.h"
 #include "version.h"
+#include "webhook_runtime.h"
+#include <libssh/libssh.h>
 #include <pthread.h>
 #include <sys/stat.h>
-#include <libssh/libssh.h>
 
-#define DEFAULT_HOST_KEY "/tmp/ssh_proxy_host_key"
+#define DEFAULT_HOST_KEY    "/tmp/ssh_proxy_host_key"
 #define DEFAULT_CONFIG_FILE "/etc/ssh-proxy/config.ini"
 
 static proxy_config_t *g_config = NULL;
-static const char *g_config_path = NULL;  /* path for SIGHUP reload */
+static const char *g_config_path = NULL; /* path for SIGHUP reload */
+static atomic_bool g_drain_mode = false;
 
 static void print_usage(const char *prog_name) {
     printf("Usage: %s [options]\n", prog_name);
@@ -58,7 +63,8 @@ static int ensure_host_key(const char *path) {
 /* Warn if a sensitive file has overly permissive permissions */
 static void check_file_permissions(const char *path, const char *description) {
     struct stat st;
-    if (stat(path, &st) != 0) return;
+    if (stat(path, &st) != 0)
+        return;
 
     if (st.st_mode & S_IROTH) {
         LOG_WARN("%s '%s' is world-readable (mode %04o). "
@@ -74,109 +80,53 @@ static void check_file_permissions(const char *path, const char *description) {
 
 /* Config-based auth callback */
 static auth_result_t config_auth_cb(const char *username, const char *password, void *user_data) {
-    proxy_config_t *config = (proxy_config_t *)user_data;
-    LOG_DEBUG("config_auth_cb called: user='%s', config=%p", username, (void*)config);
-    
-    if (config == NULL) {
-        LOG_WARN("config_auth_cb: config is NULL");
-        return AUTH_RESULT_FAILURE;
-    }
-    
-    config_user_t *user = config_find_user(config, username);
-    if (user == NULL) {
-        LOG_WARN("Auth failed: user '%s' not found in config", username);
-        return AUTH_RESULT_FAILURE;
-    }
-    
-    LOG_DEBUG("Found user '%s', hash='%.20s...'", username, user->password_hash);
-    
-    /* Verify password if hash is set */
-    if (user->password_hash[0] != '\0') {
-        if (auth_filter_verify_password(password, user->password_hash)) {
-            LOG_INFO("Config auth success for user '%s'", username);
-            return AUTH_RESULT_SUCCESS;
-        }
-        LOG_DEBUG("Password verification failed for user '%s'", username);
-    }
-    
-    LOG_WARN("Auth failed for user '%s': bad password", username);
-    return AUTH_RESULT_FAILURE;
+    return config_authenticate_password((const proxy_config_t *)user_data, username, password);
 }
 
 /* Config-based public key auth callback */
-static auth_result_t config_pubkey_cb(const char *username, const void *pubkey_data,
-                                       size_t pubkey_len, void *user_data) {
-    proxy_config_t *config = (proxy_config_t *)user_data;
-    if (config == NULL || username == NULL || pubkey_data == NULL || pubkey_len == 0) {
-        return AUTH_RESULT_FAILURE;
+static auth_result_t config_pubkey_cb(const char *username, const char *client_addr,
+                                      const void *pubkey_data, size_t pubkey_len,
+                                      void *user_data) {
+    (void)pubkey_len;
+    return config_authenticate_pubkey((const proxy_config_t *)user_data, username, client_addr,
+                                      (const char *)pubkey_data);
+}
+
+static auth_result_t config_authorize_cb(const char *username, const char *client_addr,
+                                         void *user_data) {
+    return config_authorize_login((const proxy_config_t *)user_data, username, client_addr);
+}
+
+static void auth_webhook_event_cb(const char *username, const char *client_addr,
+                                  auth_result_t result, void *user_data) {
+    webhook_runtime_t *webhooks = (webhook_runtime_t *)user_data;
+    webhook_event_type_t event_type =
+        (result == AUTH_RESULT_SUCCESS) ? WEBHOOK_EVENT_AUTH_SUCCESS : WEBHOOK_EVENT_AUTH_FAILURE;
+    webhook_runtime_emit(webhooks, event_type, username, client_addr, NULL);
+}
+
+static void rate_limit_webhook_event_cb(const char *username, const char *client_addr,
+                                        rate_limit_result_t result, void *user_data) {
+    webhook_runtime_t *webhooks = (webhook_runtime_t *)user_data;
+    const char *detail = (result == RATE_LIMIT_THROTTLE) ? "connection rate limit exceeded"
+                                                         : "concurrent session limit exceeded";
+    webhook_runtime_emit(webhooks, WEBHOOK_EVENT_RATE_LIMIT, username, client_addr, detail);
+}
+
+static session_manager_store_type_t session_store_type_from_config(const proxy_config_t *config)
+{
+    if (config == NULL || strcmp(config->session_store_type, "file") != 0) {
+        return SESSION_MANAGER_STORE_LOCAL;
     }
+    return SESSION_MANAGER_STORE_FILE;
+}
 
-    config_user_t *user = config_find_user(config, username);
-    if (user == NULL || user->pubkeys == NULL || user->pubkeys[0] == '\0') {
-        LOG_DEBUG("No authorized keys configured for user '%s'", username);
-        return AUTH_RESULT_FAILURE;
+static int rate_limit_shared_session_count(const char *username, void *user_data)
+{
+    if (username == NULL || user_data == NULL) {
+        return -1;
     }
-
-    /* The pubkey_data is a base64-encoded public key string from proxy_handler */
-    const char *client_b64 = (const char *)pubkey_data;
-
-    /* Import the client's public key from base64 */
-    ssh_key client_key = NULL;
-    if (ssh_pki_import_pubkey_base64(client_b64, SSH_KEYTYPE_UNKNOWN,
-                                      &client_key) != SSH_OK) {
-        LOG_WARN("Failed to import client public key for user '%s'", username);
-        return AUTH_RESULT_FAILURE;
-    }
-
-    /* Parse each line of configured authorized keys and compare */
-    char *keys_copy = strdup(user->pubkeys);
-    if (keys_copy == NULL) {
-        ssh_key_free(client_key);
-        return AUTH_RESULT_FAILURE;
-    }
-
-    auth_result_t result = AUTH_RESULT_FAILURE;
-    char *saveptr = NULL;
-    char *line = strtok_r(keys_copy, "\n", &saveptr);
-
-    while (line != NULL) {
-        /* Skip leading whitespace */
-        while (*line == ' ' || *line == '\t') line++;
-        /* Skip empty lines and comments */
-        if (*line == '\0' || *line == '#') {
-            line = strtok_r(NULL, "\n", &saveptr);
-            continue;
-        }
-
-        /* OpenSSH format: "type base64data comment" — skip the type prefix */
-        const char *b64_start = line;
-        /* Skip type field (e.g., "ssh-rsa", "ssh-ed25519") */
-        char *space = strchr(line, ' ');
-        if (space != NULL) {
-            b64_start = space + 1;
-            /* Trim trailing comment if present */
-            char *next_space = strchr(b64_start, ' ');
-            if (next_space != NULL) *next_space = '\0';
-        }
-
-        ssh_key configured_key = NULL;
-        if (ssh_pki_import_pubkey_base64(b64_start, SSH_KEYTYPE_UNKNOWN,
-                                          &configured_key) == SSH_OK) {
-            if (ssh_key_cmp(client_key, configured_key, SSH_KEY_CMP_PUBLIC) == 0) {
-                LOG_INFO("Public key match for user '%s'", username);
-                ssh_key_free(configured_key);
-                result = AUTH_RESULT_SUCCESS;
-                break;
-            }
-            ssh_key_free(configured_key);
-        }
-
-        line = strtok_r(NULL, "\n", &saveptr);
-    }
-
-    free(keys_copy);
-    ssh_key_free(client_key);
-    return result;
+    return session_manager_count_user((session_manager_t *)user_data, username);
 }
 
 /* Fallback auth callback for testing (when no config) */
@@ -192,7 +142,7 @@ static auth_result_t test_auth_cb(const char *username, const char *password, vo
 
 int main(int argc, char *argv[]) {
     log_level_t log_level = LOG_LEVEL_INFO;
-    uint16_t port = 0;  /* 0 means use config or default */
+    uint16_t port = 0; /* 0 means use config or default */
     const char *host_key = NULL;
     const char *config_file = NULL;
     bool check_mode = false;
@@ -234,6 +184,8 @@ int main(int argc, char *argv[]) {
 
     LOG_INFO("SSH Proxy Core %s starting...", SSH_PROXY_VERSION_STRING);
 
+    webhook_runtime_t webhooks = {0};
+
     /* Load configuration file if specified */
     if (config_file != NULL) {
         g_config = config_load(config_file);
@@ -260,8 +212,9 @@ int main(int argc, char *argv[]) {
         port = (g_config != NULL) ? g_config->port : 2222;
     }
     if (host_key == NULL) {
-        host_key = (g_config != NULL && g_config->host_key_path[0] != '\0') 
-                   ? g_config->host_key_path : DEFAULT_HOST_KEY;
+        host_key = (g_config != NULL && g_config->host_key_path[0] != '\0')
+                       ? g_config->host_key_path
+                       : DEFAULT_HOST_KEY;
     }
 
     /* Config validation mode */
@@ -279,9 +232,15 @@ int main(int argc, char *argv[]) {
         config_valid_result_t *r = results;
         while (r != NULL) {
             const char *prefix = "INFO";
-            if (r->level == CONFIG_VALID_WARN) { prefix = "WARN"; warnings++; }
-            else if (r->level == CONFIG_VALID_ERROR) { prefix = "ERROR"; errors++; }
-            else { infos++; }
+            if (r->level == CONFIG_VALID_WARN) {
+                prefix = "WARN";
+                warnings++;
+            } else if (r->level == CONFIG_VALID_ERROR) {
+                prefix = "ERROR";
+                errors++;
+            } else {
+                infos++;
+            }
             printf("  [%s] %s\n", prefix, r->message);
             r = r->next;
         }
@@ -297,7 +256,7 @@ int main(int argc, char *argv[]) {
             printf("\nConfiguration valid with %d warning(s)\n", warnings);
             config_destroy(g_config);
             log_shutdown();
-            return 2;  /* Warnings exit code */
+            return 2; /* Warnings exit code */
         } else {
             printf("\nConfiguration OK\n");
             config_destroy(g_config);
@@ -315,13 +274,15 @@ int main(int argc, char *argv[]) {
     /* Ensure host key exists */
     if (ensure_host_key(host_key) != 0) {
         LOG_FATAL("Failed to prepare host key");
-        if (g_config) config_destroy(g_config);
+        if (g_config)
+            config_destroy(g_config);
         log_shutdown();
         return EXIT_FAILURE;
     }
 
     /* Create SSH server configuration */
-    ssh_server_config_t server_config = {.bind_addr = (g_config != NULL) ? g_config->bind_addr : "0.0.0.0",
+    ssh_server_config_t server_config = {.bind_addr =
+                                             (g_config != NULL) ? g_config->bind_addr : "0.0.0.0",
                                          .port = port,
                                          .host_key_rsa = host_key,
                                          .host_key_ecdsa = NULL,
@@ -332,11 +293,21 @@ int main(int argc, char *argv[]) {
     session_manager_config_t session_config = {
         .max_sessions = (g_config != NULL) ? g_config->max_sessions : 1000,
         .session_timeout = (g_config != NULL) ? g_config->session_timeout : 3600,
-        .auth_timeout = (g_config != NULL) ? g_config->auth_timeout : 60};
+        .auth_timeout = (g_config != NULL) ? g_config->auth_timeout : 60,
+        .store_type = session_store_type_from_config(g_config),
+        .sync_interval_sec =
+            (g_config != NULL) ? g_config->session_store_sync_interval : 5};
+    if (g_config != NULL) {
+        strncpy(session_config.store_path, g_config->session_store_path,
+                sizeof(session_config.store_path) - 1);
+        strncpy(session_config.instance_id, g_config->session_store_instance_id,
+                sizeof(session_config.instance_id) - 1);
+    }
     session_manager_t *session_mgr = session_manager_create(&session_config);
     if (session_mgr == NULL) {
         LOG_FATAL("Failed to create session manager");
-        if (g_config) config_destroy(g_config);
+        if (g_config)
+            config_destroy(g_config);
         log_shutdown();
         return EXIT_FAILURE;
     }
@@ -346,7 +317,19 @@ int main(int argc, char *argv[]) {
     if (filters == NULL) {
         LOG_FATAL("Failed to create filter chain");
         session_manager_destroy(session_mgr);
-        if (g_config) config_destroy(g_config);
+        if (g_config)
+            config_destroy(g_config);
+        log_shutdown();
+        return EXIT_FAILURE;
+    }
+
+    if (account_lock_init((g_config != NULL) ? &g_config->lockout : NULL) != 0) {
+        LOG_FATAL("Failed to initialize account lockout runtime");
+        filter_chain_destroy(filters);
+        session_manager_destroy(session_mgr);
+        if (g_config != NULL) {
+            config_destroy(g_config);
+        }
         log_shutdown();
         return EXIT_FAILURE;
     }
@@ -356,41 +339,55 @@ int main(int argc, char *argv[]) {
                                            .global_max_rate = 10,
                                            .global_interval_sec = 1,
                                            .log_rejections = true,
-                                           .rules = NULL};
+                                           .rules = NULL,
+                                           .count_user_cb = rate_limit_shared_session_count,
+                                           .count_user_user_data = session_mgr,
+                                           .event_cb = rate_limit_webhook_event_cb,
+                                           .event_user_data = &webhooks};
     filter_t *rate_filter = rate_limit_filter_create(&rate_cfg);
     if (rate_filter != NULL) {
         filter_chain_add(filters, rate_filter);
     }
 
     /* Add auth filter - use config-based auth if config loaded, otherwise test callback */
-    auth_filter_config_t auth_cfg = {.backend = AUTH_BACKEND_CALLBACK,
-                                     .allow_password = true,
-                                     .allow_pubkey = true,
-                                     .allow_keyboard = false,
-                                     .max_attempts = 3,
-                                     .timeout_sec = (g_config != NULL) ? g_config->auth_timeout : 60,
-                                     .local_users = NULL,
-                                     .password_cb = (g_config != NULL) ? config_auth_cb : test_auth_cb,
-                                     .pubkey_cb = (g_config != NULL) ? config_pubkey_cb : NULL,
-                                     .cb_user_data = g_config};
+    auth_filter_config_t auth_cfg = {
+        .backend = AUTH_BACKEND_CALLBACK,
+        .allow_password = true,
+        .allow_pubkey = true,
+        .allow_keyboard = false,
+        .max_attempts = 3,
+        .timeout_sec = (g_config != NULL) ? g_config->auth_timeout : 60,
+        .local_users = NULL,
+        .password_cb = (g_config != NULL) ? config_auth_cb : test_auth_cb,
+        .pubkey_cb = (g_config != NULL) ? config_pubkey_cb : NULL,
+        .cb_user_data = g_config,
+        .authorize_cb = (g_config != NULL) ? config_authorize_cb : NULL,
+        .authorize_user_data = g_config,
+        .event_cb = auth_webhook_event_cb,
+        .event_user_data = &webhooks};
     filter_t *auth_filter = auth_filter_create(&auth_cfg);
     if (auth_filter != NULL) {
         filter_chain_add(filters, auth_filter);
     }
 
     /* Add audit filter */
-    audit_filter_config_t audit_cfg = {.storage = AUDIT_STORAGE_FILE,
-                                       .log_dir = (g_config != NULL && g_config->audit_log_dir[0] != '\0') 
-                                                  ? g_config->audit_log_dir : "/tmp/ssh_proxy_audit",
-                                       .log_prefix = "audit_",
-                                       .record_input = true,
-                                       .record_output = true,
-                                       .record_commands = true,
-                                       .enable_asciicast = true,
-                                       .max_file_size = 0,
-                                       .flush_interval = 5,
-                                       .event_cb = NULL,
-                                       .cb_user_data = NULL};
+    audit_filter_config_t audit_cfg = {
+        .storage = AUDIT_STORAGE_FILE,
+        .log_dir = (g_config != NULL && g_config->audit_log_dir[0] != '\0')
+                       ? g_config->audit_log_dir
+                       : "/tmp/ssh_proxy_audit",
+        .log_prefix = "audit_",
+        .record_input = true,
+        .record_output = true,
+        .record_commands = true,
+        .enable_asciicast = true,
+        .max_file_size = (g_config != NULL) ? g_config->audit_max_file_size : 0,
+        .max_archived_files = (g_config != NULL) ? g_config->audit_max_archived_files : 0,
+        .retention_days = (g_config != NULL) ? g_config->audit_retention_days : 0,
+        .flush_interval = 5,
+        .event_cb = NULL,
+        .cb_user_data = NULL,
+        .encryption_key = (g_config != NULL) ? g_config->audit_encryption_key : NULL};
     filter_t *audit_filter = audit_filter_create(&audit_cfg);
     if (audit_filter != NULL) {
         filter_chain_add(filters, audit_filter);
@@ -407,6 +404,7 @@ int main(int argc, char *argv[]) {
         LOG_FATAL("Failed to create router");
         filter_chain_destroy(filters);
         session_manager_destroy(session_mgr);
+        account_lock_cleanup();
         log_shutdown();
         return EXIT_FAILURE;
     }
@@ -420,13 +418,28 @@ int main(int argc, char *argv[]) {
     LOG_INFO("Initialized: session_mgr, %zu filters, router with %zu upstreams",
              filter_chain_count(filters), router_get_upstream_count(router));
 
+    if (webhook_runtime_init(&webhooks, (g_config != NULL) ? &g_config->webhook : NULL) != 0) {
+        LOG_FATAL("Failed to initialize webhook runtime");
+        router_destroy(router);
+        filter_chain_destroy(filters);
+        session_manager_destroy(session_mgr);
+        account_lock_cleanup();
+        if (g_config != NULL) {
+            config_destroy(g_config);
+        }
+        log_shutdown();
+        return EXIT_FAILURE;
+    }
+
     /* Create SSH server */
     ssh_server_t *server = ssh_server_create(&server_config);
     if (server == NULL) {
         LOG_FATAL("Failed to create SSH server");
+        webhook_runtime_destroy(&webhooks);
         router_destroy(router);
         filter_chain_destroy(filters);
         session_manager_destroy(session_mgr);
+        account_lock_cleanup();
         log_shutdown();
         return EXIT_FAILURE;
     }
@@ -438,6 +451,8 @@ int main(int argc, char *argv[]) {
         router_destroy(router);
         filter_chain_destroy(filters);
         session_manager_destroy(session_mgr);
+        webhook_runtime_destroy(&webhooks);
+        account_lock_cleanup();
         log_shutdown();
         return EXIT_FAILURE;
     }
@@ -447,6 +462,10 @@ int main(int argc, char *argv[]) {
 
     /* Start health check / metrics HTTP endpoint */
     health_check_config_t hc_cfg = {.port = 9090, .bind_addr = "127.0.0.1"};
+    if (g_config != NULL) {
+        admin_runtime_apply_health_config(&hc_cfg, g_config);
+    }
+    hc_cfg.drain_mode = &g_drain_mode;
     health_check_t *hc = health_check_start(&hc_cfg);
     if (hc == NULL) {
         LOG_WARN("Failed to start health check endpoint (non-fatal)");
@@ -458,12 +477,26 @@ int main(int argc, char *argv[]) {
         if (ssh_server_reload_requested(server)) {
             if (g_config != NULL && g_config_path != NULL) {
                 LOG_INFO("Reloading configuration from %s", g_config_path);
-                if (config_reload(g_config, g_config_path) == 0) {
-                    LOG_INFO("Configuration reloaded successfully");
-                    METRICS_INC(config_reloads);
-                } else {
+                proxy_config_t *candidate = config_load(g_config_path);
+                if (candidate == NULL) {
                     LOG_ERROR("Configuration reload failed, keeping old config");
                     METRICS_INC(config_reload_errors);
+                } else if (webhook_runtime_reload(&webhooks, &candidate->webhook) != 0) {
+                    LOG_ERROR("Configuration reload failed: webhook runtime init error");
+                    config_destroy(candidate);
+                    METRICS_INC(config_reload_errors);
+                } else {
+                    webhook_runtime_emit_config_diff(&webhooks, g_config, candidate, g_config_path);
+                    if (config_apply_loaded(g_config, candidate) == 0) {
+                        if (account_lock_update_config(&g_config->lockout) != 0) {
+                            LOG_WARN("Failed to refresh account lockout runtime after reload");
+                        }
+                        LOG_INFO("Configuration reloaded successfully");
+                        METRICS_INC(config_reloads);
+                    } else {
+                        LOG_ERROR("Configuration reload failed, keeping old config");
+                        METRICS_INC(config_reload_errors);
+                    }
                 }
             } else {
                 LOG_WARN("SIGHUP received but no config file loaded, ignoring");
@@ -477,6 +510,14 @@ int main(int argc, char *argv[]) {
                 /* Periodically cleanup timed-out sessions */
                 session_manager_cleanup(session_mgr);
             }
+            continue;
+        }
+
+        if (atomic_load(&g_drain_mode)) {
+            LOG_INFO("Rejecting new connection while drain mode is enabled");
+            METRICS_INC(sessions_rejected);
+            ssh_disconnect(client_ssh);
+            ssh_free(client_ssh);
             continue;
         }
 
@@ -530,6 +571,7 @@ int main(int argc, char *argv[]) {
         handler_ctx->router = router;
         handler_ctx->session = session;
         handler_ctx->config = g_config;
+        handler_ctx->webhooks = &webhooks;
 
         pthread_t thread;
         if (pthread_create(&thread, NULL, proxy_handler_run, handler_ctx) != 0) {
@@ -544,21 +586,22 @@ int main(int argc, char *argv[]) {
 
     /* ---- Graceful shutdown ---- */
     LOG_INFO("Shutting down...");
-    
+
     /* 1. Stop accepting new connections (server already stopped by signalfd) */
-    
+
     /* 2. Stop health check endpoint */
     health_check_stop(hc);
 
     /* 3. Drain active sessions with a configurable timeout */
     uint32_t drain_timeout_sec = (g_config != NULL) ? g_config->session_timeout : 30;
-    if (drain_timeout_sec > 30) drain_timeout_sec = 30;  /* cap at 30s */
+    if (drain_timeout_sec > 30)
+        drain_timeout_sec = 30; /* cap at 30s */
 
     if (session_manager_get_count(session_mgr) > 0) {
         LOG_INFO("Draining %zu active sessions (timeout %us)...",
                  session_manager_get_count(session_mgr), drain_timeout_sec);
 
-        struct timespec wait_time = {0, 100000000};  /* 100ms */
+        struct timespec wait_time = {0, 100000000}; /* 100ms */
         uint32_t max_iterations = drain_timeout_sec * 10;
 
         for (uint32_t i = 0; i < max_iterations; i++) {
@@ -581,12 +624,14 @@ int main(int argc, char *argv[]) {
                      session_manager_get_count(session_mgr));
         }
     }
-    
+
     /* 4. Destroy resources in reverse creation order */
     ssh_server_destroy(server);
     router_destroy(router);
     filter_chain_destroy(filters);
     session_manager_destroy(session_mgr);
+    webhook_runtime_destroy(&webhooks);
+    account_lock_cleanup();
     if (g_config != NULL) {
         config_destroy(g_config);
     }

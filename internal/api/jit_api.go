@@ -1,7 +1,7 @@
 package api
 
 import (
-	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -43,10 +43,12 @@ func (a *API) handleCreateJITRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Target   string `json:"target"`
-		Role     string `json:"role"`
-		Reason   string `json:"reason"`
-		Duration string `json:"duration"`
+		Target     string `json:"target"`
+		Role       string `json:"role"`
+		Reason     string `json:"reason"`
+		Ticket     string `json:"ticket"`
+		BreakGlass bool   `json:"break_glass"`
+		Duration   string `json:"duration"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -80,11 +82,13 @@ func (a *API) handleCreateJITRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	accessReq := &jit.AccessRequest{
-		Requester: requester,
-		Target:    req.Target,
-		Role:      req.Role,
-		Reason:    req.Reason,
-		Duration:  dur,
+		Requester:  requester,
+		Target:     req.Target,
+		Role:       req.Role,
+		Reason:     req.Reason,
+		Ticket:     req.Ticket,
+		BreakGlass: req.BreakGlass,
+		Duration:   dur,
 	}
 
 	if err := a.jitStore.CreateRequest(accessReq); err != nil {
@@ -175,8 +179,8 @@ func (a *API) handleApproveJITRequest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	if !a.isApproverRole(role) {
-		writeError(w, http.StatusForbidden, "admin role required")
+	if role == "" {
+		writeError(w, http.StatusForbidden, "approver role required")
 		return
 	}
 
@@ -186,7 +190,11 @@ func (a *API) handleApproveJITRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.jitStore.ApproveRequest(id, approver); err != nil {
+	if err := a.jitStore.ApproveRequestWithRole(id, approver, role); err != nil {
+		if errors.Is(err, jit.ErrApproverRoleNotAllowed) {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -210,8 +218,8 @@ func (a *API) handleDenyJITRequest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	if !a.isApproverRole(role) {
-		writeError(w, http.StatusForbidden, "admin role required")
+	if role == "" {
+		writeError(w, http.StatusForbidden, "approver role required")
 		return
 	}
 
@@ -226,7 +234,11 @@ func (a *API) handleDenyJITRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	readJSON(r, &body)
 
-	if err := a.jitStore.DenyRequest(id, approver, body.Reason); err != nil {
+	if err := a.jitStore.DenyRequestWithRole(id, approver, role, body.Reason); err != nil {
+		if errors.Is(err, jit.ErrApproverRoleNotAllowed) {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -346,13 +358,29 @@ func (a *API) handleUpdateJITPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var raw struct {
-		MaxDuration     string   `json:"max_duration"`
-		AutoApprove     bool     `json:"auto_approve"`
-		AutoApproveFor  []string `json:"auto_approve_for"`
-		RequireReason   bool     `json:"require_reason"`
-		ApproverRoles   []string `json:"approver_roles"`
-		NotifyOnRequest bool     `json:"notify_on_request"`
-		NotifyOnApprove bool     `json:"notify_on_approve"`
+		MaxDuration      string   `json:"max_duration"`
+		AutoApprove      bool     `json:"auto_approve"`
+		AutoApproveFor   []string `json:"auto_approve_for"`
+		AutoApproveRules []struct {
+			Name        string   `json:"name"`
+			Requesters  []string `json:"requesters"`
+			Targets     []string `json:"targets"`
+			Roles       []string `json:"roles"`
+			MaxDuration string   `json:"max_duration"`
+		} `json:"auto_approve_rules"`
+		RequireReason  bool     `json:"require_reason"`
+		ApproverRoles  []string `json:"approver_roles"`
+		ApprovalStages []struct {
+			Name              string   `json:"name"`
+			ApproverRoles     []string `json:"approver_roles"`
+			RequiredApprovals int      `json:"required_approvals"`
+		} `json:"approval_stages"`
+		BreakGlassEnabled     bool     `json:"break_glass_enabled"`
+		BreakGlassMaxDuration string   `json:"break_glass_max_duration"`
+		BreakGlassRoles       []string `json:"break_glass_roles"`
+		BreakGlassTargets     []string `json:"break_glass_targets"`
+		NotifyOnRequest       bool     `json:"notify_on_request"`
+		NotifyOnApprove       bool     `json:"notify_on_approve"`
 	}
 	if err := readJSON(r, &raw); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -360,12 +388,15 @@ func (a *API) handleUpdateJITPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	policy := &jit.Policy{
-		AutoApprove:     raw.AutoApprove,
-		AutoApproveFor:  raw.AutoApproveFor,
-		RequireReason:   raw.RequireReason,
-		ApproverRoles:   raw.ApproverRoles,
-		NotifyOnRequest: raw.NotifyOnRequest,
-		NotifyOnApprove: raw.NotifyOnApprove,
+		AutoApprove:       raw.AutoApprove,
+		AutoApproveFor:    raw.AutoApproveFor,
+		RequireReason:     raw.RequireReason,
+		ApproverRoles:     raw.ApproverRoles,
+		BreakGlassEnabled: raw.BreakGlassEnabled,
+		BreakGlassRoles:   raw.BreakGlassRoles,
+		BreakGlassTargets: raw.BreakGlassTargets,
+		NotifyOnRequest:   raw.NotifyOnRequest,
+		NotifyOnApprove:   raw.NotifyOnApprove,
 	}
 
 	if raw.MaxDuration != "" {
@@ -376,9 +407,41 @@ func (a *API) handleUpdateJITPolicy(w http.ResponseWriter, r *http.Request) {
 		}
 		policy.MaxDuration = dur
 	}
+	for _, stage := range raw.ApprovalStages {
+		policy.ApprovalStages = append(policy.ApprovalStages, jit.ApprovalStage{
+			Name:              stage.Name,
+			ApproverRoles:     stage.ApproverRoles,
+			RequiredApprovals: stage.RequiredApprovals,
+		})
+	}
+	for _, rule := range raw.AutoApproveRules {
+		autoRule := jit.AutoApproveRule{
+			Name:       rule.Name,
+			Requesters: rule.Requesters,
+			Targets:    rule.Targets,
+			Roles:      rule.Roles,
+		}
+		if rule.MaxDuration != "" {
+			dur, err := time.ParseDuration(rule.MaxDuration)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid auto_approve_rules max_duration: "+err.Error())
+				return
+			}
+			autoRule.MaxDuration = dur
+		}
+		policy.AutoApproveRules = append(policy.AutoApproveRules, autoRule)
+	}
+	if raw.BreakGlassMaxDuration != "" {
+		dur, err := time.ParseDuration(raw.BreakGlassMaxDuration)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid break_glass_max_duration: "+err.Error())
+			return
+		}
+		policy.BreakGlassMaxDuration = dur
+	}
 
 	if err := a.jitStore.SetPolicy(policy); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to save policy: "+err.Error())
+		writeError(w, http.StatusBadRequest, "failed to save policy: "+err.Error())
 		return
 	}
 
@@ -401,40 +464,4 @@ func (a *API) isApproverRole(role string) bool {
 		}
 	}
 	return false
-}
-
-// jitPolicyJSON is used for JSON serialization of the policy with string durations.
-type jitPolicyJSON struct {
-	MaxDuration     string   `json:"max_duration"`
-	AutoApprove     bool     `json:"auto_approve"`
-	AutoApproveFor  []string `json:"auto_approve_for"`
-	RequireReason   bool     `json:"require_reason"`
-	ApproverRoles   []string `json:"approver_roles"`
-	NotifyOnRequest bool     `json:"notify_on_request"`
-	NotifyOnApprove bool     `json:"notify_on_approve"`
-}
-
-func policyToJSON(p jit.Policy) jitPolicyJSON {
-	return jitPolicyJSON{
-		MaxDuration:     p.MaxDuration.String(),
-		AutoApprove:     p.AutoApprove,
-		AutoApproveFor:  p.AutoApproveFor,
-		RequireReason:   p.RequireReason,
-		ApproverRoles:   p.ApproverRoles,
-		NotifyOnRequest: p.NotifyOnRequest,
-		NotifyOnApprove: p.NotifyOnApprove,
-	}
-}
-
-// marshalAccessRequest serializes an AccessRequest with duration as string.
-func marshalAccessRequest(req *jit.AccessRequest) json.RawMessage {
-	type alias jit.AccessRequest
-	raw, _ := json.Marshal(&struct {
-		*alias
-		Duration string `json:"duration"`
-	}{
-		alias:    (*alias)(req),
-		Duration: req.Duration.String(),
-	})
-	return raw
 }

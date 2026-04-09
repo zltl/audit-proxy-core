@@ -15,9 +15,7 @@ const sessionTTL = 24 * time.Hour
 
 // handleLoginPage renders the login form.
 func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, "pages/login.html", map[string]interface{}{
-		"Title": "Login",
-	})
+	s.render(w, r, "pages/login.html", s.loginPageData(nil))
 }
 
 // handleLoginSubmit validates credentials and sets a session cookie.
@@ -27,14 +25,14 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 
 	if !s.validateCredentials(username, password) {
 		log.Printf("auth: failed login attempt for user %q from %s", username, r.RemoteAddr)
-		s.render(w, r, "pages/login.html", map[string]interface{}{
-			"Title": "Login",
+		s.render(w, r, "pages/login.html", s.loginPageData(map[string]interface{}{
 			"Error": "Invalid username or password",
-		})
+		}))
 		return
 	}
 
-	cookie := middleware.CreateSessionCookie(username, s.config.SessionSecret, sessionTTL)
+	cookie := middleware.CreateSessionCookieWithRole(username, "admin", s.config.SessionSecret, sessionTTL)
+	cookie.Secure = r.TLS != nil
 	http.SetCookie(w, cookie)
 
 	log.Printf("auth: user %q logged in from %s", username, r.RemoteAddr)
@@ -63,8 +61,28 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	}
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"username": username,
-		"role":     "admin",
+		"role":     defaultString(r.Header.Get("X-Auth-Role"), "admin"),
 	})
+}
+
+func (s *Server) loginPageData(extra map[string]interface{}) map[string]interface{} {
+	data := map[string]interface{}{
+		"Title":       "Login",
+		"Year":        time.Now().Year(),
+		"OIDCEnabled": s.oidcProvider != nil,
+		"SAMLEnabled": s.samlProvider != nil,
+	}
+	for key, value := range extra {
+		data[key] = value
+	}
+	return data
+}
+
+func defaultString(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
 }
 
 // validateCredentials checks the supplied username/password against the
