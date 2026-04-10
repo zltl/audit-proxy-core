@@ -94,16 +94,17 @@ func (c *DetectorConfig) defaults() {
 
 // Detector is the behavioural threat detection engine.
 type Detector struct {
-	rules        []*Rule
-	alerts       map[string]*Alert
-	mu           sync.RWMutex
-	trackers     map[string]*behaviorTracker
-	assessments  map[string]*RiskAssessment
-	riskProfiles map[string]*riskProfile
-	config       *DetectorConfig
-	alertCh      chan *Alert
-	stopCh       chan struct{}
-	suppression  map[string]time.Time // ruleID:groupKey → last alert time
+	rules         []*Rule
+	alerts        map[string]*Alert
+	mu            sync.RWMutex
+	trackers      map[string]*behaviorTracker
+	assessments   map[string]*RiskAssessment
+	riskProfiles  map[string]*riskProfile
+	ruleOverrides map[string]ruleOverride
+	config        *DetectorConfig
+	alertCh       chan *Alert
+	stopCh        chan struct{}
+	suppression   map[string]time.Time // ruleID:groupKey → last alert time
 }
 
 // NewDetector creates a new threat detection engine.
@@ -113,17 +114,19 @@ func NewDetector(cfg *DetectorConfig) *Detector {
 	}
 	cfg.defaults()
 	d := &Detector{
-		rules:        DefaultRules(),
-		alerts:       make(map[string]*Alert),
-		trackers:     make(map[string]*behaviorTracker),
-		assessments:  make(map[string]*RiskAssessment),
-		riskProfiles: make(map[string]*riskProfile),
-		config:       cfg,
-		alertCh:      make(chan *Alert, 256),
-		stopCh:       make(chan struct{}),
-		suppression:  make(map[string]time.Time),
+		rules:         DefaultRules(),
+		alerts:        make(map[string]*Alert),
+		trackers:      make(map[string]*behaviorTracker),
+		assessments:   make(map[string]*RiskAssessment),
+		riskProfiles:  make(map[string]*riskProfile),
+		ruleOverrides: make(map[string]ruleOverride),
+		config:        cfg,
+		alertCh:       make(chan *Alert, 256),
+		stopCh:        make(chan struct{}),
+		suppression:   make(map[string]time.Time),
 	}
 	if cfg.DataDir != "" {
+		d.loadRules()
 		d.loadAlerts()
 	}
 	return d
@@ -139,6 +142,9 @@ func (d *Detector) Start(ctx context.Context) error {
 func (d *Detector) Stop() error {
 	close(d.stopCh)
 	if d.config.DataDir != "" {
+		if err := d.persistRules(); err != nil {
+			return err
+		}
 		return d.persistAlerts()
 	}
 	return nil
@@ -241,34 +247,10 @@ func (d *Detector) Rules() []*Rule {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	out := make([]*Rule, len(d.rules))
-	copy(out, d.rules)
-	return out
-}
-
-// UpdateRule modifies a rule by ID. Only Enabled, Conditions.Threshold,
-// Conditions.Window, and Conditions.Pattern may be changed.
-func (d *Detector) UpdateRule(id string, enabled *bool, threshold *int, window *time.Duration, pattern *string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for _, r := range d.rules {
-		if r.ID == id {
-			if enabled != nil {
-				r.Enabled = *enabled
-			}
-			if threshold != nil {
-				r.Conditions.Threshold = *threshold
-			}
-			if window != nil {
-				r.Conditions.Window = *window
-			}
-			if pattern != nil {
-				r.Conditions.Pattern = *pattern
-				r.compilePattern()
-			}
-			return nil
-		}
+	for i, rule := range d.rules {
+		out[i] = cloneRule(rule)
 	}
-	return fmt.Errorf("rule not found: %s", id)
+	return out
 }
 
 // Stats returns aggregate threat statistics.
@@ -409,6 +391,8 @@ func (d *Detector) evaluate(rule *Rule, event *Event) *Alert {
 		return d.evalAnomaly(rule, event)
 	case RuleSequence:
 		return d.evalSequence(rule, event)
+	case RuleDSL:
+		return d.evalDSL(rule, event)
 	}
 	return nil
 }

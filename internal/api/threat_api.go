@@ -32,8 +32,10 @@ func (a *API) RegisterThreatRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v2/threats/alerts/{id}/resolve", a.handleResolveThreatAlert)
 	mux.HandleFunc("POST /api/v2/threats/alerts/{id}/false-positive", a.handleFalsePositiveThreatAlert)
 	mux.HandleFunc("GET /api/v2/threats/rules", a.handleListThreatRules)
+	mux.HandleFunc("POST /api/v2/threats/rules", a.handleCreateThreatRule)
 	mux.HandleFunc("GET /api/v2/threats/risk", a.handleListThreatRiskAssessments)
 	mux.HandleFunc("PUT /api/v2/threats/rules/{id}", a.handleUpdateThreatRule)
+	mux.HandleFunc("DELETE /api/v2/threats/rules/{id}", a.handleDeleteThreatRule)
 	mux.HandleFunc("GET /api/v2/threats/stats", a.handleThreatStats)
 	mux.HandleFunc("POST /api/v2/threats/simulate", a.handleSimulateThreat)
 	mux.HandleFunc("POST /api/v2/threats/ingest", a.handleIngestThreatWebhook)
@@ -156,16 +158,37 @@ func (a *API) handleListThreatRules(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, APIResponse{Success: true, Data: rules, Total: len(rules)})
 }
 
+func (a *API) handleCreateThreatRule(w http.ResponseWriter, r *http.Request) {
+	if !a.requireThreat(w) {
+		return
+	}
+	rule, err := readThreatRulePayload(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	created, err := a.threat.CreateRule(rule)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, APIResponse{Success: true, Data: created})
+}
+
 func (a *API) handleUpdateThreatRule(w http.ResponseWriter, r *http.Request) {
 	if !a.requireThreat(w) {
 		return
 	}
 	id := r.PathValue("id")
 	var body struct {
-		Enabled   *bool   `json:"enabled,omitempty"`
-		Threshold *int    `json:"threshold,omitempty"`
-		Window    *string `json:"window,omitempty"`
-		Pattern   *string `json:"pattern,omitempty"`
+		Enabled     *bool               `json:"enabled,omitempty"`
+		Threshold   *int                `json:"threshold,omitempty"`
+		Window      *string             `json:"window,omitempty"`
+		Pattern     *string             `json:"pattern,omitempty"`
+		Name        *string             `json:"name,omitempty"`
+		Description *string             `json:"description,omitempty"`
+		Severity    *threat.Severity    `json:"severity,omitempty"`
+		Expression  *threat.RuleDSLExpr `json:"expression,omitempty"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -180,11 +203,93 @@ func (a *API) handleUpdateThreatRule(w http.ResponseWriter, r *http.Request) {
 		}
 		windowDur = &d
 	}
-	if err := a.threat.UpdateRule(id, body.Enabled, body.Threshold, windowDur, body.Pattern); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+	if err := a.threat.UpdateRuleConfig(id, threat.RuleUpdate{
+		Enabled:     body.Enabled,
+		Threshold:   body.Threshold,
+		Window:      windowDur,
+		Pattern:     body.Pattern,
+		Name:        body.Name,
+		Description: body.Description,
+		Severity:    body.Severity,
+		Expression:  body.Expression,
+	}); err != nil {
+		status := http.StatusNotFound
+		if strings.Contains(err.Error(), "cannot delete built-in") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, APIResponse{Success: true, Data: "rule updated"})
+}
+
+func (a *API) handleDeleteThreatRule(w http.ResponseWriter, r *http.Request) {
+	if !a.requireThreat(w) {
+		return
+	}
+	id := r.PathValue("id")
+	if err := a.threat.DeleteRule(id); err != nil {
+		status := http.StatusNotFound
+		if strings.Contains(err.Error(), "cannot delete built-in") {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    map[string]string{"message": "rule deleted"},
+	})
+}
+
+func readThreatRulePayload(r *http.Request) (*threat.Rule, error) {
+	var body struct {
+		ID          string              `json:"id,omitempty"`
+		Name        string              `json:"name"`
+		Description string              `json:"description,omitempty"`
+		Type        threat.RuleType     `json:"type,omitempty"`
+		Severity    threat.Severity     `json:"severity,omitempty"`
+		Enabled     *bool               `json:"enabled,omitempty"`
+		EventTypes  []string            `json:"event_types,omitempty"`
+		Threshold   int                 `json:"threshold,omitempty"`
+		Window      string              `json:"window,omitempty"`
+		Pattern     string              `json:"pattern,omitempty"`
+		Field       string              `json:"field,omitempty"`
+		GroupBy     string              `json:"group_by,omitempty"`
+		Expression  *threat.RuleDSLExpr `json:"expression,omitempty"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		return nil, err
+	}
+	var window time.Duration
+	if strings.TrimSpace(body.Window) != "" {
+		parsed, err := time.ParseDuration(strings.TrimSpace(body.Window))
+		if err != nil {
+			return nil, fmt.Errorf("invalid window duration: %w", err)
+		}
+		window = parsed
+	}
+	enabled := true
+	if body.Enabled != nil {
+		enabled = *body.Enabled
+	}
+	return &threat.Rule{
+		ID:          body.ID,
+		Name:        body.Name,
+		Description: body.Description,
+		Type:        body.Type,
+		Severity:    body.Severity,
+		Enabled:     enabled,
+		Conditions: threat.RuleConditions{
+			EventTypes: body.EventTypes,
+			Threshold:  body.Threshold,
+			Window:     window,
+			Pattern:    body.Pattern,
+			Field:      body.Field,
+			GroupBy:    body.GroupBy,
+			Expression: body.Expression,
+		},
+	}, nil
 }
 
 func (a *API) handleListThreatRiskAssessments(w http.ResponseWriter, r *http.Request) {

@@ -2,11 +2,13 @@ package api
 
 import (
 	"bufio"
-	"encoding/json"
+	"bytes"
+	"context"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -33,66 +35,99 @@ func (a *API) loadAuditEvents() ([]models.AuditEvent, error) {
 			return nil, syncErr
 		}
 	}
-	return a.loadAuditEventsFromFiles()
-}
-
-func (a *API) loadAuditEventsFromFiles() ([]models.AuditEvent, error) {
-	dir := a.config.AuditLogDir
-	if dir == "" {
-		return nil, fmt.Errorf("audit log directory not configured")
-	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []models.AuditEvent{}, nil
-		}
-		return nil, fmt.Errorf("failed to read audit directory: %w", err)
-	}
-
-	var events []models.AuditEvent
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
-			continue
-		}
-		filePath := filepath.Join(dir, entry.Name())
-		fileEvents, err := readNDJSON(filePath)
-		if err != nil {
-			continue // skip corrupt files
-		}
-		events = append(events, fileEvents...)
-	}
-
-	// Sort by timestamp descending (most recent first)
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].Timestamp.After(events[j].Timestamp)
-	})
-
-	return events, nil
-}
-
-func readNDJSON(path string) ([]models.AuditEvent, error) {
-	f, err := os.Open(path)
+	events, localNames, err := a.loadAuditEventsFromFiles()
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-
-	var events []models.AuditEvent
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20) // 1MB buffer
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var ev models.AuditEvent
-		if err := json.Unmarshal(line, &ev); err != nil {
-			continue
-		}
-		events = append(events, ev)
+	if a == nil || a.auditArchiveStore == nil {
+		return events, nil
 	}
-	return events, scanner.Err()
+	archived, archiveErr := a.loadArchivedAuditEvents(context.Background(), localNames)
+	if archiveErr != nil {
+		if len(events) > 0 {
+			log.Printf("api: load archived audit events: %v", archiveErr)
+			return events, nil
+		}
+		return nil, archiveErr
+	}
+	return mergeAuditEvents(events, archived), nil
+}
+
+func (a *API) loadAuditEventsFromFiles() ([]models.AuditEvent, map[string]struct{}, error) {
+	dir := a.config.AuditLogDir
+	if dir == "" {
+		return nil, nil, fmt.Errorf("audit log directory not configured")
+	}
+
+	paths, err := listAuditLogFiles(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []models.AuditEvent{}, map[string]struct{}{}, nil
+		}
+		return nil, nil, fmt.Errorf("failed to read audit directory: %w", err)
+	}
+
+	events := make([]models.AuditEvent, 0)
+	localNames := make(map[string]struct{}, len(paths))
+	for _, filePath := range paths {
+		localNames[auditArchiveRelativeName(dir, filePath)] = struct{}{}
+		file, err := os.Open(filePath)
+		if err != nil {
+			return nil, nil, err
+		}
+		fileEvents, readErr := readAuditEventsFromReader(filePath, file)
+		_ = file.Close()
+		if readErr != nil {
+			return nil, nil, readErr
+		}
+		events = append(events, fileEvents...)
+	}
+	return mergeAuditEvents(events), localNames, nil
+}
+
+func readAuditEventsFromReader(sourcePath string, r io.Reader) ([]models.AuditEvent, error) {
+	var events []models.AuditEvent
+	reader := bufio.NewReader(r)
+	var currentOffset int64
+	for {
+		lineOffset := currentOffset
+		line, readErr := reader.ReadBytes('\n')
+		currentOffset += int64(len(line))
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) > 0 {
+			event, err := parseAuditLogLine(sourcePath, lineOffset, trimmed)
+			if err == nil && event != nil {
+				events = append(events, *event)
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return nil, readErr
+		}
+	}
+	return events, nil
+}
+
+func mergeAuditEvents(groups ...[]models.AuditEvent) []models.AuditEvent {
+	if len(groups) == 0 {
+		return []models.AuditEvent{}
+	}
+	byID := make(map[string]models.AuditEvent)
+	for _, group := range groups {
+		for _, event := range group {
+			byID[event.ID] = event
+		}
+	}
+	events := make([]models.AuditEvent, 0, len(byID))
+	for _, event := range byID {
+		events = append(events, event)
+	}
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Timestamp.After(events[j].Timestamp)
+	})
+	return events
 }
 
 // handleListAuditEvents lists audit events with pagination and filtering.

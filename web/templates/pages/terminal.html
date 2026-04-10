@@ -54,6 +54,13 @@
     var zmodemSentry = null;
     var pendingUploadFiles = [];
     var pendingSendSession = null;
+    var pendingTransferChecks = Object.create(null);
+    var transferCheckSeq = 0;
+    var sensitivePatterns = [];
+    var sensitiveMaxScanBytes = 0;
+    var transferApprovalEnabled = false;
+    var clipboardAuditEnabled = false;
+    var activeApprovalPolls = Object.create(null);
     var dragDepth = 0;
 
     function loadScriptWithFallback(id, urls) {
@@ -219,7 +226,7 @@
             if (!text) {
                 return;
             }
-            wsConn.send(text);
+            sendClipboardText(text, 'dom-paste');
             event.preventDefault();
         });
 
@@ -304,6 +311,8 @@
         wsConn.onclose = function() {
             zmodemSentry = null;
             pendingSendSession = null;
+            clearPendingTransferChecks('Transfer policy check was cancelled');
+            resetSensitiveScanConfig();
             setStatus('disconnected');
             document.getElementById('terminal-disconnect-btn').disabled = true;
             document.getElementById('terminal-connect-btn').disabled = false;
@@ -352,7 +361,7 @@
             if (!text) {
                 return;
             }
-            wsConn.send(text);
+            sendClipboardText(text, 'toolbar');
         } catch (e) {
             App.notify('Clipboard paste failed: ' + e.message, 'error');
         }
@@ -372,6 +381,8 @@
         }
         zmodemSentry = null;
         pendingSendSession = null;
+        clearPendingTransferChecks('Transfer policy check was cancelled');
+        resetSensitiveScanConfig();
         setStatus('disconnected');
         document.getElementById('terminal-disconnect-btn').disabled = true;
         document.getElementById('terminal-connect-btn').disabled = false;
@@ -407,6 +418,423 @@
         wsConn.send(JSON.stringify(message));
     }
 
+    function nextTransferRequestId() {
+        transferCheckSeq += 1;
+        return 'transfer-' + transferCheckSeq;
+    }
+
+    function clearPendingTransferChecks(reason) {
+        Object.keys(pendingTransferChecks).forEach(function(requestId) {
+            var pending = pendingTransferChecks[requestId];
+            delete pendingTransferChecks[requestId];
+            if (pending && pending.timer) {
+                window.clearTimeout(pending.timer);
+            }
+            if (pending && pending.resolve) {
+                pending.resolve({ allowed: false, reason: reason || 'Transfer policy check failed' });
+            }
+        });
+    }
+
+    function requestTransferDecision(meta) {
+        if (!wsConn || wsConn.readyState !== WebSocket.OPEN) {
+            return Promise.resolve({ allowed: false, reason: 'Terminal is not connected' });
+        }
+        var requestId = nextTransferRequestId();
+        return new Promise(function(resolve) {
+            pendingTransferChecks[requestId] = {
+                resolve: resolve,
+                timer: window.setTimeout(function() {
+                    delete pendingTransferChecks[requestId];
+                    resolve({ allowed: false, reason: 'Transfer policy check timed out' });
+                }, 5000)
+            };
+            sendTerminalControl('transfer_check', Object.assign({ request_id: requestId }, meta || {}));
+        });
+    }
+
+    function resolveTransferDecision(message) {
+        if (!message || !message.request_id) {
+            return false;
+        }
+        var pending = pendingTransferChecks[message.request_id];
+        if (!pending) {
+            return false;
+        }
+        delete pendingTransferChecks[message.request_id];
+        if (pending.timer) {
+            window.clearTimeout(pending.timer);
+        }
+        pending.resolve({
+            allowed: !!message.allowed,
+            reason: message.reason || ''
+        });
+        return true;
+    }
+
+    function filterUploadFiles(files) {
+        return Promise.all((files || []).map(function(file) {
+            return requestTransferDecision({
+                direction: 'upload',
+                name: file.name || '',
+                path: file.webkitRelativePath || file.name || '',
+                size: Number(file.size) || 0
+            }).then(function(decision) {
+                return {
+                    file: file,
+                    decision: decision
+                };
+            });
+        }));
+    }
+
+    function closeTransferSession(session) {
+        if (!session) {
+            return;
+        }
+        if (typeof session.close === 'function') {
+            session.close();
+            return;
+        }
+        if (typeof session.end === 'function') {
+            session.end();
+        }
+    }
+
+    function notifyBlockedUploads(blocked) {
+        if (!blocked.length) {
+            return;
+        }
+        var preview = blocked.slice(0, 2).map(function(item) {
+            var summary = item.file && item.file.name ? item.file.name : 'file';
+            if (item.decision && item.decision.reason) {
+                summary += ' (' + item.decision.reason + ')';
+            }
+            return summary;
+        }).join(', ');
+        if (blocked.length > 2) {
+            preview += ' +' + (blocked.length - 2) + ' more';
+        }
+        App.notify('Blocked ' + blocked.length + ' upload file(s): ' + preview, 'warning');
+    }
+
+    function resetSensitiveScanConfig() {
+        sensitivePatterns = [];
+        sensitiveMaxScanBytes = 0;
+        transferApprovalEnabled = false;
+        clipboardAuditEnabled = false;
+        activeApprovalPolls = Object.create(null);
+    }
+
+    function applySensitiveScanConfig(message) {
+        resetSensitiveScanConfig();
+        (message && message.sensitive_patterns || []).forEach(function(pattern) {
+            if (!pattern || !pattern.pattern) {
+                return;
+            }
+            try {
+                sensitivePatterns.push({
+                    id: pattern.id || 'sensitive-pattern',
+                    name: pattern.name || pattern.id || 'sensitive content',
+                    regexp: new RegExp(pattern.pattern, pattern.flags || '')
+                });
+            } catch (_) {}
+        });
+        sensitiveMaxScanBytes = Number(message && message.sensitive_max_scan_bytes) || 0;
+        transferApprovalEnabled = !!(message && message.transfer_approval_enabled);
+        clipboardAuditEnabled = !!(message && message.clipboard_audit_enabled);
+    }
+
+    function hasSensitiveScan() {
+        return sensitivePatterns.length > 0;
+    }
+
+    function readBlobBytes(blob) {
+        if (!blob) {
+            return Promise.resolve(new Uint8Array(0));
+        }
+        if (typeof blob.arrayBuffer === 'function') {
+            return blob.arrayBuffer().then(function(buffer) {
+                return new Uint8Array(buffer);
+            });
+        }
+        return new Promise(function(resolve, reject) {
+            var reader = new FileReader();
+            reader.onload = function() {
+                resolve(new Uint8Array(reader.result || new ArrayBuffer(0)));
+            };
+            reader.onerror = function() {
+                reject(reader.error || new Error('failed to read blob'));
+            };
+            reader.readAsArrayBuffer(blob);
+        });
+    }
+
+    function limitTextForSensitiveScan(text) {
+        if (!text || sensitiveMaxScanBytes <= 0) {
+            return text || '';
+        }
+        var bytes = textEncoder.encode(text);
+        if (bytes.length <= sensitiveMaxScanBytes) {
+            return text;
+        }
+        return textDecoder.decode(bytes.subarray(0, sensitiveMaxScanBytes));
+    }
+
+    function listSensitiveContentMatches(text) {
+        if (!hasSensitiveScan() || !text) {
+            return [];
+        }
+        var scanText = limitTextForSensitiveScan(text);
+        var matches = [];
+        for (var i = 0; i < sensitivePatterns.length; i++) {
+            var pattern = sensitivePatterns[i];
+            pattern.regexp.lastIndex = 0;
+            if (pattern.regexp.test(scanText)) {
+                matches.push(pattern);
+            }
+        }
+        return matches;
+    }
+
+    function detectSensitiveContent(text) {
+        var matches = listSensitiveContentMatches(text);
+        return matches.length ? matches[0] : null;
+    }
+
+    function inspectBytesForSensitiveContent(bytes) {
+        if (!hasSensitiveScan()) {
+            return { allowed: true };
+        }
+        var scanBytes = bytes || new Uint8Array(0);
+        if (sensitiveMaxScanBytes > 0 && scanBytes.length > sensitiveMaxScanBytes) {
+            scanBytes = scanBytes.subarray(0, sensitiveMaxScanBytes);
+        }
+        var text = textDecoder.decode(scanBytes);
+        var match = detectSensitiveContent(text);
+        if (!match) {
+            return { allowed: true };
+        }
+        return {
+            allowed: false,
+            reason: 'content matches ' + match.name + ' detector'
+        };
+    }
+
+    function inspectUploadFilesContent(files) {
+        return Promise.all((files || []).map(function(file) {
+            if (!hasSensitiveScan()) {
+                return Promise.resolve({ file: file, decision: { allowed: true } });
+            }
+            var blob = sensitiveMaxScanBytes > 0 ? file.slice(0, sensitiveMaxScanBytes) : file;
+            return readBlobBytes(blob).then(function(bytes) {
+                return {
+                    file: file,
+                    decision: inspectBytesForSensitiveContent(bytes)
+                };
+            }).catch(function(err) {
+                return {
+                    file: file,
+                    decision: {
+                        allowed: false,
+                        reason: 'Unable to inspect content: ' + err.message
+                    }
+                };
+            });
+        }));
+    }
+
+    function payloadToUint8Array(payload) {
+        if (!payload) {
+            return new Uint8Array(0);
+        }
+        if (payload instanceof Uint8Array) {
+            return payload;
+        }
+        if (payload instanceof ArrayBuffer) {
+            return new Uint8Array(payload);
+        }
+        if (ArrayBuffer.isView(payload)) {
+            return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+        }
+        return new Uint8Array(0);
+    }
+
+    function collectPayloadBytes(payloads) {
+        var chunks = [];
+        var total = 0;
+        var limit = sensitiveMaxScanBytes > 0 ? sensitiveMaxScanBytes : Number.MAX_SAFE_INTEGER;
+        (payloads || []).forEach(function(payload) {
+            if (total >= limit) {
+                return;
+            }
+            var bytes = payloadToUint8Array(payload);
+            if (!bytes.length) {
+                return;
+            }
+            var remaining = limit - total;
+            if (bytes.length > remaining) {
+                bytes = bytes.subarray(0, remaining);
+            }
+            chunks.push(bytes);
+            total += bytes.length;
+        });
+        var merged = new Uint8Array(total);
+        var offset = 0;
+        chunks.forEach(function(chunk) {
+            merged.set(chunk, offset);
+            offset += chunk.length;
+        });
+        return merged;
+    }
+
+    function inspectDownloadPayloads(payloads) {
+        if (!hasSensitiveScan()) {
+            return { allowed: true };
+        }
+        return inspectBytesForSensitiveContent(collectPayloadBytes(payloads));
+    }
+
+    function currentTerminalTarget() {
+        return document.getElementById('terminal-host-select').value || '';
+    }
+
+    function sendClipboardText(text, source) {
+        if (!wsConn || wsConn.readyState !== WebSocket.OPEN || !text) {
+            return;
+        }
+        auditClipboardPaste(text, source);
+        wsConn.send(text);
+    }
+
+    function auditClipboardPaste(text, source) {
+        if (!clipboardAuditEnabled || !hasSensitiveScan() || !text) {
+            return;
+        }
+        var matches = listSensitiveContentMatches(text);
+        var detectorNames = matches.map(function(match) {
+            return match.id || match.name || 'sensitive-pattern';
+        });
+        var sensitive = detectorNames.length > 0;
+        if (sensitive) {
+            App.notify('Sensitive clipboard content detected (' + detectorNames.join(', ') + '). Paste was audited.', 'warning');
+        }
+        App.apiData('POST', '/api/v2/terminal/clipboard-audit', {
+            target: currentTerminalTarget(),
+            source: source || 'paste',
+            text_length: text.length,
+            sensitive: sensitive,
+            matched_detectors: detectorNames
+        }).catch(function(err) {
+            if (sensitive) {
+                App.notify('Clipboard audit failed: ' + (err && err.message ? err.message : 'request failed'), 'warning');
+            }
+        });
+    }
+
+    function canRequestTransferApproval(decision) {
+        return transferApprovalEnabled &&
+            decision &&
+            typeof decision.reason === 'string' &&
+            decision.reason.indexOf('content matches ') === 0;
+    }
+
+    function startTransferApprovalPolling(requestId, meta) {
+        if (!requestId || activeApprovalPolls[requestId]) {
+            return;
+        }
+        activeApprovalPolls[requestId] = true;
+        pollTransferApproval(requestId, meta);
+    }
+
+    function pollTransferApproval(requestId, meta) {
+        App.apiData('GET', '/api/v2/terminal/transfer-approvals/' + encodeURIComponent(requestId)).then(function(request) {
+            if (!request || request.status === 'pending') {
+                window.setTimeout(function() {
+                    pollTransferApproval(requestId, meta);
+                }, 2000);
+                return;
+            }
+
+            delete activeApprovalPolls[requestId];
+            var name = meta && meta.name ? meta.name : 'transfer';
+            if (request.status === 'approved') {
+                updateTransferStatus('Approval granted for ' + name + '. Retry the transfer.');
+                App.notify('Approval granted for ' + name + '. Retry the transfer.', 'success');
+                return;
+            }
+            if (request.status === 'denied') {
+                App.notify('Transfer approval denied for ' + name + ': ' + (request.deny_reason || 'denied'), 'warning');
+                return;
+            }
+            if (request.status === 'expired') {
+                App.notify('Transfer approval expired for ' + name, 'warning');
+            }
+        }).catch(function() {
+            delete activeApprovalPolls[requestId];
+        });
+    }
+
+    function ensureTransferApproval(meta) {
+        if (!transferApprovalEnabled) {
+            return Promise.resolve({
+                allowed: false,
+                reason: meta && meta.reason ? meta.reason : 'Transfer blocked by policy'
+            });
+        }
+        return App.apiData('POST', '/api/v2/terminal/transfer-approvals', {
+            target: currentTerminalTarget(),
+            direction: meta && meta.direction || '',
+            name: meta && meta.name || '',
+            path: meta && (meta.path || meta.name) || '',
+            size: Number(meta && meta.size) || 0,
+            reason: meta && meta.reason || 'Sensitive content requires approval'
+        }).then(function(request) {
+            if (!request || !request.status) {
+                return { allowed: false, reason: 'Transfer approval request failed' };
+            }
+            if (request.status === 'approved') {
+                return { allowed: true };
+            }
+            if (request.status === 'pending') {
+                startTransferApprovalPolling(request.id, meta);
+                return { allowed: false, reason: 'Approval requested. Retry after it is approved.' };
+            }
+            if (request.status === 'denied') {
+                return { allowed: false, reason: request.deny_reason || 'Transfer approval denied' };
+            }
+            if (request.status === 'expired') {
+                return { allowed: false, reason: 'Transfer approval expired' };
+            }
+            return { allowed: false, reason: 'Transfer approval required' };
+        }).catch(function(err) {
+            return {
+                allowed: false,
+                reason: err && err.message ? err.message : 'Transfer approval request failed'
+            };
+        });
+    }
+
+    function resolveBlockedUploadApprovals(blocked) {
+        return Promise.all((blocked || []).map(function(item) {
+            if (!canRequestTransferApproval(item.decision)) {
+                return Promise.resolve(item);
+            }
+            return ensureTransferApproval({
+                direction: 'upload',
+                name: item.file && item.file.name || '',
+                path: item.file && (item.file.webkitRelativePath || item.file.name) || '',
+                size: item.file && Number(item.file.size) || 0,
+                reason: item.decision.reason
+            }).then(function(decision) {
+                return {
+                    file: item.file,
+                    decision: decision
+                };
+            });
+        }));
+    }
+
     function parseTerminalControl(raw) {
         try {
             var data = JSON.parse(raw);
@@ -421,7 +849,12 @@
         if (!message || !message.action) {
             return;
         }
+        if (message.action === 'transfer_decision') {
+            resolveTransferDecision(message);
+            return;
+        }
         if (message.action === 'connected' && message.data) {
+            applySensitiveScanConfig(message);
             term.write(message.data);
             updateTransferStatus('Ready for rz / sz file transfer');
             if (message.download_url) {
@@ -500,33 +933,158 @@
 
     function startUploadSession(session, files) {
         pendingSendSession = null;
-        pendingUploadFiles = [];
-        updateTransferStatus('Uploading ' + files.length + ' file(s)…');
-        session.on('session_end', function() {
-            updateTransferStatus('Upload complete');
-        });
-        Zmodem.Browser.send_files(session, files).then(function() {
-            updateTransferStatus('Upload complete');
+        filterUploadFiles(files).then(function(results) {
+            var allowedFiles = [];
+            var blockedFiles = [];
+            var uploadFailed = false;
+            results.forEach(function(result) {
+                if (result.decision && result.decision.allowed) {
+                    allowedFiles.push(result.file);
+                    return;
+                }
+                blockedFiles.push(result);
+            });
+            pendingUploadFiles = [];
+            notifyBlockedUploads(blockedFiles);
+            if (!allowedFiles.length) {
+                updateTransferStatus('Upload blocked by policy');
+                closeTransferSession(session);
+                return;
+            }
+
+            inspectUploadFilesContent(allowedFiles).then(function(scanResults) {
+                var readyFiles = [];
+                var contentBlocked = [];
+                scanResults.forEach(function(result) {
+                    if (result.decision && result.decision.allowed) {
+                        readyFiles.push(result.file);
+                        return;
+                    }
+                    contentBlocked.push(result);
+                });
+                resolveBlockedUploadApprovals(contentBlocked).then(function(approvalResults) {
+                    var approvedFiles = readyFiles.slice();
+                    var blockedAfterApproval = [];
+                    approvalResults.forEach(function(result) {
+                        if (result.decision && result.decision.allowed) {
+                            approvedFiles.push(result.file);
+                            return;
+                        }
+                        blockedAfterApproval.push(result);
+                    });
+                    notifyBlockedUploads(blockedAfterApproval);
+                    if (!approvedFiles.length) {
+                        updateTransferStatus('Upload blocked by policy');
+                        closeTransferSession(session);
+                        return;
+                    }
+
+                    updateTransferStatus('Uploading ' + approvedFiles.length + ' file(s)…');
+                    session.on('session_end', function() {
+                        if (uploadFailed) {
+                            return;
+                        }
+                        updateTransferStatus('Upload complete');
+                    });
+                    Zmodem.Browser.send_files(session, approvedFiles).then(function() {
+                        updateTransferStatus('Upload complete');
+                    }).catch(function(err) {
+                        uploadFailed = true;
+                        updateTransferStatus('Upload failed');
+                        App.notify('Upload failed: ' + err.message, 'error');
+                    });
+                }).catch(function(err) {
+                    updateTransferStatus('Upload blocked by policy');
+                    App.notify('Upload blocked: ' + err.message, 'error');
+                    closeTransferSession(session);
+                });
+            }).catch(function(err) {
+                updateTransferStatus('Upload blocked by policy');
+                App.notify('Upload blocked: ' + err.message, 'error');
+                closeTransferSession(session);
+            });
         }).catch(function(err) {
-            updateTransferStatus('Upload failed');
-            App.notify('Upload failed: ' + err.message, 'error');
+            pendingUploadFiles = [];
+            updateTransferStatus('Upload blocked by policy');
+            App.notify('Upload blocked: ' + err.message, 'error');
+            closeTransferSession(session);
         });
     }
 
     function startDownloadSession(session) {
+        var downloadAccepted = false;
+        var downloadBlocked = false;
+        var downloadFailed = false;
         updateTransferStatus('Remote started a download…');
         session.on('offer', function(xfer) {
-            var details = xfer.get_details();
-            updateTransferStatus('Downloading ' + (details.name || 'file') + '…');
-            xfer.accept().then(function() {
-                Zmodem.Browser.save_to_disk(xfer.get_payloads(), details.name);
-                updateTransferStatus('Downloaded ' + (details.name || 'file'));
-            }).catch(function(err) {
-                updateTransferStatus('Download failed');
-                App.notify('Download failed: ' + err.message, 'error');
+            var details = xfer.get_details() || {};
+            var fileName = details.name || 'file';
+            requestTransferDecision({
+                direction: 'download',
+                name: details.name || '',
+                path: details.full_path || details.pathname || details.name || '',
+                size: Number(details.size) || 0
+            }).then(function(decision) {
+                if (!decision.allowed) {
+                    downloadBlocked = true;
+                    updateTransferStatus('Download blocked by policy');
+                    App.notify('Download blocked: ' + (decision.reason || fileName), 'warning');
+                    xfer.skip();
+                    return;
+                }
+
+                updateTransferStatus('Downloading ' + fileName + '…');
+                xfer.accept().then(function() {
+                    var contentDecision = inspectDownloadPayloads(xfer.get_payloads());
+                    if (!contentDecision.allowed) {
+                        if (canRequestTransferApproval(contentDecision)) {
+                            ensureTransferApproval({
+                                direction: 'download',
+                                name: fileName,
+                                path: details.full_path || details.pathname || details.name || '',
+                                size: Number(details.size) || 0,
+                                reason: contentDecision.reason
+                            }).then(function(approvalDecision) {
+                                if (!approvalDecision.allowed) {
+                                    downloadBlocked = true;
+                                    updateTransferStatus('Download blocked by policy');
+                                    App.notify('Download blocked: ' + approvalDecision.reason, 'warning');
+                                    return;
+                                }
+                                downloadAccepted = true;
+                                Zmodem.Browser.save_to_disk(xfer.get_payloads(), fileName);
+                                updateTransferStatus('Downloaded ' + fileName);
+                            });
+                            return;
+                        }
+                        downloadBlocked = true;
+                        updateTransferStatus('Download blocked by policy');
+                        App.notify('Download blocked: ' + contentDecision.reason, 'warning');
+                        return;
+                    }
+                    downloadAccepted = true;
+                    Zmodem.Browser.save_to_disk(xfer.get_payloads(), fileName);
+                    updateTransferStatus('Downloaded ' + fileName);
+                }).catch(function(err) {
+                    downloadFailed = true;
+                    updateTransferStatus('Download failed');
+                    App.notify('Download failed: ' + err.message, 'error');
+                });
             });
         });
         session.on('session_end', function() {
+            if (downloadFailed) {
+                updateTransferStatus('Download failed');
+                return;
+            }
+            if (downloadAccepted) {
+                updateTransferStatus('Download complete');
+                return;
+            }
+            if (downloadBlocked) {
+                updateTransferStatus('Download blocked by policy');
+                return;
+            }
             updateTransferStatus('Download complete');
         });
         session.start();
@@ -538,7 +1096,7 @@
             return;
         }
         updateTransferStatus('Queued ' + pendingUploadFiles.length + ' file(s). Run rz on the remote host to upload.');
-        App.notify('Queued ' + pendingUploadFiles.length + ' file(s) for upload', 'info');
+        App.notify('Queued ' + pendingUploadFiles.length + ' file(s) for upload. Policy checks run before transfer starts.', 'info');
         if (pendingSendSession) {
             var session = pendingSendSession;
             startUploadSession(session, pendingUploadFiles.slice());

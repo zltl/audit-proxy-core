@@ -308,7 +308,7 @@ func (a *API) tryServeArchivedRecording(w http.ResponseWriter, r *http.Request, 
 
 	reader, name, err := a.recordingStore.openSessionRecording(r.Context(), id)
 	if err != nil {
-		if recordingObjectNotFound(err) {
+		if objectStorageNotFound(err) {
 			return false, nil
 		}
 		return false, err

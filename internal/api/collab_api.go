@@ -25,6 +25,9 @@ func (a *API) RegisterCollabRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/request-control", a.handleRequestControl)
 	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/grant-control", a.handleGrantControl)
 	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/revoke-control", a.handleRevokeControl)
+	mux.HandleFunc("GET /api/v2/collab/sessions/{id}/approvals", a.handleListCollabApprovals)
+	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/approvals/{approvalId}/approve", a.handleApproveCollabApproval)
+	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/approvals/{approvalId}/deny", a.handleDenyCollabApproval)
 	mux.HandleFunc("GET /api/v2/collab/sessions/{id}/chat", a.handleGetChat)
 	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/chat", a.handleSendChat)
 	mux.HandleFunc("GET /api/v2/collab/sessions/{id}/recording", a.handleGetCollabRecording)
@@ -44,10 +47,11 @@ func (a *API) handleCreateCollabSession(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req struct {
-		SessionID    string `json:"session_id"`
-		Target       string `json:"target"`
-		MaxViewers   int    `json:"max_viewers"`
-		AllowControl bool   `json:"allow_control"`
+		SessionID        string `json:"session_id"`
+		Target           string `json:"target"`
+		MaxViewers       int    `json:"max_viewers"`
+		AllowControl     bool   `json:"allow_control"`
+		FourEyesRequired bool   `json:"four_eyes_required"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -65,7 +69,11 @@ func (a *API) handleCreateCollabSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	session, err := a.collab.CreateSession(req.SessionID, owner, req.Target, req.MaxViewers, req.AllowControl)
+	session, err := a.collab.CreateSessionWithOptions(req.SessionID, owner, req.Target, collab.SessionOptions{
+		MaxViewers:       req.MaxViewers,
+		AllowControl:     req.AllowControl,
+		FourEyesRequired: req.FourEyesRequired,
+	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -214,6 +222,22 @@ func (a *API) handleEndCollabSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if session.FourEyesRequired {
+		approval, err := a.collab.RequestActionApproval(id, owner, collab.SessionActionEndSession, "")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, APIResponse{
+			Success: true,
+			Data: map[string]interface{}{
+				"status":   "pending_approval",
+				"approval": approval,
+			},
+		})
+		return
+	}
+
 	if err := a.collab.EndSession(id); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -283,6 +307,27 @@ func (a *API) handleGrantControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	session, err := a.collab.GetSession(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if session.FourEyesRequired {
+		approval, err := a.collab.RequestActionApproval(id, owner, collab.SessionActionGrantControl, req.Username)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, APIResponse{
+			Success: true,
+			Data: map[string]interface{}{
+				"status":   "pending_approval",
+				"approval": approval,
+			},
+		})
+		return
+	}
+
 	if err := a.collab.GrantControl(id, owner, req.Username); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -324,6 +369,27 @@ func (a *API) handleRevokeControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	session, err := a.collab.GetSession(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if session.FourEyesRequired {
+		approval, err := a.collab.RequestActionApproval(id, owner, collab.SessionActionRevokeControl, req.Username)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, APIResponse{
+			Success: true,
+			Data: map[string]interface{}{
+				"status":   "pending_approval",
+				"approval": approval,
+			},
+		})
+		return
+	}
+
 	if err := a.collab.RevokeControl(id, owner, req.Username); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -332,6 +398,118 @@ func (a *API) handleRevokeControl(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, APIResponse{
 		Success: true,
 		Data:    map[string]string{"status": "revoked"},
+	})
+}
+
+func (a *API) handleListCollabApprovals(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCollab(w) {
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing session id")
+		return
+	}
+	if r.Header.Get("X-User") == "" {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if _, err := a.collab.GetSession(id); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	approvals, err := a.collab.ListActionApprovals(id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if approvals == nil {
+		approvals = []*collab.SessionActionApproval{}
+	}
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    approvals,
+		Total:   len(approvals),
+	})
+}
+
+func (a *API) handleApproveCollabApproval(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCollab(w) {
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing session id")
+		return
+	}
+	approvalID := r.PathValue("approvalId")
+	if approvalID == "" {
+		writeError(w, http.StatusBadRequest, "missing approval id")
+		return
+	}
+	approver := r.Header.Get("X-User")
+	if approver == "" {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if _, err := a.collab.GetSession(id); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	approval, err := a.collab.ApproveAction(id, approvalID, approver)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"status":   "approved",
+			"approval": approval,
+		},
+	})
+}
+
+func (a *API) handleDenyCollabApproval(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCollab(w) {
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing session id")
+		return
+	}
+	approvalID := r.PathValue("approvalId")
+	if approvalID == "" {
+		writeError(w, http.StatusBadRequest, "missing approval id")
+		return
+	}
+	approver := r.Header.Get("X-User")
+	if approver == "" {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if _, err := a.collab.GetSession(id); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	approval, err := a.collab.DenyAction(id, approvalID, approver)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"status":   "denied",
+			"approval": approval,
+		},
 	})
 }
 

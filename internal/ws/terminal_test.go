@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dlp"
 )
 
 func TestTerminalHandlerBridgesTextBinaryAndControls(t *testing.T) {
@@ -177,6 +179,165 @@ func TestTerminalHandlerBridgesTextBinaryAndControls(t *testing.T) {
 	}
 	if !strings.HasPrefix(recordingPath, filepath.Join(recordingDir, "web-terminal")+string(filepath.Separator)) {
 		t.Fatalf("recording path %q outside recording dir", recordingPath)
+	}
+}
+
+func TestTerminalHandlerTransferChecks(t *testing.T) {
+	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer proxyLn.Close()
+
+	proxyReads := make(chan []byte, 1)
+	proxyErrs := make(chan error, 1)
+	go func() {
+		conn, err := proxyLn.Accept()
+		if err != nil {
+			proxyErrs <- err
+			return
+		}
+		defer conn.Close()
+
+		conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		buf := make([]byte, 64)
+		if n, err := conn.Read(buf); n > 0 {
+			proxyReads <- append([]byte(nil), buf[:n]...)
+			return
+		} else if err != nil {
+			if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+				if err != io.EOF {
+					proxyErrs <- err
+				}
+			}
+		}
+	}()
+
+	mux := http.NewServeMux()
+	handler := &TerminalHandler{
+		ProxyAddr: proxyLn.Addr().String(),
+		TransferPolicy: dlp.NewFileTransferPolicy(dlp.FileTransferPolicyOptions{
+			AllowExtensions: []string{"txt"},
+			DenyNames:       []string{"secret*"},
+		}),
+	}
+	mux.Handle("/ws/terminal", handler)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client, br := dialTerminalWS(t, server.URL+"/ws/terminal?host=test-host")
+	defer client.Close()
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("receive handshake: %v", err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("expected 101 handshake response, got %d", resp.StatusCode)
+	}
+	client = &bufferedConn{Conn: client, br: br}
+
+	if _, _, err := clientReadFrame(client); err != nil {
+		t.Fatalf("read connected frame: %v", err)
+	}
+
+	clientWriteMaskedFrame(client, OpText, []byte(`{"type":"control","action":"transfer_check","request_id":"req-allow","direction":"upload","name":"notes.txt","path":"docs/notes.txt"}`))
+	_, payload, err := clientReadFrame(client)
+	if err != nil {
+		t.Fatalf("read allow transfer_decision: %v", err)
+	}
+	var allowed terminalMsg
+	if err := json.Unmarshal(payload, &allowed); err != nil {
+		t.Fatalf("json.Unmarshal allow: %v", err)
+	}
+	if allowed.Action != "transfer_decision" || allowed.RequestID != "req-allow" || !allowed.Allowed {
+		t.Fatalf("unexpected allow decision: %#v", allowed)
+	}
+
+	clientWriteMaskedFrame(client, OpText, []byte(`{"type":"control","action":"transfer_check","request_id":"req-deny","direction":"download","name":"secret.txt","path":"downloads/secret.txt"}`))
+	_, payload, err = clientReadFrame(client)
+	if err != nil {
+		t.Fatalf("read deny transfer_decision: %v", err)
+	}
+	var denied terminalMsg
+	if err := json.Unmarshal(payload, &denied); err != nil {
+		t.Fatalf("json.Unmarshal deny: %v", err)
+	}
+	if denied.Action != "transfer_decision" || denied.RequestID != "req-deny" || denied.Allowed {
+		t.Fatalf("unexpected deny decision: %#v", denied)
+	}
+	if !strings.Contains(denied.Reason, "deny rule secret*") {
+		t.Fatalf("deny reason = %q", denied.Reason)
+	}
+
+	select {
+	case got := <-proxyReads:
+		t.Fatalf("transfer_check should not be proxied, got %q", string(got))
+	case err := <-proxyErrs:
+		t.Fatalf("unexpected proxy error: %v", err)
+	case <-time.After(400 * time.Millisecond):
+	}
+}
+
+func TestTerminalHandlerConnectedMessageIncludesSensitivePatterns(t *testing.T) {
+	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer proxyLn.Close()
+
+	go func() {
+		conn, err := proxyLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.Copy(io.Discard, conn)
+	}()
+
+	mux := http.NewServeMux()
+	handler := &TerminalHandler{
+		ProxyAddr:             proxyLn.Addr().String(),
+		ClipboardAuditEnabled: true,
+		TransferPolicy: dlp.NewFileTransferPolicy(dlp.FileTransferPolicyOptions{
+			SensitiveScanEnabled:  true,
+			SensitiveDetectAPIKey: true,
+			SensitiveMaxScanBytes: 2048,
+		}),
+	}
+	mux.Handle("/ws/terminal", handler)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client, br := dialTerminalWS(t, server.URL+"/ws/terminal?host=test-host")
+	defer client.Close()
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("receive handshake: %v", err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("expected 101 handshake response, got %d", resp.StatusCode)
+	}
+	client = &bufferedConn{Conn: client, br: br}
+
+	_, payload, err := clientReadFrame(client)
+	if err != nil {
+		t.Fatalf("read connected frame: %v", err)
+	}
+	var connected terminalMsg
+	if err := json.Unmarshal(payload, &connected); err != nil {
+		t.Fatalf("json.Unmarshal connected: %v", err)
+	}
+	if len(connected.SensitivePatterns) != 1 {
+		t.Fatalf("len(sensitive_patterns) = %d, want 1", len(connected.SensitivePatterns))
+	}
+	if connected.SensitivePatterns[0].ID != "api-key" {
+		t.Fatalf("sensitive pattern id = %q, want api-key", connected.SensitivePatterns[0].ID)
+	}
+	if connected.SensitiveMaxScanBytes != 2048 {
+		t.Fatalf("sensitive_max_scan_bytes = %d, want 2048", connected.SensitiveMaxScanBytes)
+	}
+	if !connected.ClipboardAuditEnabled {
+		t.Fatalf("clipboard_audit_enabled = false, want true")
 	}
 }
 

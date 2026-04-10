@@ -153,6 +153,23 @@ static int test_port_forward_callback(void) {
     TEST_PASS();
 }
 
+static int test_detect_scp_and_sftp_features(void) {
+    TEST_START();
+
+    ASSERT_EQ(policy_detect_command("scp -t /tmp/upload.bin"), POLICY_FEAT_SCP_UPLOAD);
+    ASSERT_EQ(policy_detect_command("scp -f /tmp/download.bin"), POLICY_FEAT_SCP_DOWNLOAD);
+    ASSERT_EQ(policy_detect_command("scp /tmp/src /tmp/dst"),
+              POLICY_FEAT_SCP_UPLOAD | POLICY_FEAT_SCP_DOWNLOAD);
+    ASSERT_EQ(policy_detect_command("sftp"),
+              POLICY_FEAT_SFTP_UPLOAD | POLICY_FEAT_SFTP_DOWNLOAD |
+                  POLICY_FEAT_SFTP_LIST | POLICY_FEAT_SFTP_DELETE);
+    ASSERT_EQ(policy_detect_command("/usr/libexec/sftp-server"),
+              POLICY_FEAT_SFTP_UPLOAD | POLICY_FEAT_SFTP_DOWNLOAD |
+                  POLICY_FEAT_SFTP_LIST | POLICY_FEAT_SFTP_DELETE);
+
+    TEST_PASS();
+}
+
 int main(void) {
     log_init(LOG_LEVEL_WARN, NULL);
 
@@ -160,6 +177,7 @@ int main(void) {
 
     RUN_TEST(test_port_forward_log_file);
     RUN_TEST(test_port_forward_callback);
+    RUN_TEST(test_detect_scp_and_sftp_features);
 
     log_shutdown();
 

@@ -2,15 +2,26 @@
 
 ## 概述
 
-本文档描述了 SSH Proxy Core 项目的完整测试流程，用于验证各个组件的正确性。
+本文档描述了 SSH Proxy Core 项目的完整测试流程。项目包含两个测试套件：
+
+| 测试套件 | 语言 | 测试数量 | 运行命令 |
+|---------|------|---------|---------|
+| C 数据面单元测试 | C | 188+ | `make test` |
+| Go 控制面单元测试 | Go | 466+ | `go test ./... -count=1` |
 
 ## 快速测试
 
 ```bash
-# 运行所有测试
+# C 数据面 — 运行全部测试 (188+)
 make test
 
-# 只运行集成测试
+# C 数据面 — TLS 变体
+make clean && make TLS_ENABLED=1 test
+
+# Go 控制面 — 运行全部测试 (466+)
+go test ./... -count=1
+
+# 只运行 C 集成测试
 ./build/bin/test_integration
 ```
 
@@ -176,7 +187,7 @@ DEBUG proxy_handler.c: Connected to upstream 127.0.0.1:22
 
 ## 添加新测试
 
-### 添加单元测试
+### 添加 C 单元测试
 
 1. 在 `tests/` 创建 `test_<component>.c`
 2. 包含 `test_utils.h`
@@ -209,9 +220,88 @@ int main(void)
 }
 ```
 
+### 添加 Go 控制面测试
+
+1. 在对应源文件同目录创建 `<module>_test.go`
+2. 使用标准 `testing` 包
+3. 使用 `httptest.NewServer` 测试 HTTP 处理器
+4. 运行 `go test ./... -count=1`
+
+示例：
+
+```go
+package api
+
+import (
+    "net/http"
+    "net/http/httptest"
+    "testing"
+)
+
+func TestMyHandler(t *testing.T) {
+    api := &API{} // 初始化所需的最小 API 状态
+    mux := http.NewServeMux()
+    api.registerMyRoutes(mux)
+
+    srv := httptest.NewServer(mux)
+    defer srv.Close()
+
+    resp, err := http.Get(srv.URL + "/api/v2/my-resource")
+    if err != nil {
+        t.Fatal(err)
+    }
+    if resp.StatusCode != http.StatusOK {
+        t.Fatalf("expected 200, got %d", resp.StatusCode)
+    }
+}
+```
+
 ### 添加集成测试
 
 在 `test_integration.c` 中添加测试函数，并在 `main()` 中调用。
+
+---
+
+## Go 控制面测试套件
+
+Go 控制面测试覆盖 466+ 个测试用例，分布在以下包中：
+
+| 包 | 测试范围 |
+|----|---------|
+| `internal/api` | 所有 REST API 处理器、自动化、网关、洞察 |
+| `internal/server` | 服务器启动、路由注册、页面渲染 |
+| `internal/config` | 配置解析与校验 |
+| `internal/cluster` | 集群发现与成员管理 |
+
+### 运行 Go 测试
+
+```bash
+# 运行全部 Go 测试
+go test ./... -count=1
+
+# 运行特定包的测试
+go test ./internal/api/... -count=1
+
+# 详细输出
+go test ./internal/api/... -count=1 -v
+
+# 运行匹配模式的测试
+go test ./internal/api/... -count=1 -run TestAutomation
+```
+
+### Go 控制面测试覆盖矩阵
+
+| 模块 | CRUD | 业务逻辑 | 错误处理 | 端到端 |
+|------|------|---------|---------|--------|
+| Automation (脚本/作业/运行) | ✓ | ✓ | ✓ | ✓ |
+| Gateway (TCP/SOCKS5) | ✓ | ✓ | ✓ | ✓ |
+| Insights (意图/异常/策略) | ✓ | ✓ | ✓ | ✓ |
+| Sessions | ✓ | ✓ | ✓ | ✓ |
+| Users | ✓ | ✓ | ✓ | ✓ |
+| Servers | ✓ | ✓ | ✓ | ✓ |
+| Cluster | ✓ | ✓ | ✓ | - |
+| Discovery | ✓ | ✓ | ✓ | ✓ |
+| SSH CA | ✓ | ✓ | ✓ | ✓ |
 
 ## CI/CD 集成
 
@@ -221,7 +311,7 @@ name: Test
 on: [push, pull_request]
 
 jobs:
-  test:
+  test-c:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -231,6 +321,18 @@ jobs:
         run: make
       - name: Test
         run: make test
+
+  test-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+      - name: Build
+        run: go build ./...
+      - name: Test
+        run: go test ./... -count=1
 ```
 
 ## 故障排除

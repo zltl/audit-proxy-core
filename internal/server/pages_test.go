@@ -53,6 +53,7 @@ func TestManagementPagesUseCurrentAPIs(t *testing.T) {
 		{path: "/sessions", needles: []string{"/api/v2/sessions", "/api/v2/sessions/bulk-kill", "/api/v2/sessions/' + encodeURIComponent(id) + '/recording/download", "/ws/sessions", "/ws/sessions/", "filter-ip", "filter-target", "asciinema-player.min.js"}},
 		{path: "/users", needles: []string{"/api/v2/users", "/api/v2/users/", "/api/v2/users/' + encodeURIComponent(username) + '/mfa/qrcode", "/api/v2/audit/events?user=", "deleteUser(", "qrious@4.0.2"}},
 		{path: "/servers", needles: []string{"/api/v2/servers", "/api/v2/servers/", "/api/v2/servers/health", "server-summary-total", "deleteServer("}},
+		{path: "/automation", needles: []string{"/api/v2/automation/scripts", "/api/v2/automation/jobs", "/api/v2/automation/runs", "/api/v2/servers", "createAutomationScript", "createAutomationJob", "runAutomationJob"}},
 		{path: "/audit", needles: []string{"/api/v2/audit/events", "/api/v2/audit/search", "/api/v2/audit/export"}},
 		{path: "/webhooks", needles: []string{"/api/v2/webhooks/deliveries", "/api/v2/webhooks/deliveries/retry", "retryWebhookDeliveries", "webhook-deliveries-table"}},
 		{path: "/terminal", needles: []string{"/api/v2/servers", "/ws/terminal", "xterm@5.3.0", "zmodem.js@0.1.7", "navigator.clipboard", "copyTerminalSelection", "pasteClipboard", "chooseTerminalUpload", "terminal-drop-overlay", "terminal-recording-download"}},

@@ -257,6 +257,94 @@ events = all
 	}
 }
 
+func TestThreatRuleCRUDWithCustomDSL(t *testing.T) {
+	api, mux, _ := setupTestAPI(t)
+	api.SetThreat(threat.NewDetector(&threat.DetectorConfig{
+		Enabled:           true,
+		DataDir:           api.config.DataDir,
+		SuppressionWindow: 50 * time.Millisecond,
+		MaxAlertsPerRule:  100,
+	}))
+	api.RegisterThreatRoutes(mux)
+
+	createResp := doRequest(mux, http.MethodPost, "/api/v2/threats/rules", map[string]interface{}{
+		"name":        "Kubectl Exec Detection",
+		"description": "Detect kubectl exec shells",
+		"type":        "dsl",
+		"severity":    "high",
+		"event_types": []string{"command"},
+		"expression": map[string]interface{}{
+			"operator": "and",
+			"children": []map[string]interface{}{
+				{"operator": "contains", "field": "details.command", "value": "kubectl"},
+				{"operator": "contains", "field": "details.command", "value": "exec"},
+			},
+		},
+	})
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create custom threat rule status = %d body = %s", createResp.Code, createResp.Body.String())
+	}
+
+	var createEnvelope APIResponse
+	if err := json.Unmarshal(createResp.Body.Bytes(), &createEnvelope); err != nil {
+		t.Fatalf("json.Unmarshal(create rule) error = %v", err)
+	}
+	ruleData, ok := createEnvelope.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("create rule data type = %T, want map", createEnvelope.Data)
+	}
+	ruleID, _ := ruleData["id"].(string)
+	if ruleID == "" {
+		t.Fatalf("expected created rule id, got %#v", createEnvelope.Data)
+	}
+
+	listResp := doRequest(mux, http.MethodGet, "/api/v2/threats/rules", nil)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("list threat rules status = %d body = %s", listResp.Code, listResp.Body.String())
+	}
+	if !bytes.Contains(listResp.Body.Bytes(), []byte(ruleID)) {
+		t.Fatalf("expected list threat rules to contain %q, got %s", ruleID, listResp.Body.String())
+	}
+
+	simulateResp := doRequest(mux, http.MethodPost, "/api/v2/threats/simulate", threat.Event{
+		Timestamp: time.Now(),
+		Type:      "command",
+		Username:  "ops",
+		SourceIP:  "10.0.0.5",
+		Details: map[string]interface{}{
+			"command": "kubectl exec deploy/api -- /bin/sh",
+		},
+	})
+	if simulateResp.Code != http.StatusOK {
+		t.Fatalf("simulate status = %d body = %s", simulateResp.Code, simulateResp.Body.String())
+	}
+	if !bytes.Contains(simulateResp.Body.Bytes(), []byte(ruleID)) {
+		t.Fatalf("expected simulate response to contain custom rule %q, got %s", ruleID, simulateResp.Body.String())
+	}
+
+	deleteResp := doRequest(mux, http.MethodDelete, "/api/v2/threats/rules/"+ruleID, nil)
+	if deleteResp.Code != http.StatusOK {
+		t.Fatalf("delete custom threat rule status = %d body = %s", deleteResp.Code, deleteResp.Body.String())
+	}
+
+	time.Sleep(60 * time.Millisecond)
+	simulateResp = doRequest(mux, http.MethodPost, "/api/v2/threats/simulate", threat.Event{
+		Timestamp: time.Now(),
+		Type:      "command",
+		Username:  "ops",
+		SourceIP:  "10.0.0.6",
+		Details: map[string]interface{}{
+			"command": "kubectl exec deploy/api -- /bin/sh",
+		},
+	})
+	if simulateResp.Code != http.StatusOK {
+		t.Fatalf("simulate after delete status = %d body = %s", simulateResp.Code, simulateResp.Body.String())
+	}
+	if bytes.Contains(simulateResp.Body.Bytes(), []byte(ruleID)) {
+		t.Fatalf("expected deleted custom rule %q to stop matching, got %s", ruleID, simulateResp.Body.String())
+	}
+}
+
 func newThreatDetectorWithGeo(t *testing.T, geoJSON string) *threat.Detector {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "geoip.json")

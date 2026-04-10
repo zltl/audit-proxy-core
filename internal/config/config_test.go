@@ -199,9 +199,166 @@ func TestValidateAllowsCompleteJITNotificationConfig(t *testing.T) {
 	cfg.JITNotifySlackWebhookURL = "https://hooks.slack.com/services/T000/B000/XXX"
 	cfg.JITNotifyDingTalkWebhookURL = "https://oapi.dingtalk.com/robot/send?access_token=abc"
 	cfg.JITNotifyWeComWebhookURL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc"
+	cfg.JITNotifyTeamsWebhookURL = "https://outlook.office.com/webhook/abc/IncomingWebhook/def/ghi"
+	cfg.JITNotifyPagerDutyRoutingKey = "pagerduty-key"
+	cfg.JITNotifyOpsgenieAPIURL = "https://api.opsgenie.com/v2/alerts"
+	cfg.JITNotifyOpsgenieAPIKey = "opsgenie-key"
 
 	if err := validate(cfg); err != nil {
 		t.Fatalf("validate(complete jit notification config) = %v", err)
+	}
+}
+
+func TestValidateRejectsOpsgenieURLWithoutKey(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.JITNotifyOpsgenieAPIURL = "https://api.opsgenie.com/v2/alerts"
+
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "jit_notify_opsgenie_api_key") {
+		t.Fatalf("validate(opsgenie url without key) = %v, want jit_notify_opsgenie_api_key error", err)
+	}
+}
+
+func TestValidateThreatResponseDefaultsActionsWhenEnabled(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.ThreatResponseEnabled = true
+
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate(threat response defaults) = %v", err)
+	}
+	if !cfg.ThreatResponseBlockSourceIP || !cfg.ThreatResponseKillSessions || !cfg.ThreatResponseNotify {
+		t.Fatalf("threat response actions = block:%v kill:%v notify:%v, want all true", cfg.ThreatResponseBlockSourceIP, cfg.ThreatResponseKillSessions, cfg.ThreatResponseNotify)
+	}
+	if cfg.ThreatResponseMinSeverity != "high" {
+		t.Fatalf("threat_response_min_severity = %q, want high", cfg.ThreatResponseMinSeverity)
+	}
+}
+
+func TestValidateAllowsExplicitThreatResponseSeverity(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.ThreatResponseEnabled = true
+	cfg.ThreatResponseNotify = true
+	cfg.ThreatResponseMinSeverity = "critical"
+
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate(threat response critical) = %v", err)
+	}
+	if cfg.ThreatResponseMinSeverity != "critical" {
+		t.Fatalf("threat_response_min_severity = %q, want critical", cfg.ThreatResponseMinSeverity)
+	}
+}
+
+func TestValidateRejectsInvalidThreatResponseSeverity(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.ThreatResponseMinSeverity = "urgent"
+
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "threat_response_min_severity") {
+		t.Fatalf("validate(invalid threat response severity) = %v, want threat_response_min_severity error", err)
+	}
+}
+
+func TestValidateAllowsNonNegativeDLPFileSizeLimits(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.DLPFileMaxUploadBytes = 1024
+	cfg.DLPFileMaxDownloadBytes = 2048
+
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate(dlp file size limits) = %v", err)
+	}
+}
+
+func TestValidateRejectsNegativeDLPFileSizeLimit(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.DLPFileMaxUploadBytes = -1
+
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "dlp_file_max_upload_bytes") {
+		t.Fatalf("validate(negative dlp file size limit) = %v, want dlp_file_max_upload_bytes error", err)
+	}
+}
+
+func TestValidateDefaultsSensitiveDetectorsWhenEnabled(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.DLPSensitiveScanEnabled = true
+
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate(dlp sensitive defaults) = %v", err)
+	}
+	if !cfg.DLPSensitiveDetectCreditCard || !cfg.DLPSensitiveDetectCNIDCard || !cfg.DLPSensitiveDetectAPIKey {
+		t.Fatalf("sensitive detectors = cc:%v cnid:%v api:%v, want all true", cfg.DLPSensitiveDetectCreditCard, cfg.DLPSensitiveDetectCNIDCard, cfg.DLPSensitiveDetectAPIKey)
+	}
+	if cfg.DLPSensitiveMaxScanBytes != 1024*1024 {
+		t.Fatalf("dlp_sensitive_max_scan_bytes = %d, want 1048576", cfg.DLPSensitiveMaxScanBytes)
+	}
+}
+
+func TestValidateRejectsNegativeSensitiveScanBytes(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.DLPSensitiveScanEnabled = true
+	cfg.DLPSensitiveMaxScanBytes = -1
+
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "dlp_sensitive_max_scan_bytes") {
+		t.Fatalf("validate(negative dlp sensitive scan bytes) = %v, want dlp_sensitive_max_scan_bytes error", err)
+	}
+}
+
+func TestValidateAllowsClipboardAuditWithSensitiveScan(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.DLPSensitiveScanEnabled = true
+	cfg.DLPClipboardAuditEnabled = true
+
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate(clipboard audit) = %v", err)
+	}
+}
+
+func TestValidateRejectsClipboardAuditWithoutSensitiveScan(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.DLPClipboardAuditEnabled = true
+
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "dlp_clipboard_audit_enabled") {
+		t.Fatalf("validate(clipboard audit without sensitive scan) = %v, want dlp_clipboard_audit_enabled error", err)
+	}
+}
+
+func TestValidateAllowsTransferApprovalDefaults(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.DLPTransferApprovalEnabled = true
+
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate(transfer approval defaults) = %v", err)
+	}
+	if cfg.DLPTransferApprovalRoles != "admin" {
+		t.Fatalf("dlp_transfer_approval_roles = %q, want admin", cfg.DLPTransferApprovalRoles)
+	}
+	if cfg.DLPTransferApprovalTimeout != "30m" {
+		t.Fatalf("dlp_transfer_approval_timeout = %q, want 30m", cfg.DLPTransferApprovalTimeout)
+	}
+}
+
+func TestValidateRejectsInvalidTransferApprovalTimeout(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.DLPTransferApprovalEnabled = true
+	cfg.DLPTransferApprovalTimeout = "0s"
+
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "dlp_transfer_approval_timeout") {
+		t.Fatalf("validate(invalid transfer approval timeout) = %v, want dlp_transfer_approval_timeout error", err)
 	}
 }
 
@@ -285,6 +442,32 @@ func TestValidateRejectsIncompleteRecordingObjectStorageConfig(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsAuditArchiveObjectStorageConfig(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.AuditArchiveObjectStorageEnabled = true
+	cfg.AuditArchiveObjectStorageEndpoint = "https://s3.example.com"
+	cfg.AuditArchiveObjectStorageBucket = "audit-logs"
+	cfg.AuditArchiveObjectStorageAccessKey = "access"
+	cfg.AuditArchiveObjectStorageSecretKey = "secret"
+
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate(audit archive object storage) = %v", err)
+	}
+}
+
+func TestValidateRejectsIncompleteAuditArchiveObjectStorageConfig(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.AuditArchiveObjectStorageEnabled = true
+	cfg.AuditArchiveObjectStorageBucket = "audit-logs"
+
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "audit_archive_object_storage_endpoint") {
+		t.Fatalf("validate(incomplete audit archive object storage) = %v, want endpoint error", err)
+	}
+}
+
 func TestValidateAllowsPostgresStoreBackends(t *testing.T) {
 	cfg := defaults()
 	cfg.SessionSecret = "secret"
@@ -336,6 +519,24 @@ func TestValidateAllowsTimescaleAuditStoreWithSharedPostgresURL(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsElasticsearchAuditStore(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.AuditStoreBackend = "elastic"
+	cfg.AuditStoreEndpoint = "https://elastic.example.com:9200"
+	cfg.AuditStoreToken = "secret-token"
+
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate(elasticsearch audit store) = %v", err)
+	}
+	if cfg.AuditStoreBackend != "elasticsearch" {
+		t.Fatalf("normalized audit store backend = %q", cfg.AuditStoreBackend)
+	}
+	if cfg.AuditStoreIndex != "ssh-proxy-audit" {
+		t.Fatalf("default audit store index = %q", cfg.AuditStoreIndex)
+	}
+}
+
 func TestValidateAllowsDatabasePoolAndReplicaConfig(t *testing.T) {
 	cfg := defaults()
 	cfg.SessionSecret = "secret"
@@ -376,5 +577,79 @@ func TestValidateRejectsAuditStoreWithoutDatabaseURL(t *testing.T) {
 	err := validate(cfg)
 	if err == nil || !strings.Contains(err.Error(), "audit_store_database_url") {
 		t.Fatalf("validate(audit store without url) = %v, want audit store db url error", err)
+	}
+}
+
+func TestValidateRejectsSearchAuditStoreWithoutEndpoint(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.AuditStoreBackend = "opensearch"
+
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "audit_store_endpoint") {
+		t.Fatalf("validate(search audit store without endpoint) = %v, want audit store endpoint error", err)
+	}
+}
+
+func TestValidateRejectsPartialSearchAuditStoreBasicAuth(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.AuditStoreBackend = "elasticsearch"
+	cfg.AuditStoreEndpoint = "https://elastic.example.com:9200"
+	cfg.AuditStoreUsername = "elastic"
+
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "audit_store_username and audit_store_password") {
+		t.Fatalf("validate(partial search audit store basic auth) = %v, want audit store basic auth error", err)
+	}
+}
+
+func TestValidateAllowsKafkaAuditQueue(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.AuditQueueBackend = "kafka"
+	cfg.AuditQueueEndpoint = "kafka-1.example.com:9092,kafka-2.example.com:9092"
+	cfg.AuditQueueTopic = "ssh-proxy-audit"
+
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate(kafka audit queue) = %v", err)
+	}
+}
+
+func TestValidateAllowsRabbitMQAuditQueue(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.AuditQueueBackend = "rabbitmq"
+	cfg.AuditQueueEndpoint = "amqps://guest:guest@mq.example.com:5671/%2f"
+	cfg.AuditQueueExchange = "audit.events"
+	cfg.AuditQueueRoutingKey = "ssh-proxy.audit"
+
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate(rabbitmq audit queue) = %v", err)
+	}
+}
+
+func TestValidateRejectsKafkaAuditQueueWithoutTopic(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.AuditQueueBackend = "kafka"
+	cfg.AuditQueueEndpoint = "kafka-1.example.com:9092"
+
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "audit_queue_topic") {
+		t.Fatalf("validate(kafka audit queue without topic) = %v, want audit_queue_topic error", err)
+	}
+}
+
+func TestValidateRejectsRabbitMQAuditQueueWithoutRoutingKey(t *testing.T) {
+	cfg := defaults()
+	cfg.SessionSecret = "secret"
+	cfg.AuditQueueBackend = "rabbitmq"
+	cfg.AuditQueueEndpoint = "amqp://guest:guest@mq.example.com:5672/%2f"
+	cfg.AuditQueueExchange = "audit.events"
+
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "audit_queue_routing_key") {
+		t.Fatalf("validate(rabbitmq audit queue without routing key) = %v, want audit_queue_routing_key error", err)
 	}
 }

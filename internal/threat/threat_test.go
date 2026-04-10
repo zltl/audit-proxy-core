@@ -1173,6 +1173,129 @@ func TestUpdateRulePattern(t *testing.T) {
 	}
 }
 
+func TestCreateCustomDSLRule(t *testing.T) {
+	d := testDetector()
+	rule, err := d.CreateRule(&Rule{
+		Name:        "Kubectl Exec Detection",
+		Description: "Detect interactive kubectl exec usage",
+		Type:        RuleDSL,
+		Severity:    SeverityHigh,
+		Enabled:     true,
+		Conditions: RuleConditions{
+			EventTypes: []string{"command"},
+			Expression: &RuleDSLExpr{
+				Operator: "and",
+				Children: []*RuleDSLExpr{
+					{Operator: "contains", Field: "details.command", Value: "kubectl"},
+					{Operator: "contains", Field: "details.command", Value: "exec"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateRule() error = %v", err)
+	}
+	if rule.ID == "" || rule.Builtin {
+		t.Fatalf("unexpected created rule %+v", rule)
+	}
+
+	alerts := d.ProcessEvent(&Event{
+		Timestamp: time.Now(),
+		Type:      "command",
+		Username:  "ops",
+		SourceIP:  "10.0.0.1",
+		Details:   map[string]interface{}{"command": "kubectl exec deploy/api -- /bin/sh"},
+	})
+	found := false
+	for _, alert := range alerts {
+		if alert.RuleID == rule.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected custom DSL alert")
+	}
+}
+
+func TestCustomRulesAndOverridesPersistAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &DetectorConfig{
+		Enabled:           true,
+		DataDir:           dir,
+		SuppressionWindow: 50 * time.Millisecond,
+		MaxAlertsPerRule:  100,
+		BusinessHourStart: 6,
+		BusinessHourEnd:   22,
+	}
+	d1 := NewDetector(cfg)
+	rule, err := d1.CreateRule(&Rule{
+		ID:          "custom-risky-kubectl",
+		Name:        "Risky kubectl exec",
+		Description: "Detect risky kubectl exec commands",
+		Type:        RuleDSL,
+		Severity:    SeverityMedium,
+		Enabled:     true,
+		Conditions: RuleConditions{
+			EventTypes: []string{"command"},
+			Expression: &RuleDSLExpr{
+				Operator: "contains",
+				Field:    "details.command",
+				Value:    "kubectl exec",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateRule() error = %v", err)
+	}
+	disabled := false
+	if err := d1.UpdateRule("suspicious_command", &disabled, nil, nil, nil); err != nil {
+		t.Fatalf("UpdateRule(disable built-in) error = %v", err)
+	}
+	if err := d1.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	d2 := NewDetector(cfg)
+	rules := d2.Rules()
+	foundCustom := false
+	for _, item := range rules {
+		if item.ID == rule.ID {
+			foundCustom = true
+		}
+		if item.ID == "suspicious_command" && item.Enabled {
+			t.Fatal("expected suspicious_command override to persist as disabled")
+		}
+	}
+	if !foundCustom {
+		t.Fatal("expected custom rule to persist across restart")
+	}
+
+	alerts := d2.ProcessEvent(&Event{
+		Timestamp: time.Now(),
+		Type:      "command",
+		Username:  "ops",
+		SourceIP:  "10.0.0.2",
+		Details:   map[string]interface{}{"command": "kubectl exec deploy/api -- /bin/sh"},
+	})
+	foundCustomAlert := false
+	foundBuiltinAlert := false
+	for _, alert := range alerts {
+		if alert.RuleID == rule.ID {
+			foundCustomAlert = true
+		}
+		if alert.RuleID == "suspicious_command" {
+			foundBuiltinAlert = true
+		}
+	}
+	if !foundCustomAlert {
+		t.Fatal("expected persisted custom rule to trigger after restart")
+	}
+	if foundBuiltinAlert {
+		t.Fatal("disabled built-in rule should not trigger after restart")
+	}
+}
+
 // --- Tracker UniqueValues ---
 
 func TestTrackerUniqueValues(t *testing.T) {

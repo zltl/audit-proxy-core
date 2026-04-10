@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-04-10
+
+### Added — Go Control Plane
+
+#### Workflow Automation (P7.3)
+- Script library with CRUD operations and version tracking (`/api/v2/automation/scripts`)
+- Batch SSH job orchestration with parallel target execution (`/api/v2/automation/jobs`)
+- Job run history with per-target stdout/stderr capture (`/api/v2/automation/runs`)
+- Cron-based job scheduler with automatic background execution
+- CI/CD trigger integration for GitHub Actions, GitLab CI, and Jenkins
+  (`POST /api/v2/automation/jobs/{id}/trigger`)
+- SSH executor with multi-hop jump-chain support, password/key/env/file secret resolution
+- Automation Web UI page with script editor, job builder, and run history table
+  - New files: `internal/api/automation.go`, `internal/api/automation_ssh.go`,
+    `internal/api/automation_test.go`, `web/templates/pages/automation.html`
+
+#### Unified Protocol Gateway (P7.4 / P7.5)
+- Ephemeral local-listener gateway supporting 11 protocol presets:
+  SOCKS5, RDP, VNC, MySQL, PostgreSQL, Redis, Kubernetes API, HTTP, HTTPS, X11, TCP
+- Full RFC 1928 SOCKS5 implementation (no-auth, CONNECT, IPv4/IPv6/domain)
+- Multi-hop jump-chain tunnelling shared with the automation subsystem via
+  reusable `sshClientConnector` (extracted to `internal/api/ssh_transport.go`)
+- Lifecycle REST API: create / list / get / delete gateway proxies
+  (`/api/v2/gateway/proxies`)
+- SCP/SFTP feature detection validated in C data-plane test suite
+  - New files: `internal/api/ssh_transport.go`, `internal/api/gateway.go`,
+    `internal/api/gateway_test.go`
+
+#### Intelligent Insights (P7.6)
+- Command intent classification: maps audited commands to categories
+  (`discovery`, `service-operation`, `database-admin`, `kubernetes-admin`,
+  `destructive-change`) with risk scoring (`/api/v2/insights/command-intents`)
+- Anomaly baseline & deviation detection: per-user behavioural baselines with
+  alerts for rare targets, rare intents, off-pattern hours, and high-risk
+  commands (`/api/v2/insights/anomalies`)
+- Least-privilege recommendations: suggests role narrowing and time-based
+  conditions from observed usage (`/api/v2/insights/recommendations`)
+- Natural-language policy preview: converts free-text access requests into
+  structured policy rules without persisting (`/api/v2/insights/policy-preview`)
+- Audit summary generation: compact digest of audit activity for a given time
+  range (`/api/v2/insights/audit-summary`)
+  - New files: `internal/api/insights_api.go`, `internal/api/insights_api_test.go`
+
+#### Infrastructure
+- Shared SSH client connector with multi-hop jump-chain, key/password auth, env/file
+  secret resolution, and known_hosts verification (`internal/api/ssh_transport.go`)
+- OpenAPI route definitions for all new endpoints (`internal/openapi/routes.go`)
+- Sidebar navigation link for Automation UI
+- Integration of automation scheduler start and gateway Close into server lifecycle
+
+### Changed
+- `internal/api/api.go` — added `automation` and `gateway` state fields, initialised
+  in `New()`, wired into `RegisterRoutes()` and `Close()`
+- `internal/server/server.go` — started automation scheduler on boot; registered
+  `/automation` page route
+- `web/templates/partials/sidebar.html` — added Automation nav entry
+- `docs/api-reference.md` — added Automation, Gateway, and Insights sections
+- `docs/quickstart.md` — added usage examples for new APIs
+
+### Technical Notes
+- All gateway proxies are ephemeral in-memory listeners (not persisted to disk);
+  they survive until explicitly stopped or process restart
+- Insights API uses deterministic regex/heuristic classification, not ML/NLP,
+  which is appropriate for the current operational stage
+- Automation data persists as JSON files under `data_dir`:
+  `automation_scripts.json`, `automation_jobs.json`, `automation_runs.json`
+- Full Go test suite (466+ tests) and C test suite (188+ tests) pass
+
+---
+
 ## [0.3.0] - 2026-03-09
 
 ### Added

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dlp"
 )
 
 // TerminalHandler handles WebSocket connections for the web terminal feature.
@@ -27,17 +29,34 @@ type TerminalHandler struct {
 	RecordingDir string
 	// RecordingBasePath is the HTTP base path used to download terminal recordings.
 	RecordingBasePath string
+	// TransferPolicy evaluates browser terminal upload/download candidates before transfer.
+	TransferPolicy dlp.FileTransferPolicy
+	// TransferApprovalEnabled exposes whether sensitive transfer approvals can be requested.
+	TransferApprovalEnabled bool
+	// ClipboardAuditEnabled exposes whether browser terminal pastes should be audited.
+	ClipboardAuditEnabled bool
 }
 
 // terminalMsg is the JSON message format between browser and server.
 type terminalMsg struct {
-	Type        string `json:"type"`             // "control"
-	Action      string `json:"action,omitempty"` // "connected", "error", "resize", "ping", "pong"
-	Data        string `json:"data,omitempty"`   // optional control payload
-	Cols        int    `json:"cols,omitempty"`   // terminal columns (for resize)
-	Rows        int    `json:"rows,omitempty"`   // terminal rows (for resize)
-	RecordingID string `json:"recording_id,omitempty"`
-	DownloadURL string `json:"download_url,omitempty"`
+	Type                    string                 `json:"type"`             // "control"
+	Action                  string                 `json:"action,omitempty"` // "connected", "error", "resize", "ping", "pong"
+	Data                    string                 `json:"data,omitempty"`   // optional control payload
+	Cols                    int                    `json:"cols,omitempty"`   // terminal columns (for resize)
+	Rows                    int                    `json:"rows,omitempty"`   // terminal rows (for resize)
+	RequestID               string                 `json:"request_id,omitempty"`
+	Direction               string                 `json:"direction,omitempty"`
+	Name                    string                 `json:"name,omitempty"`
+	Path                    string                 `json:"path,omitempty"`
+	Size                    int64                  `json:"size,omitempty"`
+	Allowed                 bool                   `json:"allowed,omitempty"`
+	Reason                  string                 `json:"reason,omitempty"`
+	SensitivePatterns       []dlp.SensitivePattern `json:"sensitive_patterns,omitempty"`
+	SensitiveMaxScanBytes   int64                  `json:"sensitive_max_scan_bytes,omitempty"`
+	TransferApprovalEnabled bool                   `json:"transfer_approval_enabled,omitempty"`
+	ClipboardAuditEnabled   bool                   `json:"clipboard_audit_enabled,omitempty"`
+	RecordingID             string                 `json:"recording_id,omitempty"`
+	DownloadURL             string                 `json:"download_url,omitempty"`
 }
 
 type terminalRecording struct {
@@ -97,13 +116,24 @@ func (h *TerminalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send connection metadata (target host) as initial message.
-	_ = writeTerminalControl(wsConn, terminalMsg{
+	connectedMsg := terminalMsg{
 		Type:        "control",
 		Action:      "connected",
 		Data:        "Connected to " + host + " via SSH Proxy\r\n",
 		RecordingID: recordingID(recording),
 		DownloadURL: recordingDownloadURL(recording),
-	})
+	}
+	if patterns := h.TransferPolicy.SensitivePatterns(); len(patterns) > 0 {
+		connectedMsg.SensitivePatterns = patterns
+		connectedMsg.SensitiveMaxScanBytes = h.TransferPolicy.SensitiveMaxScanBytes()
+	}
+	if h.TransferApprovalEnabled {
+		connectedMsg.TransferApprovalEnabled = true
+	}
+	if h.ClipboardAuditEnabled {
+		connectedMsg.ClipboardAuditEnabled = true
+	}
+	_ = writeTerminalControl(wsConn, connectedMsg)
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
@@ -137,6 +167,18 @@ func (h *TerminalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						log.Printf("terminal: resize %dx%d", msg.Cols, msg.Rows)
 					case "ping":
 						_ = writeTerminalControl(wsConn, terminalMsg{Type: "control", Action: "pong"})
+					case "transfer_check":
+						decision := h.evaluateTransferPolicy(msg)
+						if !decision.Allowed {
+							log.Printf("terminal: blocked %s transfer host=%s name=%q path=%q reason=%q", msg.Direction, host, msg.Name, msg.Path, decision.Reason)
+						}
+						_ = writeTerminalControl(wsConn, terminalMsg{
+							Type:      "control",
+							Action:    "transfer_decision",
+							RequestID: msg.RequestID,
+							Allowed:   decision.Allowed,
+							Reason:    decision.Reason,
+						})
 					}
 					continue
 				}
@@ -178,6 +220,15 @@ func (h *TerminalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	<-done
 	wg.Wait()
+}
+
+func (h *TerminalHandler) evaluateTransferPolicy(msg terminalMsg) dlp.FileTransferDecision {
+	return h.TransferPolicy.Evaluate(dlp.FileTransferMeta{
+		Direction: msg.Direction,
+		Name:      msg.Name,
+		Path:      msg.Path,
+		Size:      msg.Size,
+	})
 }
 
 func (h *TerminalHandler) startRecording(host string) (*terminalRecording, error) {

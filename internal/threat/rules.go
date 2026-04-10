@@ -2,6 +2,7 @@ package threat
 
 import (
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -13,6 +14,7 @@ const (
 	RuleAnomaly   RuleType = "anomaly"   // deviation from baseline
 	RulePattern   RuleType = "pattern"   // regex/keyword match
 	RuleSequence  RuleType = "sequence"  // ordered sequence of events
+	RuleDSL       RuleType = "dsl"       // JSON DSL expression
 )
 
 // Rule describes a single detection rule.
@@ -23,6 +25,7 @@ type Rule struct {
 	Type        RuleType       `json:"type"`
 	Severity    Severity       `json:"severity"`
 	Enabled     bool           `json:"enabled"`
+	Builtin     bool           `json:"builtin,omitempty"`
 	Conditions  RuleConditions `json:"conditions"`
 	compiled    *regexp.Regexp // pre-compiled pattern
 }
@@ -36,6 +39,17 @@ type RuleConditions struct {
 	Field      string        `json:"field,omitempty"`
 	Sequence   []string      `json:"sequence,omitempty"`
 	GroupBy    string        `json:"group_by,omitempty"`
+	Expression *RuleDSLExpr  `json:"expression,omitempty"`
+}
+
+// RuleDSLExpr is a recursive JSON DSL used for custom threat rules.
+type RuleDSLExpr struct {
+	Operator string         `json:"operator"`
+	Field    string         `json:"field,omitempty"`
+	Value    interface{}    `json:"value,omitempty"`
+	Values   []interface{}  `json:"values,omitempty"`
+	Children []*RuleDSLExpr `json:"children,omitempty"`
+	compiled *regexp.Regexp
 }
 
 // Event is the input to the threat detection engine.
@@ -54,6 +68,25 @@ func (r *Rule) compilePattern() {
 		if re, err := regexp.Compile(r.Conditions.Pattern); err == nil {
 			r.compiled = re
 		}
+	}
+	if r.Conditions.Expression != nil {
+		r.Conditions.Expression.compile()
+	}
+}
+
+func (e *RuleDSLExpr) compile() {
+	if e == nil {
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(e.Operator), "regex") {
+		if pattern, ok := e.Value.(string); ok && strings.TrimSpace(pattern) != "" {
+			if re, err := regexp.Compile(pattern); err == nil {
+				e.compiled = re
+			}
+		}
+	}
+	for _, child := range e.Children {
+		child.compile()
 	}
 }
 
@@ -225,6 +258,7 @@ func DefaultRules() []*Rule {
 		},
 	}
 	for _, r := range rules {
+		r.Builtin = true
 		r.compilePattern()
 	}
 	return rules

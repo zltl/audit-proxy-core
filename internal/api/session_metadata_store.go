@@ -627,5 +627,15 @@ func (a *API) Close() error {
 			closeErr = err
 		}
 	}
+	if a.auditQueue != nil {
+		if err := a.auditQueue.Close(); closeErr == nil {
+			closeErr = err
+		}
+	}
+	if a.gateway != nil {
+		if err := a.gateway.Close(); closeErr == nil {
+			closeErr = err
+		}
+	}
 	return closeErr
 }

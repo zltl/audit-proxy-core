@@ -134,6 +134,7 @@ var publicPrefixes = []string{
 	"/api/v3/cli/login/",
 	"/api/v2/threats/ingest",
 	"/api/v3/threats/ingest",
+	"/api/v2/chatops/slack/commands",
 }
 
 // SessionPrincipal is the authenticated user extracted from the session cookie.
@@ -294,6 +295,7 @@ func CSRF(secret string) func(http.Handler) http.Handler {
 				strings.HasPrefix(r.URL.Path, "/api/v3/cli/login/") ||
 				r.URL.Path == "/api/v2/threats/ingest" ||
 				r.URL.Path == "/api/v3/threats/ingest" ||
+				r.URL.Path == "/api/v2/chatops/slack/commands" ||
 				r.URL.Path == "/auth/saml/acs" {
 				next.ServeHTTP(w, r)
 				return

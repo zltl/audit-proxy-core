@@ -102,22 +102,119 @@ func (inv *Inventory) AddFromScan(results []ScanResult) int {
 
 		// New asset.
 		a := &Asset{
-			ID:        key,
-			Host:      r.Host,
-			Port:      r.Port,
-			Name:      fmt.Sprintf("%s:%d", r.Host, r.Port),
+			ID:         key,
+			Host:       r.Host,
+			Port:       r.Port,
+			Name:       fmt.Sprintf("%s:%d", r.Host, r.Port),
 			SSHVersion: r.SSHVersion,
-			HostKey:   r.HostKey,
-			OS:        r.OS,
-			Tags:      make(map[string]string),
-			Status:    "discovered",
-			FirstSeen: now,
-			LastSeen:  now,
+			HostKey:    r.HostKey,
+			OS:         r.OS,
+			Tags:       make(map[string]string),
+			Status:     "discovered",
+			FirstSeen:  now,
+			LastSeen:   now,
 		}
 		inv.assets[key] = a
 		newCount++
 	}
 	return newCount
+}
+
+// UpsertAssets merges externally discovered assets (for example cloud
+// inventories) into the inventory and returns the number of newly added
+// records.
+func (inv *Inventory) UpsertAssets(assets []Asset) int {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+
+	now := time.Now().UTC()
+	newCount := 0
+	for _, incoming := range assets {
+		if strings.TrimSpace(incoming.Host) == "" {
+			continue
+		}
+		if strings.TrimSpace(incoming.ID) == "" {
+			incoming.ID = assetKey(incoming.Host, incoming.Port)
+		}
+		if incoming.Port <= 0 {
+			incoming.Port = 22
+		}
+		if incoming.Name == "" {
+			incoming.Name = fmt.Sprintf("%s:%d", incoming.Host, incoming.Port)
+		}
+		if incoming.Tags == nil {
+			incoming.Tags = make(map[string]string)
+		}
+		if incoming.Status == "" {
+			incoming.Status = "discovered"
+		}
+		if incoming.FirstSeen.IsZero() {
+			incoming.FirstSeen = now
+		}
+		if incoming.LastSeen.IsZero() {
+			incoming.LastSeen = now
+		}
+
+		if existing, ok := inv.assets[incoming.ID]; ok {
+			existing.Host = incoming.Host
+			existing.Port = incoming.Port
+			if incoming.Name != "" {
+				existing.Name = incoming.Name
+			}
+			if incoming.SSHVersion != "" {
+				existing.SSHVersion = incoming.SSHVersion
+			}
+			if incoming.HostKey != "" {
+				existing.HostKey = incoming.HostKey
+			}
+			if incoming.OS != "" {
+				existing.OS = incoming.OS
+			}
+			if existing.Tags == nil {
+				existing.Tags = make(map[string]string)
+			}
+			for k, v := range incoming.Tags {
+				existing.Tags[k] = v
+			}
+			existing.LastSeen = incoming.LastSeen
+			if existing.FirstSeen.IsZero() {
+				existing.FirstSeen = incoming.FirstSeen
+			}
+			if incoming.AutoRegister {
+				existing.AutoRegister = true
+			}
+			if existing.Status != "registered" && incoming.Status != "" {
+				existing.Status = incoming.Status
+			}
+			continue
+		}
+
+		asset := incoming
+		inv.assets[asset.ID] = &asset
+		newCount++
+	}
+	return newCount
+}
+
+// MarkTaggedAssetsOffline marks assets carrying tagKey=tagValue as offline when
+// they are absent from the latest seenIDs set. It returns the affected asset IDs.
+func (inv *Inventory) MarkTaggedAssetsOffline(tagKey, tagValue string, seenIDs map[string]bool) []string {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+
+	var offlined []string
+	for _, asset := range inv.assets {
+		if asset.Tags[tagKey] != tagValue {
+			continue
+		}
+		if seenIDs[asset.ID] || asset.Status == "offline" {
+			continue
+		}
+		asset.Status = "offline"
+		offlined = append(offlined, asset.ID)
+	}
+	sort.Strings(offlined)
+	return offlined
 }
 
 // List returns assets matching the given filter, sorted by ID.

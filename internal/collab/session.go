@@ -26,26 +26,61 @@ type Participant struct {
 	LastActive time.Time       `json:"last_active"`
 }
 
+// SessionAction identifies a privileged collaboration action that may require
+// four-eyes approval before it is executed.
+type SessionAction string
+
+const (
+	SessionActionGrantControl  SessionAction = "grant_control"
+	SessionActionRevokeControl SessionAction = "revoke_control"
+	SessionActionEndSession    SessionAction = "end_session"
+)
+
+// SessionActionApproval tracks a privileged action waiting for a second
+// participant to approve it while both are present.
+type SessionActionApproval struct {
+	ID             string        `json:"id"`
+	SessionID      string        `json:"session_id"`
+	Action         SessionAction `json:"action"`
+	RequestedBy    string        `json:"requested_by"`
+	TargetUsername string        `json:"target_username,omitempty"`
+	Status         string        `json:"status"`
+	RequestedAt    time.Time     `json:"requested_at"`
+	ExpiresAt      time.Time     `json:"expires_at"`
+	Approver       string        `json:"approver,omitempty"`
+	DecidedAt      time.Time     `json:"decided_at,omitempty"`
+}
+
+// SessionOptions captures optional collaboration session behavior.
+type SessionOptions struct {
+	MaxViewers       int
+	AllowControl     bool
+	FourEyesRequired bool
+}
+
 // SharedSession represents a collaborative terminal session.
 type SharedSession struct {
-	ID           string         `json:"id"`
-	SessionID    string         `json:"session_id"`
-	Owner        string         `json:"owner"`
-	Target       string         `json:"target"`
-	CreatedAt    time.Time      `json:"created_at"`
-	Participants []*Participant `json:"participants"`
-	MaxViewers   int            `json:"max_viewers"`
-	AllowControl bool           `json:"allow_control"`
-	Status       string         `json:"status"`
-	mu           sync.RWMutex
-	broadcast    chan []byte
-	subscribers  map[string]chan []byte
+	ID               string         `json:"id"`
+	SessionID        string         `json:"session_id"`
+	Owner            string         `json:"owner"`
+	Target           string         `json:"target"`
+	CreatedAt        time.Time      `json:"created_at"`
+	Participants     []*Participant `json:"participants"`
+	MaxViewers       int            `json:"max_viewers"`
+	AllowControl     bool           `json:"allow_control"`
+	FourEyesRequired bool           `json:"four_eyes_required"`
+	Status           string         `json:"status"`
+	mu               sync.RWMutex
+	broadcast        chan []byte
+	subscribers      map[string]chan []byte
+	approvals        []*SessionActionApproval
 }
 
 // Manager manages all shared sessions.
 type Manager struct {
-	sessions map[string]*SharedSession
-	mu       sync.RWMutex
+	sessions        map[string]*SharedSession
+	approvalTimeout time.Duration
+	mu              sync.RWMutex
 }
 
 func generateID() string {
@@ -57,12 +92,22 @@ func generateID() string {
 // NewManager creates a new collaboration Manager.
 func NewManager() *Manager {
 	return &Manager{
-		sessions: make(map[string]*SharedSession),
+		sessions:        make(map[string]*SharedSession),
+		approvalTimeout: 5 * time.Minute,
 	}
 }
 
 // CreateSession creates a new shared session.
 func (m *Manager) CreateSession(sessionID, owner, target string, maxViewers int, allowControl bool) (*SharedSession, error) {
+	return m.CreateSessionWithOptions(sessionID, owner, target, SessionOptions{
+		MaxViewers:   maxViewers,
+		AllowControl: allowControl,
+	})
+}
+
+// CreateSessionWithOptions creates a new shared session with optional
+// collaboration policy settings.
+func (m *Manager) CreateSessionWithOptions(sessionID, owner, target string, opts SessionOptions) (*SharedSession, error) {
 	if sessionID == "" {
 		return nil, errors.New("session_id is required")
 	}
@@ -80,17 +125,18 @@ func (m *Manager) CreateSession(sessionID, owner, target string, maxViewers int,
 	}
 
 	s := &SharedSession{
-		ID:           generateID(),
-		SessionID:    sessionID,
-		Owner:        owner,
-		Target:       target,
-		CreatedAt:    now,
-		Participants: []*Participant{ownerParticipant},
-		MaxViewers:   maxViewers,
-		AllowControl: allowControl,
-		Status:       "active",
-		broadcast:    make(chan []byte, 256),
-		subscribers:  make(map[string]chan []byte),
+		ID:               generateID(),
+		SessionID:        sessionID,
+		Owner:            owner,
+		Target:           target,
+		CreatedAt:        now,
+		Participants:     []*Participant{ownerParticipant},
+		MaxViewers:       opts.MaxViewers,
+		AllowControl:     opts.AllowControl,
+		FourEyesRequired: opts.FourEyesRequired,
+		Status:           "active",
+		broadcast:        make(chan []byte, 256),
+		subscribers:      make(map[string]chan []byte),
 	}
 
 	ownerCh := make(chan []byte, 256)
@@ -229,18 +275,13 @@ func (m *Manager) EndSession(id string) error {
 	}
 
 	s.mu.Lock()
-	s.Status = "ended"
-	for username, ch := range s.subscribers {
-		delete(s.subscribers, username)
-		select {
-		case <-ch:
-			// already closed
-		default:
-			close(ch)
-		}
-	}
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 
+	if s.FourEyesRequired {
+		return errors.New("four-eyes approval required before ending the session")
+	}
+
+	s.endSessionLocked()
 	return nil
 }
 
@@ -332,25 +373,11 @@ func (m *Manager) GrantControl(sessionID, ownerUsername, targetUsername string) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.Owner != ownerUsername {
-		return errors.New("only the session owner can grant control")
+	if s.FourEyesRequired {
+		return errors.New("four-eyes approval required before granting control")
 	}
 
-	if !s.AllowControl {
-		return errors.New("control sharing is not allowed for this session")
-	}
-
-	for _, p := range s.Participants {
-		if p.Username == targetUsername {
-			if p.Role == RoleOwner {
-				return errors.New("owner already has control")
-			}
-			p.Role = RoleOperator
-			return nil
-		}
-	}
-
-	return errors.New("target user not in session")
+	return s.grantControlLocked(ownerUsername, targetUsername)
 }
 
 // RevokeControl revokes typing control from a participant (owner only).
@@ -363,19 +390,339 @@ func (m *Manager) RevokeControl(sessionID, ownerUsername, targetUsername string)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.FourEyesRequired {
+		return errors.New("four-eyes approval required before revoking control")
+	}
+
+	return s.revokeControlLocked(ownerUsername, targetUsername)
+}
+
+// ListActionApprovals returns all recorded action approvals for a shared
+// session, including approved, denied, and expired requests.
+func (m *Manager) ListActionApprovals(sessionID string) ([]*SessionActionApproval, error) {
+	s, err := m.GetSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.cleanupExpiredApprovalsLocked(time.Now())
+
+	approvals := make([]*SessionActionApproval, 0, len(s.approvals))
+	for _, approval := range s.approvals {
+		approvals = append(approvals, cloneSessionActionApproval(approval))
+	}
+	return approvals, nil
+}
+
+// RequestActionApproval creates or reuses a pending four-eyes approval for a
+// privileged collaboration action.
+func (m *Manager) RequestActionApproval(sessionID, requester string, action SessionAction, targetUsername string) (*SessionActionApproval, error) {
+	s, err := m.GetSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.FourEyesRequired {
+		return nil, errors.New("four-eyes approval is not enabled for this session")
+	}
+
+	now := time.Now()
+	s.cleanupExpiredApprovalsLocked(now)
+
+	if !s.hasParticipantLocked(requester) {
+		return nil, errors.New("requester must be present in the session")
+	}
+	if !s.hasOtherParticipantLocked(requester) {
+		return nil, errors.New("four-eyes requires another participant to be present")
+	}
+	if err := s.validateActionRequestLocked(action, requester, targetUsername); err != nil {
+		return nil, err
+	}
+	if existing := s.findMatchingPendingApprovalLocked(action, requester, targetUsername); existing != nil {
+		return cloneSessionActionApproval(existing), nil
+	}
+
+	approval := &SessionActionApproval{
+		ID:             generateID(),
+		SessionID:      s.ID,
+		Action:         action,
+		RequestedBy:    requester,
+		TargetUsername: targetUsername,
+		Status:         "pending",
+		RequestedAt:    now,
+		ExpiresAt:      now.Add(m.approvalTimeout),
+	}
+	s.approvals = append(s.approvals, approval)
+	return cloneSessionActionApproval(approval), nil
+}
+
+// ApproveAction approves a pending four-eyes action and executes it.
+func (m *Manager) ApproveAction(sessionID, approvalID, approver string) (*SessionActionApproval, error) {
+	s, err := m.GetSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	s.cleanupExpiredApprovalsLocked(now)
+
+	approval := s.findApprovalLocked(approvalID)
+	if approval == nil {
+		return nil, errors.New("approval not found")
+	}
+	if approval.Status != "pending" {
+		return nil, errors.New("approval is not pending")
+	}
+	if approval.RequestedBy == approver {
+		return nil, errors.New("requester cannot decide their own four-eyes action")
+	}
+	if !s.hasParticipantLocked(approver) {
+		return nil, errors.New("approver must be present in the session")
+	}
+	if !s.hasParticipantLocked(approval.RequestedBy) {
+		return nil, errors.New("requester must remain present in the session")
+	}
+	if !s.hasOtherParticipantLocked(approval.RequestedBy) {
+		return nil, errors.New("four-eyes requires another participant to be present")
+	}
+	if err := s.validateActionRequestLocked(approval.Action, approval.RequestedBy, approval.TargetUsername); err != nil {
+		return nil, err
+	}
+
+	approval.Status = "approved"
+	approval.Approver = approver
+	approval.DecidedAt = now
+	if err := s.executeApprovedActionLocked(approval); err != nil {
+		approval.Status = "pending"
+		approval.Approver = ""
+		approval.DecidedAt = time.Time{}
+		return nil, err
+	}
+	return cloneSessionActionApproval(approval), nil
+}
+
+// DenyAction rejects a pending four-eyes action without executing it.
+func (m *Manager) DenyAction(sessionID, approvalID, approver string) (*SessionActionApproval, error) {
+	s, err := m.GetSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	s.cleanupExpiredApprovalsLocked(now)
+
+	approval := s.findApprovalLocked(approvalID)
+	if approval == nil {
+		return nil, errors.New("approval not found")
+	}
+	if approval.Status != "pending" {
+		return nil, errors.New("approval is not pending")
+	}
+	if approval.RequestedBy == approver {
+		return nil, errors.New("requester cannot decide their own four-eyes action")
+	}
+	if !s.hasParticipantLocked(approver) {
+		return nil, errors.New("approver must be present in the session")
+	}
+	if !s.hasParticipantLocked(approval.RequestedBy) {
+		return nil, errors.New("requester must remain present in the session")
+	}
+
+	approval.Status = "denied"
+	approval.Approver = approver
+	approval.DecidedAt = now
+	return cloneSessionActionApproval(approval), nil
+}
+
+func cloneSessionActionApproval(approval *SessionActionApproval) *SessionActionApproval {
+	if approval == nil {
+		return nil
+	}
+	cloned := *approval
+	return &cloned
+}
+
+func (s *SharedSession) hasParticipantLocked(username string) bool {
+	for _, p := range s.Participants {
+		if p.Username == username {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *SharedSession) hasOtherParticipantLocked(username string) bool {
+	for _, p := range s.Participants {
+		if p.Username != username {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *SharedSession) validateGrantControlLocked(ownerUsername, targetUsername string) error {
+	if s.Status != "active" {
+		return errors.New("session is not active")
+	}
+	if s.Owner != ownerUsername {
+		return errors.New("only the session owner can grant control")
+	}
+	if !s.AllowControl {
+		return errors.New("control sharing is not allowed for this session")
+	}
+	for _, p := range s.Participants {
+		if p.Username == targetUsername {
+			if p.Role == RoleOwner {
+				return errors.New("owner already has control")
+			}
+			return nil
+		}
+	}
+	return errors.New("target user not in session")
+}
+
+func (s *SharedSession) grantControlLocked(ownerUsername, targetUsername string) error {
+	if err := s.validateGrantControlLocked(ownerUsername, targetUsername); err != nil {
+		return err
+	}
+	for _, p := range s.Participants {
+		if p.Username == targetUsername {
+			p.Role = RoleOperator
+			return nil
+		}
+	}
+	return errors.New("target user not in session")
+}
+
+func (s *SharedSession) validateRevokeControlLocked(ownerUsername, targetUsername string) error {
+	if s.Status != "active" {
+		return errors.New("session is not active")
+	}
 	if s.Owner != ownerUsername {
 		return errors.New("only the session owner can revoke control")
 	}
-
 	for _, p := range s.Participants {
 		if p.Username == targetUsername {
 			if p.Role == RoleOwner {
 				return errors.New("cannot revoke control from owner")
 			}
+			return nil
+		}
+	}
+	return errors.New("target user not in session")
+}
+
+func (s *SharedSession) revokeControlLocked(ownerUsername, targetUsername string) error {
+	if err := s.validateRevokeControlLocked(ownerUsername, targetUsername); err != nil {
+		return err
+	}
+	for _, p := range s.Participants {
+		if p.Username == targetUsername {
 			p.Role = RoleViewer
 			return nil
 		}
 	}
-
 	return errors.New("target user not in session")
+}
+
+func (s *SharedSession) validateEndSessionLocked(ownerUsername string) error {
+	if s.Status != "active" {
+		return errors.New("session is not active")
+	}
+	if s.Owner != ownerUsername {
+		return errors.New("only the session owner can end the session")
+	}
+	return nil
+}
+
+func (s *SharedSession) endSessionLocked() {
+	now := time.Now()
+	s.Status = "ended"
+	for _, approval := range s.approvals {
+		if approval.Status == "pending" {
+			approval.Status = "expired"
+			approval.DecidedAt = now
+		}
+	}
+	for username, ch := range s.subscribers {
+		delete(s.subscribers, username)
+		select {
+		case <-ch:
+			// already closed
+		default:
+			close(ch)
+		}
+	}
+}
+
+func (s *SharedSession) validateActionRequestLocked(action SessionAction, requester, targetUsername string) error {
+	switch action {
+	case SessionActionGrantControl:
+		return s.validateGrantControlLocked(requester, targetUsername)
+	case SessionActionRevokeControl:
+		return s.validateRevokeControlLocked(requester, targetUsername)
+	case SessionActionEndSession:
+		return s.validateEndSessionLocked(requester)
+	default:
+		return errors.New("unsupported four-eyes action")
+	}
+}
+
+func (s *SharedSession) executeApprovedActionLocked(approval *SessionActionApproval) error {
+	switch approval.Action {
+	case SessionActionGrantControl:
+		return s.grantControlLocked(approval.RequestedBy, approval.TargetUsername)
+	case SessionActionRevokeControl:
+		return s.revokeControlLocked(approval.RequestedBy, approval.TargetUsername)
+	case SessionActionEndSession:
+		if err := s.validateEndSessionLocked(approval.RequestedBy); err != nil {
+			return err
+		}
+		s.endSessionLocked()
+		return nil
+	default:
+		return errors.New("unsupported four-eyes action")
+	}
+}
+
+func (s *SharedSession) findApprovalLocked(approvalID string) *SessionActionApproval {
+	for _, approval := range s.approvals {
+		if approval.ID == approvalID {
+			return approval
+		}
+	}
+	return nil
+}
+
+func (s *SharedSession) findMatchingPendingApprovalLocked(action SessionAction, requester, targetUsername string) *SessionActionApproval {
+	for _, approval := range s.approvals {
+		if approval.Status != "pending" {
+			continue
+		}
+		if approval.Action == action && approval.RequestedBy == requester && approval.TargetUsername == targetUsername {
+			return approval
+		}
+	}
+	return nil
+}
+
+func (s *SharedSession) cleanupExpiredApprovalsLocked(now time.Time) {
+	for _, approval := range s.approvals {
+		if approval.Status == "pending" && now.After(approval.ExpiresAt) {
+			approval.Status = "expired"
+			approval.DecidedAt = now
+		}
+	}
 }

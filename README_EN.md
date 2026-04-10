@@ -1,6 +1,6 @@
 # SSH Proxy Core
 
-High-performance, extensible SSH protocol proxy server core library, implemented in pure C.
+High-performance, extensible SSH protocol proxy platform. C data plane (libssh, ~14,700 LOC) + Go control plane (REST API / Web UI / Automation / Gateway / Insights).
 
 [中文文档](README.md)
 
@@ -19,6 +19,7 @@ High-performance, extensible SSH protocol proxy server core library, implemented
 - [API Reference](#api-reference)
 - [Development](#development)
 - [Deployment](#deployment)
+- [Documentation](#documentation)
 - [License](#license)
 
 ## Features
@@ -70,6 +71,28 @@ High-performance, extensible SSH protocol proxy server core library, implemented
 - **Thread-safe** — pthread mutexes throughout
 - **~14,700 lines of C** — 20 source files, 19 headers, 11 test files
 - **All new features backward compatible** — disabled by default
+
+### Control Plane (Go)
+
+| # | Module | Description |
+|---|--------|-------------|
+| 1 | Web UI | Dashboard, sessions, users, servers, audit viewer |
+| 2 | REST API | Full CRUD with OpenAPI/Swagger at `/api/docs` |
+| 3 | OIDC / SAML SSO | Enterprise single sign-on integration |
+| 4 | SSH CA | Short-lived certificate issuance, auto-rotation |
+| 5 | JIT Access | Just-in-time access requests with multi-level approvals |
+| 6 | Cluster | Multi-node clustering with DNS / K8s / Consul discovery |
+| 7 | Discovery | Auto-import hosts from AWS / Azure / GCP / CMDB / Ansible |
+| 8 | Command Control | Real-time interception and approval of high-risk commands |
+| 9 | Collaboration | Multi-user session sharing, control transfer, in-session chat |
+| 10 | Compliance | Policy engine and compliance reporting |
+| 11 | SIEM | Export to Splunk / Elasticsearch / Syslog |
+| 12 | Threat Detection | Rule-based anomalous behaviour alerting |
+| 13 | **Workflow Automation** | Script library, batch SSH jobs, cron scheduling, CI/CD triggers |
+| 14 | **Protocol Gateway** | SOCKS5 / RDP / VNC / MySQL / PostgreSQL / Redis / K8s / HTTP(S) / X11 tunnels |
+| 15 | **Intelligent Insights** | Command intent classification, anomaly detection, least-privilege recommendations, NL policy preview, audit summaries |
+
+> See [API Reference](docs/api-reference.md) and [Architecture](docs/DESIGN.md) for details.
 
 ## Quick Start
 
@@ -1189,12 +1212,17 @@ docker run -d -p 2222:2222 -p 9090:9090 \
 
 ## Documentation
 
-- [Design Document](docs/DESIGN.md) — Architecture and design decisions
-- [Deployment Guide](docs/DEPLOYMENT.md) — Production deployment instructions
-- [Testing Guide](docs/TESTING.md) — Test suite and manual testing
-- [Contributing](CONTRIBUTING.md) — How to contribute
-- [Security Policy](SECURITY.md) — Vulnerability reporting
-- [Changelog](CHANGELOG.md) — Version history
+| Document | Description |
+|----------|-------------|
+| [Quick Start Guide](docs/quickstart.md) | From installation to first use |
+| [API Reference](docs/api-reference.md) | All REST API endpoints with request/response examples |
+| [Architecture & Design](docs/DESIGN.md) | Dual-plane architecture, module design, data flow |
+| [Deployment Guide](docs/DEPLOYMENT.md) | Production deployment, systemd, Docker, Kubernetes |
+| [Testing Guide](docs/TESTING.md) | C and Go test suites, coverage matrix |
+| [Configuration Example](docs/config.example.ini) | Full configuration file template |
+| [Contributing](CONTRIBUTING.md) | Development guidelines for C and Go components |
+| [Security Policy](SECURITY.md) | Vulnerability reporting |
+| [Changelog](CHANGELOG.md) | Version history |
 
 ## License
 

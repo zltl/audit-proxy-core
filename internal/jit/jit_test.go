@@ -884,17 +884,22 @@ func TestNotifierWebhook(t *testing.T) {
 
 func TestNotifierChannelPayloads(t *testing.T) {
 	type capturedRequest struct {
-		body string
+		body          string
+		authorization string
 	}
 	var (
-		slackReq    capturedRequest
-		dingTalkReq capturedRequest
-		weComReq    capturedRequest
+		slackReq     capturedRequest
+		dingTalkReq  capturedRequest
+		weComReq     capturedRequest
+		teamsReq     capturedRequest
+		pagerDutyReq capturedRequest
+		opsgenieReq  capturedRequest
 	)
 	newServer := func(target *capturedRequest) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			body, _ := io.ReadAll(r.Body)
 			target.body = string(body)
+			target.authorization = r.Header.Get("Authorization")
 			w.WriteHeader(http.StatusOK)
 		}))
 	}
@@ -905,15 +910,30 @@ func TestNotifierChannelPayloads(t *testing.T) {
 	defer dingTalkSrv.Close()
 	weComSrv := newServer(&weComReq)
 	defer weComSrv.Close()
+	teamsSrv := newServer(&teamsReq)
+	defer teamsSrv.Close()
+	pagerDutySrv := newServer(&pagerDutyReq)
+	defer pagerDutySrv.Close()
+	opsgenieSrv := newServer(&opsgenieReq)
+	defer opsgenieSrv.Close()
 
 	n, err := NewNotifier(NotifierConfig{
-		SlackWebhookURL:    slackSrv.URL,
-		DingTalkWebhookURL: dingTalkSrv.URL,
-		WeComWebhookURL:    weComSrv.URL,
+		SlackWebhookURL:     slackSrv.URL,
+		DingTalkWebhookURL:  dingTalkSrv.URL,
+		WeComWebhookURL:     weComSrv.URL,
+		TeamsWebhookURL:     teamsSrv.URL,
+		PagerDutyRoutingKey: "pagerduty-key",
+		OpsgenieAPIURL:      opsgenieSrv.URL,
+		OpsgenieAPIKey:      "opsgenie-key",
 	})
 	if err != nil {
 		t.Fatalf("NewNotifier() error = %v", err)
 	}
+	originalPagerDutyURL := pagerDutyEnqueueURL
+	pagerDutyEnqueueURL = pagerDutySrv.URL
+	defer func() {
+		pagerDutyEnqueueURL = originalPagerDutyURL
+	}()
 
 	event := &JITEvent{
 		Type: "request_created",
@@ -940,6 +960,15 @@ func TestNotifierChannelPayloads(t *testing.T) {
 	}
 	if !strings.Contains(weComReq.body, `"msgtype":"text"`) || !strings.Contains(weComReq.body, `maintenance`) {
 		t.Fatalf("wecom payload = %s", weComReq.body)
+	}
+	if !strings.Contains(teamsReq.body, `"@type":"MessageCard"`) || !strings.Contains(teamsReq.body, `prod-db`) {
+		t.Fatalf("teams payload = %s", teamsReq.body)
+	}
+	if !strings.Contains(pagerDutyReq.body, `"routing_key":"pagerduty-key"`) || !strings.Contains(pagerDutyReq.body, `"severity":"info"`) {
+		t.Fatalf("pagerduty payload = %s", pagerDutyReq.body)
+	}
+	if !strings.Contains(opsgenieReq.body, `"message":"[SSH Proxy] JIT approval requested for prod-db"`) || opsgenieReq.authorization != "GenieKey opsgenie-key" {
+		t.Fatalf("opsgenie request = body:%s auth:%s", opsgenieReq.body, opsgenieReq.authorization)
 	}
 }
 
@@ -999,6 +1028,183 @@ func TestNotifierEmailUsesConfiguredEnvelope(t *testing.T) {
 	}
 	if !strings.Contains(gotMsg, "Actor: admin") {
 		t.Fatalf("email body missing actor: %s", gotMsg)
+	}
+}
+
+func TestNotifierMessagePayloads(t *testing.T) {
+	type capturedRequest struct {
+		body          string
+		authorization string
+	}
+	var (
+		slackReq     capturedRequest
+		dingTalkReq  capturedRequest
+		weComReq     capturedRequest
+		teamsReq     capturedRequest
+		pagerDutyReq capturedRequest
+		opsgenieReq  capturedRequest
+	)
+	newServer := func(target *capturedRequest) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			target.body = string(body)
+			target.authorization = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusOK)
+		}))
+	}
+
+	slackSrv := newServer(&slackReq)
+	defer slackSrv.Close()
+	dingTalkSrv := newServer(&dingTalkReq)
+	defer dingTalkSrv.Close()
+	weComSrv := newServer(&weComReq)
+	defer weComSrv.Close()
+	teamsSrv := newServer(&teamsReq)
+	defer teamsSrv.Close()
+	pagerDutySrv := newServer(&pagerDutyReq)
+	defer pagerDutySrv.Close()
+	opsgenieSrv := newServer(&opsgenieReq)
+	defer opsgenieSrv.Close()
+
+	n, err := NewNotifier(NotifierConfig{
+		SlackWebhookURL:     slackSrv.URL,
+		DingTalkWebhookURL:  dingTalkSrv.URL,
+		WeComWebhookURL:     weComSrv.URL,
+		TeamsWebhookURL:     teamsSrv.URL,
+		PagerDutyRoutingKey: "pagerduty-key",
+		OpsgenieAPIURL:      opsgenieSrv.URL,
+		OpsgenieAPIKey:      "opsgenie-key",
+	})
+	if err != nil {
+		t.Fatalf("NewNotifier() error = %v", err)
+	}
+	originalPagerDutyURL := pagerDutyEnqueueURL
+	pagerDutyEnqueueURL = pagerDutySrv.URL
+	defer func() {
+		pagerDutyEnqueueURL = originalPagerDutyURL
+	}()
+
+	if err := n.NotifyMessage(context.Background(), "[SSH Proxy] Threat response", "Blocked 203.0.113.7 and terminated sessions."); err != nil {
+		t.Fatalf("NotifyMessage() error = %v", err)
+	}
+
+	if !strings.Contains(slackReq.body, `Blocked 203.0.113.7`) {
+		t.Fatalf("slack payload = %s", slackReq.body)
+	}
+	if !strings.Contains(dingTalkReq.body, `"msgtype":"text"`) || !strings.Contains(dingTalkReq.body, `terminated sessions`) {
+		t.Fatalf("dingtalk payload = %s", dingTalkReq.body)
+	}
+	if !strings.Contains(weComReq.body, `"msgtype":"text"`) || !strings.Contains(weComReq.body, `Blocked 203.0.113.7`) {
+		t.Fatalf("wecom payload = %s", weComReq.body)
+	}
+	if !strings.Contains(teamsReq.body, `"@type":"MessageCard"`) || !strings.Contains(teamsReq.body, `terminated sessions`) {
+		t.Fatalf("teams payload = %s", teamsReq.body)
+	}
+	if !strings.Contains(pagerDutyReq.body, `"routing_key":"pagerduty-key"`) || !strings.Contains(pagerDutyReq.body, `"severity":"warning"`) {
+		t.Fatalf("pagerduty payload = %s", pagerDutyReq.body)
+	}
+	if !strings.Contains(opsgenieReq.body, `"message":"[SSH Proxy] Threat response"`) || opsgenieReq.authorization != "GenieKey opsgenie-key" {
+		t.Fatalf("opsgenie request = body:%s auth:%s", opsgenieReq.body, opsgenieReq.authorization)
+	}
+}
+
+func TestNotifierMessageEmailUsesProvidedSubject(t *testing.T) {
+	n, err := NewNotifier(NotifierConfig{
+		SMTPAddr:  "mail.example.com:587",
+		EmailFrom: "proxy@example.com",
+		EmailTo:   "ops@example.com,security@example.com",
+	})
+	if err != nil {
+		t.Fatalf("NewNotifier() error = %v", err)
+	}
+
+	var gotMsg string
+	n.sendMail = func(_ string, _ smtp.Auth, _ string, _ []string, msg []byte) error {
+		gotMsg = string(msg)
+		return nil
+	}
+
+	if err := n.NotifyMessage(context.Background(), "[SSH Proxy] Threat response", "Blocked 203.0.113.7 and terminated sessions."); err != nil {
+		t.Fatalf("NotifyMessage() error = %v", err)
+	}
+
+	if !strings.Contains(gotMsg, "Subject: [SSH Proxy] Threat response") {
+		t.Fatalf("email subject/message = %s", gotMsg)
+	}
+	if !strings.Contains(gotMsg, "Blocked 203.0.113.7 and terminated sessions.") {
+		t.Fatalf("email body missing message: %s", gotMsg)
+	}
+}
+
+func TestNotifierCustomEventTemplates(t *testing.T) {
+	n, err := NewNotifier(NotifierConfig{
+		SMTPAddr:        "mail.example.com:587",
+		EmailFrom:       "proxy@example.com",
+		EmailTo:         "ops@example.com",
+		SubjectTemplate: "JIT {{.Request.Target}} {{.Event.Type}}",
+		BodyTemplate:    "Requester={{.Request.Requester}} Actor={{.Event.Actor}}",
+	})
+	if err != nil {
+		t.Fatalf("NewNotifier() error = %v", err)
+	}
+
+	var gotMsg string
+	n.sendMail = func(_ string, _ smtp.Auth, _ string, _ []string, msg []byte) error {
+		gotMsg = string(msg)
+		return nil
+	}
+
+	event := &JITEvent{
+		Type: "request_approved",
+		Request: &AccessRequest{
+			ID:        "req-1",
+			Requester: "alice",
+			Target:    "prod-db",
+			Role:      "operator",
+			Status:    StatusApproved,
+			Duration:  time.Hour,
+		},
+		Actor: "admin",
+	}
+	if err := n.Notify(context.Background(), event); err != nil {
+		t.Fatalf("Notify() error = %v", err)
+	}
+
+	if !strings.Contains(gotMsg, "Subject: JIT prod-db request_approved") {
+		t.Fatalf("custom event subject/message = %s", gotMsg)
+	}
+	if !strings.Contains(gotMsg, "Requester=alice Actor=admin") {
+		t.Fatalf("custom event body/message = %s", gotMsg)
+	}
+}
+
+func TestNotifierCustomMessageTemplates(t *testing.T) {
+	n, err := NewNotifier(NotifierConfig{
+		SMTPAddr:               "mail.example.com:587",
+		EmailFrom:              "proxy@example.com",
+		EmailTo:                "ops@example.com",
+		MessageSubjectTemplate: "MSG {{.Message.Subject}}",
+		MessageBodyTemplate:    "BODY {{.Message.Body}}",
+	})
+	if err != nil {
+		t.Fatalf("NewNotifier() error = %v", err)
+	}
+
+	var gotMsg string
+	n.sendMail = func(_ string, _ smtp.Auth, _ string, _ []string, msg []byte) error {
+		gotMsg = string(msg)
+		return nil
+	}
+
+	if err := n.NotifyMessage(context.Background(), "[SSH Proxy] Threat response", "Blocked 203.0.113.7 and terminated sessions."); err != nil {
+		t.Fatalf("NotifyMessage() error = %v", err)
+	}
+
+	if !strings.Contains(gotMsg, "Subject: MSG [SSH Proxy] Threat response") {
+		t.Fatalf("custom message subject/message = %s", gotMsg)
+	}
+	if !strings.Contains(gotMsg, "BODY Blocked 203.0.113.7 and terminated sessions.") {
+		t.Fatalf("custom message body/message = %s", gotMsg)
 	}
 }
 

@@ -26,7 +26,7 @@ func newRecordingObjectStore(cfg *Config) *recordingObjectStore {
 		return nil
 	}
 
-	endpoint, secure, err := parseRecordingObjectStorageEndpoint(
+	endpoint, secure, err := parseObjectStorageEndpoint(
 		cfg.RecordingObjectStorageEndpoint,
 		cfg.RecordingObjectStorageUseSSL,
 	)
@@ -35,12 +35,13 @@ func newRecordingObjectStore(cfg *Config) *recordingObjectStore {
 		return nil
 	}
 
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:        credentials.NewStaticV4(cfg.RecordingObjectStorageAccessKey, cfg.RecordingObjectStorageSecretKey, ""),
-		Secure:       secure,
-		Region:       strings.TrimSpace(cfg.RecordingObjectStorageRegion),
-		BucketLookup: minio.BucketLookupPath,
-	})
+	client, err := newObjectStorageClient(
+		endpoint,
+		cfg.RecordingObjectStorageAccessKey,
+		cfg.RecordingObjectStorageSecretKey,
+		cfg.RecordingObjectStorageRegion,
+		secure,
+	)
 	if err != nil {
 		log.Printf("api: disable recording object storage: %v", err)
 		return nil
@@ -53,7 +54,7 @@ func newRecordingObjectStore(cfg *Config) *recordingObjectStore {
 	}
 }
 
-func parseRecordingObjectStorageEndpoint(endpoint string, secure bool) (string, bool, error) {
+func parseObjectStorageEndpoint(endpoint string, secure bool) (string, bool, error) {
 	endpoint = strings.TrimSpace(endpoint)
 	if endpoint == "" {
 		return "", false, errors.New("missing object storage endpoint")
@@ -74,6 +75,15 @@ func parseRecordingObjectStorageEndpoint(endpoint string, secure bool) (string, 
 		return "", false, errors.New("empty object storage endpoint")
 	}
 	return endpoint, secure, nil
+}
+
+func newObjectStorageClient(endpoint, accessKey, secretKey, region string, secure bool) (*minio.Client, error) {
+	return minio.New(endpoint, &minio.Options{
+		Creds:        credentials.NewStaticV4(accessKey, secretKey, ""),
+		Secure:       secure,
+		Region:       strings.TrimSpace(region),
+		BucketLookup: minio.BucketLookupPath,
+	})
 }
 
 func (s *recordingObjectStore) sessionObjectKey(id string) string {
@@ -106,7 +116,7 @@ func (s *recordingObjectStore) needsUploadSession(ctx context.Context, sessionID
 
 	objectInfo, err := s.client.StatObject(ctx, s.bucket, s.sessionObjectKey(sessionID), minio.StatObjectOptions{})
 	if err != nil {
-		if recordingObjectNotFound(err) {
+		if objectStorageNotFound(err) {
 			return true, nil
 		}
 		return false, err
@@ -165,7 +175,7 @@ func (s *recordingObjectStore) openSessionRecording(ctx context.Context, session
 	return object, pathpkg.Base(key), nil
 }
 
-func recordingObjectNotFound(err error) bool {
+func objectStorageNotFound(err error) bool {
 	if err == nil {
 		return false
 	}

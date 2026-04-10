@@ -313,6 +313,87 @@ func TestRevokeControlFromOwner(t *testing.T) {
 	}
 }
 
+func TestFourEyesGrantControlApprovalFlow(t *testing.T) {
+	m := NewManager()
+	s, err := m.CreateSessionWithOptions("sess-1", "alice", "server-1", SessionOptions{
+		MaxViewers:       5,
+		AllowControl:     true,
+		FourEyesRequired: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := m.JoinSession(s.ID, "bob", RoleViewer); err != nil {
+		t.Fatalf("join error: %v", err)
+	}
+
+	if err := m.GrantControl(s.ID, "alice", "bob"); err == nil {
+		t.Fatal("expected direct grant to require four-eyes approval")
+	}
+
+	approval, err := m.RequestActionApproval(s.ID, "alice", SessionActionGrantControl, "bob")
+	if err != nil {
+		t.Fatalf("request approval error: %v", err)
+	}
+	if approval.Status != "pending" {
+		t.Fatalf("expected pending approval, got %+v", approval)
+	}
+
+	if _, err := m.ApproveAction(s.ID, approval.ID, "alice"); err == nil {
+		t.Fatal("expected requester self-approval to be rejected")
+	}
+
+	approved, err := m.ApproveAction(s.ID, approval.ID, "bob")
+	if err != nil {
+		t.Fatalf("approve action error: %v", err)
+	}
+	if approved.Status != "approved" || approved.Approver != "bob" {
+		t.Fatalf("unexpected approved action: %+v", approved)
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var bobRole ParticipantRole
+	for _, p := range s.Participants {
+		if p.Username == "bob" {
+			bobRole = p.Role
+		}
+	}
+	if bobRole != RoleOperator {
+		t.Fatalf("expected bob to be operator, got %s", bobRole)
+	}
+}
+
+func TestFourEyesApprovalRequiresSecondParticipantPresence(t *testing.T) {
+	m := NewManager()
+	s, err := m.CreateSessionWithOptions("sess-1", "alice", "server-1", SessionOptions{
+		MaxViewers:       5,
+		AllowControl:     true,
+		FourEyesRequired: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := m.RequestActionApproval(s.ID, "alice", SessionActionEndSession, ""); err == nil {
+		t.Fatal("expected approval request to fail without a second participant")
+	}
+
+	if err := m.JoinSession(s.ID, "bob", RoleViewer); err != nil {
+		t.Fatalf("join error: %v", err)
+	}
+	approval, err := m.RequestActionApproval(s.ID, "alice", SessionActionEndSession, "")
+	if err != nil {
+		t.Fatalf("request approval error: %v", err)
+	}
+	if err := m.LeaveSession(s.ID, "bob"); err != nil {
+		t.Fatalf("leave error: %v", err)
+	}
+	if _, err := m.ApproveAction(s.ID, approval.ID, "bob"); err == nil {
+		t.Fatal("expected approval to fail once the second participant leaves")
+	}
+}
+
 func TestViewerCannotTypeWithoutGrant(t *testing.T) {
 	m := NewManager()
 	s, _ := m.CreateSession("sess-1", "alice", "server-1", 5, true)

@@ -1,0 +1,377 @@
+{{template "base" .}}
+
+{{define "title"}}Automation{{end}}
+
+{{define "page-title"}}Automation{{end}}
+
+{{define "content"}}
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon blue">📜</div>
+        <div class="stat-info">
+            <div class="stat-label">Scripts</div>
+            <div class="stat-value" id="automation-script-count">—</div>
+            <div class="stat-sub">Predefined script library</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon green">⏱️</div>
+        <div class="stat-info">
+            <div class="stat-label">Enabled Jobs</div>
+            <div class="stat-value" id="automation-job-count">—</div>
+            <div class="stat-sub">Scheduled or CI-triggerable</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon amber">🖧</div>
+        <div class="stat-info">
+            <div class="stat-label">Managed Servers</div>
+            <div class="stat-value" id="automation-server-count">—</div>
+            <div class="stat-sub">Batch execution targets</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon red">📦</div>
+        <div class="stat-info">
+            <div class="stat-label">Recent Runs</div>
+            <div class="stat-value" id="automation-run-count">—</div>
+            <div class="stat-sub">Collected execution summaries</div>
+        </div>
+    </div>
+</div>
+
+<div class="grid grid-2" style="margin-top:24px;">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Script Library</h3>
+        </div>
+        <div class="card-body">
+            <form id="automation-script-form">
+                <div class="form-group">
+                    <label class="form-label">Name</label>
+                    <input type="text" class="form-control" id="automation-script-name" placeholder="Restart nginx">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Interpreter</label>
+                    <input type="text" class="form-control" id="automation-script-shell" value="/bin/sh" placeholder="/bin/bash">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Body</label>
+                    <textarea class="form-control" id="automation-script-body" rows="8" placeholder="echo hello"></textarea>
+                </div>
+                <button type="button" class="btn btn-primary" onclick="createAutomationScript()">Save Script</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Automation Job</h3>
+        </div>
+        <div class="card-body">
+            <form id="automation-job-form">
+                <div class="form-group">
+                    <label class="form-label">Name</label>
+                    <input type="text" class="form-control" id="automation-job-name" placeholder="Nightly inventory">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Command</label>
+                    <input type="text" class="form-control" id="automation-job-command" placeholder="hostname && uptime">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Script</label>
+                    <select class="form-control" id="automation-job-script">
+                        <option value="">Use inline command</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Servers</label>
+                        <select class="form-control" id="automation-job-servers" multiple size="5"></select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Schedule</label>
+                        <input type="text" class="form-control" id="automation-job-schedule" placeholder="30m">
+                        <div class="form-hint">Leave empty for manual-only execution.</div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Username</label>
+                        <input type="text" class="form-control" id="automation-job-username" placeholder="ops">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Password / Secret Ref</label>
+                        <input type="text" class="form-control" id="automation-job-password" placeholder="${env:OPS_SSH_PASSWORD}">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Known Hosts</label>
+                        <input type="text" class="form-control" id="automation-job-known-hosts" placeholder="/etc/ssh/ssh_known_hosts">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Trigger Providers</label>
+                        <input type="text" class="form-control" id="automation-job-providers" placeholder="github-actions,gitlab-ci,jenkins">
+                    </div>
+                </div>
+                <label class="checkbox-inline">
+                    <input type="checkbox" id="automation-job-enabled" checked> Enable scheduled job
+                </label>
+                <label class="checkbox-inline" style="margin-left:16px;">
+                    <input type="checkbox" id="automation-job-insecure-hostkey"> Skip host key verification
+                </label>
+                <div style="margin-top:16px;">
+                    <button type="button" class="btn btn-primary" onclick="createAutomationJob()">Save Job</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="card" style="margin-top:24px;">
+    <div class="card-header">
+        <h3 class="card-title">Jobs</h3>
+    </div>
+    <div class="table-wrapper">
+        <table id="automation-jobs-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Targets</th>
+                    <th>Schedule</th>
+                    <th>Providers</th>
+                    <th>Last Run</th>
+                    <th>Status</th>
+                    <th class="col-actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="automation-jobs-body"></tbody>
+        </table>
+    </div>
+</div>
+
+<div class="grid grid-2" style="margin-top:24px;">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Scripts</h3>
+        </div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Interpreter</th>
+                        <th>Updated</th>
+                    </tr>
+                </thead>
+                <tbody id="automation-scripts-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Recent Runs</h3>
+        </div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Job</th>
+                        <th>Trigger</th>
+                        <th>Summary</th>
+                        <th>Started</th>
+                    </tr>
+                </thead>
+                <tbody id="automation-runs-body"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+(function() {
+    var automationScripts = [];
+    var automationJobs = [];
+    var automationRuns = [];
+    var automationServers = [];
+
+    function renderCounts() {
+        document.getElementById('automation-script-count').textContent = automationScripts.length;
+        document.getElementById('automation-job-count').textContent = automationJobs.filter(function(job) { return job.enabled; }).length;
+        document.getElementById('automation-server-count').textContent = automationServers.length;
+        document.getElementById('automation-run-count').textContent = automationRuns.length;
+    }
+
+    function formatTime(value) {
+        if (!value) return '—';
+        try {
+            return new Date(value).toLocaleString();
+        } catch (_) {
+            return value;
+        }
+    }
+
+    function escape(value) {
+        return App.escapeHtml(value == null ? '' : String(value));
+    }
+
+    function selectedServerIds() {
+        return Array.from(document.getElementById('automation-job-servers').selectedOptions).map(function(option) {
+            return option.value;
+        });
+    }
+
+    function populateScriptOptions() {
+        var select = document.getElementById('automation-job-script');
+        select.innerHTML = '<option value="">Use inline command</option>';
+        automationScripts.forEach(function(script) {
+            select.innerHTML += '<option value="' + escape(script.id) + '">' + escape(script.name) + '</option>';
+        });
+    }
+
+    function populateServerOptions() {
+        var select = document.getElementById('automation-job-servers');
+        select.innerHTML = '';
+        automationServers.forEach(function(server) {
+            var label = server.name || server.host;
+            select.innerHTML += '<option value="' + escape(server.id) + '">' + escape(label) + ' (' + escape(server.host) + ')</option>';
+        });
+    }
+
+    function renderScripts() {
+        var body = document.getElementById('automation-scripts-body');
+        if (!automationScripts.length) {
+            body.innerHTML = '<tr><td colspan="3" class="text-muted">No scripts yet</td></tr>';
+            return;
+        }
+        body.innerHTML = automationScripts.map(function(script) {
+            return '<tr>' +
+                '<td>' + escape(script.name) + '</td>' +
+                '<td>' + escape(script.shell || '/bin/sh') + '</td>' +
+                '<td>' + escape(formatTime(script.updated_at)) + '</td>' +
+                '</tr>';
+        }).join('');
+    }
+
+    function renderJobs() {
+        var body = document.getElementById('automation-jobs-body');
+        if (!automationJobs.length) {
+            body.innerHTML = '<tr><td colspan="7" class="text-muted">No jobs configured</td></tr>';
+            return;
+        }
+        body.innerHTML = automationJobs.map(function(job) {
+            var providers = (job.trigger_providers || []).join(', ') || 'Any';
+            var targetCount = (job.server_ids || []).length + (job.targets || []).length;
+            return '<tr data-id="' + escape(job.id) + '">' +
+                '<td>' + escape(job.name) + '</td>' +
+                '<td>' + escape(targetCount) + '</td>' +
+                '<td>' + escape(job.schedule || 'manual') + '</td>' +
+                '<td>' + escape(providers) + '</td>' +
+                '<td>' + escape(formatTime(job.last_run_at)) + '</td>' +
+                '<td><span class="badge badge-' + (job.last_status === 'completed' ? 'success' : (job.last_status === 'partial' ? 'warning' : 'secondary')) + '">' + escape(job.last_status || 'idle') + '</span></td>' +
+                '<td><button class="btn btn-primary btn-sm" onclick="runAutomationJob(\'' + escape(job.id) + '\')">Run</button></td>' +
+                '</tr>';
+        }).join('');
+    }
+
+    function renderRuns() {
+        var body = document.getElementById('automation-runs-body');
+        if (!automationRuns.length) {
+            body.innerHTML = '<tr><td colspan="4" class="text-muted">No runs yet</td></tr>';
+            return;
+        }
+        body.innerHTML = automationRuns.map(function(run) {
+            return '<tr>' +
+                '<td>' + escape(run.job_name) + '</td>' +
+                '<td>' + escape(run.trigger) + '</td>' +
+                '<td>' + escape(run.summary || run.status) + '</td>' +
+                '<td>' + escape(formatTime(run.started_at)) + '</td>' +
+                '</tr>';
+        }).join('');
+    }
+
+    async function refreshAutomation() {
+        try {
+            var scriptPage = await App.apiPage('GET', '/api/v2/automation/scripts?per_page=200');
+            var jobPage = await App.apiPage('GET', '/api/v2/automation/jobs?per_page=200');
+            var runPage = await App.apiPage('GET', '/api/v2/automation/runs?per_page=50');
+            var serverPage = await App.apiPage('GET', '/api/v2/servers?per_page=200');
+            automationScripts = scriptPage.items || [];
+            automationJobs = jobPage.items || [];
+            automationRuns = runPage.items || [];
+            automationServers = serverPage.items || [];
+            populateScriptOptions();
+            populateServerOptions();
+            renderScripts();
+            renderJobs();
+            renderRuns();
+            renderCounts();
+        } catch (err) {
+            App.notify(err.message || 'Failed to load automation data', 'error');
+        }
+    }
+
+    window.createAutomationScript = async function() {
+        try {
+            await App.api('POST', '/api/v2/automation/scripts', {
+                name: document.getElementById('automation-script-name').value,
+                shell: document.getElementById('automation-script-shell').value,
+                body: document.getElementById('automation-script-body').value
+            });
+            document.getElementById('automation-script-form').reset();
+            document.getElementById('automation-script-shell').value = '/bin/sh';
+            App.notify('Automation script saved', 'success');
+            refreshAutomation();
+        } catch (err) {
+            App.notify(err.message || 'Failed to save script', 'error');
+        }
+    };
+
+    window.createAutomationJob = async function() {
+        try {
+            var providers = document.getElementById('automation-job-providers').value.split(',').map(function(item) {
+                return item.trim();
+            }).filter(Boolean);
+            var payload = {
+                name: document.getElementById('automation-job-name').value,
+                command: document.getElementById('automation-job-command').value,
+                script_id: document.getElementById('automation-job-script').value || '',
+                server_ids: selectedServerIds(),
+                username: document.getElementById('automation-job-username').value,
+                password: document.getElementById('automation-job-password').value,
+                schedule: document.getElementById('automation-job-schedule').value,
+                known_hosts_path: document.getElementById('automation-job-known-hosts').value,
+                trigger_providers: providers,
+                enabled: document.getElementById('automation-job-enabled').checked,
+                insecure_skip_host_key_verify: document.getElementById('automation-job-insecure-hostkey').checked
+            };
+            await App.api('POST', '/api/v2/automation/jobs', payload);
+            document.getElementById('automation-job-form').reset();
+            document.getElementById('automation-job-enabled').checked = true;
+            App.notify('Automation job saved', 'success');
+            refreshAutomation();
+        } catch (err) {
+            App.notify(err.message || 'Failed to save automation job', 'error');
+        }
+    };
+
+    window.runAutomationJob = async function(id) {
+        try {
+            var res = await App.apiData('POST', '/api/v2/automation/jobs/' + encodeURIComponent(id) + '/run', {
+                trigger: 'web-ui'
+            });
+            App.notify(res.summary || 'Automation job finished', res.status === 'completed' ? 'success' : 'warning');
+            refreshAutomation();
+        } catch (err) {
+            App.notify(err.message || 'Failed to run automation job', 'error');
+        }
+    };
+
+    refreshAutomation();
+})();
+</script>
+{{end}}

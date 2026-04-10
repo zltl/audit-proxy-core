@@ -19,37 +19,58 @@ import (
 
 // Config holds API-specific configuration.
 type Config struct {
-	AdminUser                       string
-	AdminPassHash                   string
-	SessionSecret                   string
-	AuditLogDir                     string
-	RecordingDir                    string
-	RecordingObjectStorageEnabled   bool
-	RecordingObjectStorageEndpoint  string
-	RecordingObjectStorageBucket    string
-	RecordingObjectStorageAccessKey string
-	RecordingObjectStorageSecretKey string
-	RecordingObjectStorageRegion    string
-	RecordingObjectStoragePrefix    string
-	RecordingObjectStorageUseSSL    bool
-	DataDir                         string // directory for users.json etc.
-	ConfigFile                      string // path to config.ini
-	ConfigVerDir                    string // directory for config version history
-	ConfigApprovalEnabled           bool
-	ConfigStoreBackend              string // file or postgres for centralized config + versions
-	UserStoreBackend                string // file or postgres for /api/v2/users persistence
-	PostgresDriver                  string // internal/testing override; defaults to pgx
-	PostgresDatabaseURL             string // DSN used when a *_backend is postgres
-	PostgresReadDatabaseURLs        string // comma-separated read-replica DSNs for config/user reads
-	AuditStoreBackend               string // file, postgres, or timescaledb for audit event indexing
-	AuditStoreDriver                string // internal/testing override; defaults to pgx
-	AuditStoreDatabaseURL           string // optional dedicated DSN for audit storage
-	AuditStoreReadDatabaseURLs      string // comma-separated read-replica DSNs for audit queries
-	DatabaseMaxOpenConns            int
-	DatabaseMaxIdleConns            int
-	DatabaseConnMaxLifetime         string
-	DatabaseConnMaxIdleTime         string
-	DatabaseReadAfterWriteWindow    string
+	AdminUser                          string
+	AdminPassHash                      string
+	SessionSecret                      string
+	AuditLogDir                        string
+	RecordingDir                       string
+	RecordingObjectStorageEnabled      bool
+	RecordingObjectStorageEndpoint     string
+	RecordingObjectStorageBucket       string
+	RecordingObjectStorageAccessKey    string
+	RecordingObjectStorageSecretKey    string
+	RecordingObjectStorageRegion       string
+	RecordingObjectStoragePrefix       string
+	RecordingObjectStorageUseSSL       bool
+	AuditArchiveObjectStorageEnabled   bool
+	AuditArchiveObjectStorageEndpoint  string
+	AuditArchiveObjectStorageBucket    string
+	AuditArchiveObjectStorageAccessKey string
+	AuditArchiveObjectStorageSecretKey string
+	AuditArchiveObjectStorageRegion    string
+	AuditArchiveObjectStoragePrefix    string
+	AuditArchiveObjectStorageUseSSL    bool
+	DataDir                            string // directory for users.json etc.
+	ConfigFile                         string // path to config.ini
+	ConfigVerDir                       string // directory for config version history
+	ConfigApprovalEnabled              bool
+	ConfigStoreBackend                 string // file or postgres for centralized config + versions
+	UserStoreBackend                   string // file or postgres for /api/v2/users persistence
+	PostgresDriver                     string // internal/testing override; defaults to pgx
+	PostgresDatabaseURL                string // DSN used when a *_backend is postgres
+	PostgresReadDatabaseURLs           string // comma-separated read-replica DSNs for config/user reads
+	AuditStoreBackend                  string // file, postgres, timescaledb, elasticsearch, or opensearch for audit event indexing
+	AuditStoreDriver                   string // internal/testing override; defaults to pgx
+	AuditStoreDatabaseURL              string // optional dedicated DSN for audit storage
+	AuditStoreReadDatabaseURLs         string // comma-separated read-replica DSNs for audit queries
+	AuditStoreEndpoint                 string // Elasticsearch/OpenSearch base URL
+	AuditStoreToken                    string // optional bearer token for Elasticsearch/OpenSearch
+	AuditStoreUsername                 string // optional basic-auth username for Elasticsearch/OpenSearch
+	AuditStorePassword                 string // optional basic-auth password for Elasticsearch/OpenSearch
+	AuditStoreIndex                    string // Elasticsearch/OpenSearch index name
+	AuditStoreInsecureTLS              bool
+	AuditQueueBackend                  string // kafka or rabbitmq for audit event forwarding
+	AuditQueueEndpoint                 string // kafka broker list or rabbitmq amqp(s) URL
+	AuditQueueTopic                    string // kafka topic
+	AuditQueueExchange                 string // rabbitmq exchange
+	AuditQueueRoutingKey               string // rabbitmq routing key
+	DatabaseMaxOpenConns               int
+	DatabaseMaxIdleConns               int
+	DatabaseConnMaxLifetime            string
+	DatabaseConnMaxIdleTime            string
+	DatabaseReadAfterWriteWindow       string
+	DLPClipboardAuditEnabled           bool
+	JITChatOpsSlackSigningSecret       string
 }
 
 // DataPlaneClient defines the interface for communicating with the C data plane.
@@ -67,35 +88,44 @@ type DataPlaneClient interface {
 
 // API is the REST API v2 handler group.
 type API struct {
-	dp                DataPlaneClient
-	config            *Config
-	users             *userStore
-	servers           *serverStore
-	jitStore          *jit.Store
-	configChanges     *ConfigChangeStore
-	configStore       *configStore
-	storageDB         *sqlStorage
-	auditStore        *auditSQLStore
-	sessionMetadata   *sessionMetadataStore
-	ca                *sshca.CA
-	cluster           *cluster.Manager
-	threat            *threat.Detector
-	compliance        *complianceState
-	siemState         *siemState
-	discovery         *discoveryState
-	collab            *collab.Manager
-	collabMu          sync.RWMutex
-	collabChats       map[string]*collab.ChatRoom
-	collabRecordings  map[string]*collab.Recorder
-	cmdCtrl           *cmdCtrlState
-	sessionSyncMu     sync.Mutex
-	sessionSyncOnce   sync.Once
-	sessionSyncBg     atomic.Bool
-	auditSyncMu       sync.Mutex
-	auditSyncOnce     sync.Once
-	auditSyncBg       atomic.Bool
-	recordingStore    *recordingObjectStore
-	recordingSyncOnce sync.Once
+	dp                 DataPlaneClient
+	config             *Config
+	users              *userStore
+	servers            *serverStore
+	jitStore           *jit.Store
+	transferApprovals  *TransferApprovalStore
+	configChanges      *ConfigChangeStore
+	configStore        *configStore
+	storageDB          *sqlStorage
+	auditStore         auditEventStore
+	sessionMetadata    *sessionMetadataStore
+	ca                 *sshca.CA
+	cluster            *cluster.Manager
+	threat             *threat.Detector
+	compliance         *complianceState
+	siemState          *siemState
+	discovery          *discoveryState
+	automation         *automationState
+	gateway            *gatewayState
+	collab             *collab.Manager
+	collabMu           sync.RWMutex
+	collabChats        map[string]*collab.ChatRoom
+	collabRecordings   map[string]*collab.Recorder
+	cmdCtrl            *cmdCtrlState
+	sessionSyncMu      sync.Mutex
+	sessionSyncOnce    sync.Once
+	sessionSyncBg      atomic.Bool
+	auditSyncMu        sync.Mutex
+	auditSyncOnce      sync.Once
+	auditSyncBg        atomic.Bool
+	auditArchiveStore  *auditArchiveStore
+	auditArchiveOnce   sync.Once
+	auditQueue         *auditQueueForwarder
+	auditQueueMu       sync.Mutex
+	auditQueueOnce     sync.Once
+	recordingStore     *recordingObjectStore
+	recordingSyncOnce  sync.Once
+	threatResponseOnce sync.Once
 }
 
 // userStore holds the in-memory user list backed by a JSON file.
@@ -105,6 +135,12 @@ type userStore struct {
 	path        string
 	sqlStore    *sqlStorage
 	usePostgres bool
+}
+
+type auditEventStore interface {
+	Close() error
+	ListEvents() ([]models.AuditEvent, error)
+	SyncDir(dir string) error
 }
 
 // New creates a new API instance.
@@ -141,7 +177,7 @@ func New(dp DataPlaneClient, cfg *Config) (*API, error) {
 		return nil, fmt.Errorf("api: init users store: %w", err)
 	}
 
-	var auditStore *auditSQLStore
+	var auditStore auditEventStore
 	if cfg != nil && auditStoreUsesSQL(cfg.AuditStoreBackend) {
 		auditDSN := strings.TrimSpace(cfg.AuditStoreDatabaseURL)
 		if auditDSN == "" {
@@ -166,6 +202,14 @@ func New(dp DataPlaneClient, cfg *Config) (*API, error) {
 			}
 			return nil, fmt.Errorf("api: init audit store: %w", err)
 		}
+	} else if cfg != nil && auditStoreUsesSearch(cfg.AuditStoreBackend) {
+		auditStore, err = newAuditSearchStore(cfg)
+		if err != nil {
+			if storage != nil {
+				_ = storage.Close()
+			}
+			return nil, fmt.Errorf("api: init audit store: %w", err)
+		}
 	}
 
 	a := &API{
@@ -177,11 +221,22 @@ func New(dp DataPlaneClient, cfg *Config) (*API, error) {
 			dataFilePath(cfg.DataDir, "config_changes.json"),
 			24*time.Hour,
 		),
-		configStore:     newConfigStore(dataFilePath(cfg.DataDir, "config_store.json")),
-		storageDB:       storage,
-		auditStore:      auditStore,
-		sessionMetadata: newSessionMetadataStore(dataFilePath(cfg.DataDir, "sessions.db")),
-		recordingStore:  newRecordingObjectStore(cfg),
+		configStore:       newConfigStore(dataFilePath(cfg.DataDir, "config_store.json")),
+		storageDB:         storage,
+		auditStore:        auditStore,
+		auditArchiveStore: newAuditArchiveStore(cfg),
+		auditQueue:        nil,
+		sessionMetadata:   newSessionMetadataStore(dataFilePath(cfg.DataDir, "sessions.db")),
+		recordingStore:    newRecordingObjectStore(cfg),
+		automation:        newAutomationState(cfg.DataDir, nil),
+		gateway:           newGatewayState(nil),
+	}
+	if cfg != nil && strings.TrimSpace(cfg.AuditQueueBackend) != "" {
+		a.auditQueue, err = newAuditQueueForwarder(cfg)
+		if err != nil {
+			_ = a.Close()
+			return nil, fmt.Errorf("api: init audit queue forwarder: %w", err)
+		}
 	}
 	if err := a.bootstrapConfigStore(); err != nil {
 		_ = a.Close()
@@ -209,6 +264,15 @@ func storeBackendIsPostgres(raw string) bool {
 func auditStoreUsesSQL(raw string) bool {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "postgres", "postgresql", "timescaledb":
+		return true
+	default:
+		return false
+	}
+}
+
+func auditStoreUsesSearch(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "elastic", "elasticsearch", "opensearch":
 		return true
 	default:
 		return false
@@ -316,6 +380,8 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v2/audit/search", a.handleSearchAudit)
 	mux.HandleFunc("GET /api/v2/audit/export", a.handleExportAudit)
 	mux.HandleFunc("GET /api/v2/audit/stats", a.handleAuditStats)
+	mux.HandleFunc("POST /api/v2/terminal/clipboard-audit", a.handleCreateClipboardAudit)
+	mux.HandleFunc("POST /api/v2/chatops/slack/commands", a.handleSlackChatOpsCommand)
 
 	// Config
 	mux.HandleFunc("GET /api/v2/config", a.handleGetConfig)
@@ -352,4 +418,13 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 
 	// Webhook debug
 	a.RegisterWebhookDebugRoutes(mux)
+
+	// Workflow automation
+	a.RegisterAutomationRoutes(mux)
+
+	// Unified protocol gateway
+	a.RegisterGatewayRoutes(mux)
+
+	// Intelligent insights
+	a.RegisterInsightsRoutes(mux)
 }

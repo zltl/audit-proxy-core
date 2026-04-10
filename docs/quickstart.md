@@ -253,6 +253,13 @@ The Go control-plane reads a separate JSON configuration. Key fields:
   "audit_store_backend": "file",
   "audit_store_database_url": "postgres://sshproxy:change-me@db.example.com:5432/sshproxy?sslmode=require",
   "audit_store_read_database_urls": "postgres://sshproxy:change-me@audit-ro.example.com:5432/sshproxy?sslmode=require",
+  "audit_archive_object_storage_enabled": true,
+  "audit_archive_object_storage_endpoint": "https://minio.example.com",
+  "audit_archive_object_storage_bucket": "ssh-proxy-audit",
+  "audit_archive_object_storage_access_key": "minio-access-key",
+  "audit_archive_object_storage_secret_key": "minio-secret-key",
+  "audit_archive_object_storage_region": "us-east-1",
+  "audit_archive_object_storage_prefix": "audit",
   "recording_dir": "/var/lib/ssh-proxy/recordings",
   "recording_object_storage_enabled": true,
   "recording_object_storage_endpoint": "https://minio.example.com",
@@ -261,6 +268,23 @@ The Go control-plane reads a separate JSON configuration. Key fields:
   "recording_object_storage_secret_key": "minio-secret-key",
   "recording_object_storage_region": "us-east-1",
   "recording_object_storage_prefix": "recordings",
+  "dlp_file_allow_names": "release-*,*.txt",
+  "dlp_file_deny_names": "secret*,*.pem",
+  "dlp_file_allow_extensions": "txt,csv,tar.gz",
+  "dlp_file_deny_extensions": "key,exe",
+  "dlp_file_allow_paths": "uploads/*,downloads/*",
+  "dlp_file_deny_paths": "uploads/secrets/*,downloads/private/*",
+  "dlp_file_max_upload_bytes": 104857600,
+  "dlp_file_max_download_bytes": 104857600,
+  "dlp_sensitive_scan_enabled": true,
+  "dlp_sensitive_detect_credit_card": true,
+  "dlp_sensitive_detect_cn_id_card": true,
+  "dlp_sensitive_detect_api_key": true,
+  "dlp_sensitive_max_scan_bytes": 1048576,
+  "dlp_transfer_approval_enabled": true,
+  "dlp_transfer_approval_roles": "admin,security",
+  "dlp_transfer_approval_timeout": "30m",
+  "dlp_clipboard_audit_enabled": true,
   "geoip_data_file": "/etc/ssh-proxy/geoip.json",
   "saml_enabled": true,
   "saml_root_url": "https://proxy.example.com",
@@ -279,6 +303,20 @@ The Go control-plane reads a separate JSON configuration. Key fields:
   "jit_notify_slack_webhook_url": "https://hooks.slack.com/services/T000/B000/XXX",
   "jit_notify_dingtalk_webhook_url": "https://oapi.dingtalk.com/robot/send?access_token=abc",
   "jit_notify_wecom_webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc",
+  "jit_notify_teams_webhook_url": "https://outlook.office.com/webhook/abc/IncomingWebhook/def/ghi",
+  "jit_notify_pagerduty_routing_key": "pagerduty-routing-key",
+  "jit_notify_opsgenie_api_url": "https://api.opsgenie.com/v2/alerts",
+  "jit_notify_opsgenie_api_key": "opsgenie-api-key",
+  "jit_chatops_slack_signing_secret": "slack-signing-secret",
+  "jit_notify_subject_template": "JIT {{.Request.Target}} {{.Event.Type}}",
+  "jit_notify_body_template": "Requester={{.Request.Requester}} Actor={{.Event.Actor}}",
+  "jit_notify_message_subject_template": "MSG {{.Message.Subject}}",
+  "jit_notify_message_body_template": "BODY {{.Message.Body}}",
+  "threat_response_enabled": true,
+  "threat_response_block_source_ip": true,
+  "threat_response_kill_sessions": true,
+  "threat_response_notify": true,
+  "threat_response_min_severity": "high",
   "cluster_enabled": false
 }
 ```
@@ -326,12 +364,19 @@ but the data-plane still keeps using the local `data_plane_config_file` as its
 materialized runtime config.
 
 When you want the audit center to stop scanning raw files directly and instead
-query a database-backed index, set `audit_store_backend` to `postgres` or
-`timescaledb`. The control-plane keeps writing append-only local audit files
-under `audit_log_dir`, then incrementally mirrors `.jsonl` and data-plane
-`.log` audit records into the SQL store in the background. If
+query an indexed backend, set `audit_store_backend` to `postgres`,
+`timescaledb`, `elasticsearch`, or `opensearch`. The control-plane keeps
+writing append-only local audit files under `audit_log_dir`, then
+incrementally mirrors `.jsonl` and data-plane `.log` audit records into the
+configured index in the background. For SQL backends, if
 `audit_store_database_url` is empty, the audit index reuses
 `postgres_database_url`.
+
+For Elasticsearch/OpenSearch, set `audit_store_endpoint` to the cluster base
+URL and optionally `audit_store_token` or `audit_store_username` +
+`audit_store_password` for auth. `audit_store_index` defaults to
+`ssh-proxy-audit`, and `audit_store_insecure_tls=true` can be used for
+lab/self-signed clusters.
 
 When you have PostgreSQL replicas available, set
 `postgres_read_database_urls` and/or `audit_store_read_database_urls` to a
@@ -342,6 +387,28 @@ writer for `database_read_after_write_window` after each local SQL write.
 Connection pool size and lifetime are controlled with
 `database_max_open_conns`, `database_max_idle_conns`,
 `database_conn_max_lifetime`, and `database_conn_max_idle_time`.
+
+To archive raw audit files into S3/MinIO/OSS-compatible storage, set
+`audit_archive_object_storage_enabled=true` together with the endpoint, bucket,
+and static credentials above. The control-plane keeps writing local `.jsonl`
+and `.log` audit files to `audit_log_dir`, scans that directory every 5
+seconds, and mirrors matching files to
+`<audit_archive_object_storage_prefix>/audit/<filename>`. File-backed
+`/api/v2/audit/*` queries continue to read local files first and automatically
+fall back to archived objects when the local audit file has already been
+rotated away. The endpoint accepts either a full `http(s)://` URL or a plain
+`host:port`, which makes the same config work for AWS S3, MinIO, and
+OSS-compatible gateways.
+
+To forward audit events into Kafka or RabbitMQ, set `audit_queue_backend` to
+`kafka` or `rabbitmq`. For Kafka, `audit_queue_endpoint` is a comma-separated
+broker list and `audit_queue_topic` is required. For RabbitMQ,
+`audit_queue_endpoint` must be an `amqp://` or `amqps://` URL, and
+`audit_queue_exchange` plus `audit_queue_routing_key` are required. The
+control-plane reuses the same append-only audit file mirror pattern as archive
+and indexing: it scans `audit_log_dir` every 5 seconds, publishes only newly
+appended lines, and persists per-file offsets under `data_dir` so a restart
+does not replay the whole audit history.
 
 To run file-backed state migration explicitly before switching traffic, start
 the control-plane in one-shot migration mode:
@@ -517,6 +584,16 @@ failures, and rapid multi-target access into one explainable score, exposes the
 latest results through `GET /api/v2/threats/risk`, and can raise the built-in
 `high_risk_access` alert when multiple factors stack up.
 
+Set `threat_response_enabled=true` to turn new high-severity alerts into
+automatic response actions. The control plane consumes the detector's alert
+stream, can prepend an exact `:deny` rule to `ip_acl_rules`, terminate matching
+active sessions, and reuse the existing `jit_notify_*` SMTP/Slack/DingTalk/WeCom
+delivery sinks to notify administrators. If you only enable
+`threat_response_enabled`, all three actions default on; tune them individually
+with `threat_response_block_source_ip`, `threat_response_kill_sessions`,
+`threat_response_notify`, and raise/lower the trigger threshold with
+`threat_response_min_severity`.
+
 The Settings page also exposes built-in configuration templates for
 `development`, `testing`, and `production`. Selecting one loads a resolved
 preview and then reuses the normal diff, approval, and apply flow instead of
@@ -541,11 +618,22 @@ validated, and encrypted assertions can be decrypted with the same SP key pair.
 The metadata-driven flow is intended to interoperate with ADFS, Shibboleth,
 OneLogin, and similar enterprise IdPs.
 
-JIT approval notifications can fan out to SMTP email plus Slack, DingTalk, and
-WeCom robot webhooks. Configure one or more of the `jit_notify_*` endpoints in
-the control-plane JSON config, then enable `notify_on_request` and/or
-`notify_on_approve` in the JIT policy API so pending approvals and status
-changes are pushed to your approver channels.
+JIT approval notifications can fan out to SMTP email plus Slack, DingTalk,
+WeCom, Microsoft Teams, PagerDuty, and Opsgenie webhooks/APIs. Configure one or more of the
+`jit_notify_*` endpoints in the control-plane JSON config, then enable
+`notify_on_request` and/or `notify_on_approve` in the JIT policy API so pending
+approvals and status changes are pushed to your approver channels.
+
+When `jit_chatops_slack_signing_secret` is set, the control-plane also exposes
+`POST /api/v2/chatops/slack/commands` for a Slack slash-command approval bot.
+The command verifies Slack's request signature, maps `user_name` to the local
+control-plane user, then reuses that user's role for `jit show <request-id>`,
+`jit approve <request-id>`, and `jit deny <request-id> [reason]`.
+
+Use `jit_notify_subject_template` / `jit_notify_body_template` to customize JIT
+event notifications and `jit_notify_message_subject_template` /
+`jit_notify_message_body_template` for generic alert messages. Templates use Go
+`text/template` syntax with `.Event`, `.Request`, and `.Message` objects.
 
 The same SMTP relay (`jit_notify_smtp_addr`, optional username/password, and
 `jit_notify_email_from`) is also reused by scheduled compliance report delivery.
@@ -629,6 +717,7 @@ Navigate the sidebar for:
 | Sessions   | `/sessions`  | Active SSH session list      |
 | Users      | `/users`     | User management              |
 | Servers    | `/servers`   | Upstream server management   |
+| Automation | `/automation`| Scheduled jobs, scripts, CI triggers |
 | Audit      | `/audit`     | Audit log viewer             |
 | Settings   | `/settings`  | Configuration                |
 | Terminal   | `/terminal`  | Web-based SSH terminal       |
@@ -638,6 +727,50 @@ the terminal page and then run `rz` remotely to upload, or run `sz <file>`
 remotely to download the file into the browser. When `recording_dir` is
 configured, the same terminal page also produces a synced `.cast` audit
 recording and exposes a direct download link in the toolbar area.
+
+To restrict browser terminal transfers, configure one or more of
+`dlp_file_allow_names`, `dlp_file_deny_names`, `dlp_file_allow_extensions`,
+`dlp_file_deny_extensions`, `dlp_file_allow_paths`, and
+`dlp_file_deny_paths`. Values are comma-separated globs evaluated with Go
+`path.Match` syntax. Deny rules always win, and each configured allowlist
+dimension (name / extension / path) must match before the transfer is allowed.
+Use `dlp_file_max_upload_bytes` and `dlp_file_max_download_bytes` to reject
+large `rz` uploads or `sz` downloads before the transfer starts.
+Set `dlp_sensitive_scan_enabled=true` to enable built-in sensitive-content
+detectors for credit cards, Chinese ID cards, and API keys. If you only enable
+the feature flag, all three detectors default on; you can still disable any
+individual detector with `dlp_sensitive_detect_*`. The browser terminal scans
+uploads before they are sent and scans downloads before saving them to disk,
+using at most `dlp_sensitive_max_scan_bytes` bytes from each file.
+
+Set `dlp_transfer_approval_enabled=true` when sensitive-content matches should
+create a persisted approval request instead of being hard-blocked immediately.
+Approvers with roles listed in `dlp_transfer_approval_roles` can then decide the
+request through `/api/v2/terminal/transfer-approvals*`; once approved, the user
+simply retries `rz` or `sz`, and the terminal will reuse the approved request
+until `dlp_transfer_approval_timeout` expires.
+
+Set `dlp_clipboard_audit_enabled=true` to audit browser-terminal paste events
+with the same `dlp_sensitive_*` detectors. The browser detects matches locally
+and sends only metadata such as detector IDs, target, source, and text length to
+`POST /api/v2/terminal/clipboard-audit`; the raw clipboard text is not uploaded
+to the control-plane audit API.
+
+The **Automation** page lets you store reusable shell scripts, create batch SSH
+jobs, collect per-target stdout/stderr, and trigger the same jobs manually,
+on a duration-based schedule, or from CI/CD systems. Jobs can point at managed
+servers by ID, and SSH secrets support the same `${env:VAR}` / `${file:/path}`
+references used elsewhere in the project so credentials do not have to be
+hard-coded in job definitions.
+
+The Insights API builds on the same audit log stream to classify command
+intents, highlight per-user behavioral deviations, recommend least-privilege
+roles, preview natural-language policy statements, and generate short audit
+summaries for operators or reviewers.
+
+The Gateway API creates ephemeral local listeners that tunnel through SSH. One
+API covers multi-hop bastion chains plus SOCKS5, RDP, VNC, MySQL, PostgreSQL,
+Redis, Kubernetes API, HTTP, HTTPS, and X11 presets.
 
 ---
 
@@ -725,8 +858,227 @@ curl -s -X POST http://localhost:8443/api/v2/discovery/scan \
     "targets": ["10.0.1.0/24"],
     "ports": [22],
     "timeout": "5s"
+}' | jq '.data'
+```
+
+### Create a Scheduled Automation Job
+
+```bash
+curl -s -X POST http://localhost:8443/api/v2/automation/jobs \
+  -H "Content-Type: application/json" \
+  -H "Cookie: session=<your-session-cookie>" \
+  -d '{
+    "name": "nightly-inventory",
+    "command": "hostname && uptime",
+    "server_ids": ["srv-1", "srv-2"],
+    "username": "ops",
+    "password": "${env:OPS_SSH_PASSWORD}",
+    "known_hosts_path": "/etc/ssh/ssh_known_hosts",
+    "schedule": "24h",
+    "trigger_providers": ["github-actions", "jenkins"],
+    "enabled": true
   }' | jq '.data'
 ```
+
+### Trigger an Automation Job from GitHub Actions / Jenkins
+
+```bash
+curl -s -X POST http://localhost:8443/api/v2/automation/jobs/<job-id>/trigger \
+  -H "Content-Type: application/json" \
+  -H "Cookie: session=<your-session-cookie>" \
+  -d '{
+    "provider": "github-actions",
+    "workflow": "deploy.yml",
+    "ref": "refs/heads/main",
+    "pipeline_id": "run-42",
+    "environment": {
+      "DEPLOY_SHA": "abc123"
+    }
+  }' | jq '.data'
+```
+
+The response includes per-target execution results, making it suitable for
+scheduled fleet tasks, batch command execution, and CI/CD-triggered operational
+workflows without needing a separate runner service.
+
+### Classify Recent Command Intents
+
+```bash
+curl -s "http://localhost:8443/api/v2/insights/command-intents?user=alice&per_page=20" \
+  -H "Cookie: session=<your-session-cookie>" | jq '.data'
+```
+
+### Preview a Natural-Language Access Policy
+
+```bash
+curl -s -X POST http://localhost:8443/api/v2/insights/policy-preview \
+  -H "Content-Type: application/json" \
+  -H "Cookie: session=<your-session-cookie>" \
+  -d '{
+    "text": "允许运维团队在工作时间访问生产服务器"
+  }' | jq '.data'
+```
+
+### Summarize Audit Activity
+
+```bash
+curl -s "http://localhost:8443/api/v2/insights/audit-summary?from=2026-04-09T00:00:00Z&to=2026-04-10T00:00:00Z" \
+  -H "Cookie: session=<your-session-cookie>" | jq '.data'
+```
+
+### Create an RDP / Database / HTTP(S) Gateway Listener
+
+```bash
+curl -s -X POST http://localhost:8443/api/v2/gateway/proxies \
+  -H "Content-Type: application/json" \
+  -H "Cookie: session=<your-session-cookie>" \
+  -d '{
+    "protocol": "rdp",
+    "ssh_host": "bastion.internal",
+    "username": "ops",
+    "password": "${env:OPS_SSH_PASSWORD}",
+    "known_hosts_path": "/etc/ssh/ssh_known_hosts"
+  }' | jq '.data'
+```
+
+Change `protocol` to `vnc`, `mysql`, `postgresql`, `redis`, `kubernetes`,
+`http`, `https`, `x11`, or `tcp` to get the matching preset and default remote
+port. The response includes a local listener such as `rdp://127.0.0.1:41213`.
+
+### Create a SOCKS5 Proxy Through a Jump Chain
+
+```bash
+curl -s -X POST http://localhost:8443/api/v2/gateway/proxies \
+  -H "Content-Type: application/json" \
+  -H "Cookie: session=<your-session-cookie>" \
+  -d '{
+    "protocol": "socks5",
+    "ssh_host": "bastion.internal",
+    "username": "ops",
+    "password": "${env:OPS_SSH_PASSWORD}",
+    "insecure_skip_host_key_verify": true,
+    "jump_chain": [
+      {
+        "host": "jump-1.internal",
+        "username": "jump",
+        "password": "${env:JUMP_PASSWORD}"
+      }
+    ]
+  }' | jq '.data'
+```
+
+Point your browser, `curl`, or other TCP-aware client at the returned
+`socks5://127.0.0.1:<port>` listener to reach downstream services through the
+SSH gateway path.
+
+### Import Cloud Assets into Discovery
+
+```bash
+curl -s -X POST http://localhost:8443/api/v2/discovery/cloud/import \
+  -H "Content-Type: application/json" \
+  -H "Cookie: session=<your-session-cookie>" \
+  -d '{
+    "provider": "aws",
+    "content": {
+      "Reservations": [{
+        "Instances": [{
+          "InstanceId": "i-1234567890",
+          "PrivateIpAddress": "10.0.10.15",
+          "Tags": [
+            {"Key": "Name", "Value": "prod-bastion"},
+            {"Key": "env", "Value": "prod"}
+          ]
+        }]
+      }]
+    },
+    "tag_filters": {"env": "prod"},
+    "auto_register": true
+  }' | jq '.data'
+```
+
+`provider` accepts `aws`, `azure`, `gcp`, `aliyun`, and `tencent`. The payload
+can be embedded inline as `content`, or fetched from `http://...` / `https://...`
+with the `uri` field so existing CLI/API exports can be synchronized into the
+same discovery inventory and later promoted through `/api/v2/discovery/register`.
+
+### Import CMDB Assets into Discovery
+
+```bash
+curl -s -X POST http://localhost:8443/api/v2/discovery/cmdb/import \
+  -H "Content-Type: application/json" \
+  -H "Cookie: session=<your-session-cookie>" \
+  -d '{
+    "provider": "servicenow",
+    "content": {
+      "result": [{
+        "sys_id": "cmdb-123",
+        "name": "prod-app-01",
+        "ip_address": "10.20.10.25",
+        "os": "Ubuntu 22.04",
+        "u_ssh_port": "2222",
+        "environment": "prod"
+      }]
+    }
+  }' | jq '.data'
+```
+
+For non-ServiceNow sources, use `provider: "custom-api"` and supply
+`items_path` / `host_field` / `id_field` / `name_field` / `port_field` /
+`os_field` / `tag_fields` so the remote CMDB schema can be mapped into the same
+discovery asset model.
+
+### Import Ansible Inventory into Discovery
+
+```bash
+curl -s -X POST http://localhost:8443/api/v2/discovery/ansible/import \
+  -H "Content-Type: application/json" \
+  -H "Cookie: session=<your-session-cookie>" \
+  -d '{
+    "format": "json",
+    "content": {
+      "_meta": {
+        "hostvars": {
+          "web-1": {
+            "ansible_host": "10.50.0.10",
+            "ansible_port": "2222",
+            "env": "prod"
+          }
+        }
+      },
+      "web": {"hosts": ["web-1"]}
+    }
+  }' | jq '.data'
+```
+
+`/api/v2/discovery/ansible/import` also accepts classic INI inventory via
+`content_text`, so both `ansible-inventory --list` JSON and hand-maintained INI
+files can flow into the same discovery/register lifecycle.
+
+### Create a Scheduled Discovery Sync Source
+
+```bash
+curl -s -X POST http://localhost:8443/api/v2/discovery/sources \
+  -H "Content-Type: application/json" \
+  -H "Cookie: session=<your-session-cookie>" \
+  -d '{
+    "name": "aws-prod-sync",
+    "kind": "cloud",
+    "provider": "aws",
+    "interval": "15m",
+    "auto_register": true,
+    "uri": "https://inventory.example.com/aws.json",
+    "headers": {
+      "Authorization": "Bearer <token>"
+    }
+  }' | jq '.data'
+```
+
+List sources with `GET /api/v2/discovery/sources`, inspect one with
+`GET /api/v2/discovery/sources/{id}`, and trigger an immediate run with
+`POST /api/v2/discovery/sources/{id}/run`. Background sync reuses the same
+cloud / CMDB / Ansible import logic, stores source definitions in
+`data_dir/discovery_sources.json`, and marks previously seen assets from that
+source `offline` when they disappear from a later successful sync.
 
 ---
 

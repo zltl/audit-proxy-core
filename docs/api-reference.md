@@ -59,6 +59,9 @@ JSON error body.
 - [Discovery](#discovery)
 - [Command Control](#command-control)
 - [Session Collaboration](#session-collaboration)
+- [Automation](#automation)
+- [Gateway](#gateway)
+- [Insights](#insights)
 - [SDKs and Schemas](#sdks-and-schemas)
 
 ---
@@ -676,7 +679,11 @@ Toggle maintenance mode.
 
 ### GET /api/v2/audit/events
 
-List audit events with optional filters.
+List audit events with optional filters. When `audit_store_backend` is set to a
+SQL or Elasticsearch/OpenSearch index, the control-plane serves results from
+that mirrored index. Otherwise, when file-backed audit archive object storage
+is enabled, the control-plane reads local `.jsonl`/`.log` files first and
+automatically supplements missing files from the archived objects.
 
 **Query Parameters**
 
@@ -710,7 +717,9 @@ List audit events with optional filters.
 
 ### GET /api/v2/audit/events/{id}
 
-Get a single audit event.
+Get a single audit event. Indexed audit backends are queried directly when
+enabled; otherwise archived object-backed audit files are included in the
+lookup when local files are no longer present.
 
 | Error | Description |
 |-------|-------------|
@@ -718,7 +727,8 @@ Get a single audit event.
 
 ### GET /api/v2/audit/search
 
-Full-text search across audit events.
+Full-text search across audit events, including indexed audit backends and
+archived file-backed audit logs when object storage archival is enabled.
 
 **Query Parameters**
 
@@ -728,7 +738,9 @@ Full-text search across audit events.
 
 ### GET /api/v2/audit/export
 
-Export audit events. Supports `format=csv` or `format=json` query parameter.
+Export audit events. Indexed audit backends are used automatically when
+configured; otherwise archived file-backed audit logs are included when object
+storage archival is enabled.
 
 **Response**
 
@@ -1152,7 +1164,50 @@ asciicast audit recording that can be downloaded from the terminal page. In prac
 Control messages such as resize and connection status still use small JSON text
 frames with `{"type":"control", ... }`. Successful connection messages may also
 include `recording_id` and `download_url` so the browser can expose the synced
-audit cast immediately.
+audit cast immediately. When browser-terminal DLP rules are configured, the
+page also sends `transfer_check` control messages before `rz`/`sz` transfers:
+
+- browser → server: `{"type":"control","action":"transfer_check","request_id":"...","direction":"upload|download","name":"...","path":"...","size":123}`
+- server → browser: `{"type":"control","action":"transfer_decision","request_id":"...","allowed":true|false,"reason":"..."}`
+
+These checks are driven by the control-plane JSON config fields
+`dlp_file_allow_*` / `dlp_file_deny_*`, plus
+`dlp_file_max_upload_bytes` / `dlp_file_max_download_bytes`. Successful
+`connected` frames may also include `sensitive_patterns` and
+`sensitive_max_scan_bytes` so the browser can inspect file contents for
+configured credit-card / ID-card / API-key detectors before upload or save, as
+well as `transfer_approval_enabled` when sensitive matches can be escalated into
+persisted approval requests, and `clipboard_audit_enabled` when browser-terminal
+paste events should be audited with the same detector set.
+
+### POST /api/v2/terminal/clipboard-audit
+
+Record a browser-terminal clipboard paste audit event. The browser sends only
+metadata such as target, paste source, text length, and matched detector IDs; it
+does not upload the raw clipboard contents.
+
+### POST /api/v2/terminal/transfer-approvals
+
+Create or reuse a transfer approval request for a sensitive browser-terminal
+file. If an equivalent request is already approved and still valid, the control
+plane returns that approved request so the client can proceed immediately on the
+next retry.
+
+### GET /api/v2/terminal/transfer-approvals
+
+List transfer approval requests. Non-approvers only see their own requests.
+
+### GET /api/v2/terminal/transfer-approvals/{id}
+
+Get a single transfer approval request.
+
+### POST /api/v2/terminal/transfer-approvals/{id}/approve
+
+Approve a pending transfer approval request.
+
+### POST /api/v2/terminal/transfer-approvals/{id}/deny
+
+Deny a pending transfer approval request.
 
 ---
 
@@ -1444,8 +1499,20 @@ All JIT endpoints require the `X-User` header. Approve/deny actions require
 an admin role (`X-Role: admin` or a role listed in the JIT policy's `approver_roles`).
 When the control-plane JSON config includes `jit_notify_email_to`,
 `jit_notify_slack_webhook_url`, `jit_notify_dingtalk_webhook_url`, or
-`jit_notify_wecom_webhook_url`, the `notify_on_request` / `notify_on_approve`
-policy flags fan out JIT events to those approver channels.
+`jit_notify_wecom_webhook_url`, or `jit_notify_teams_webhook_url`,
+`jit_notify_pagerduty_routing_key`, or `jit_notify_opsgenie_api_key`, the
+`notify_on_request` / `notify_on_approve` policy flags fan out JIT events to
+those approver channels and alerting systems.
+
+When `jit_chatops_slack_signing_secret` is configured, Slack slash commands can
+also call `POST /api/v2/chatops/slack/commands` without a session cookie. The
+control-plane verifies Slack's HMAC signature, maps `user_name` to a local user,
+and reuses that user's role for ChatOps approvals.
+
+`jit_notify_subject_template` / `jit_notify_body_template` can override the
+default JIT event notification rendering, while
+`jit_notify_message_subject_template` / `jit_notify_message_body_template`
+customize generic message notifications sent through the same sink fan-out.
 
 ### POST /api/v2/jit/requests
 
@@ -1465,6 +1532,14 @@ allows it.
   "duration": "2h"
 }
 ```
+
+### POST /api/v2/chatops/slack/commands
+
+Slack slash-command endpoint for JIT ChatOps. The request is standard
+`application/x-www-form-urlencoded` Slack command payload plus
+`X-Slack-Signature` and `X-Slack-Request-Timestamp` headers. Supported commands
+are `jit show <request-id>`, `jit approve <request-id>`, and
+`jit deny <request-id> [reason]`.
 
 **Response** `201 Created`
 
@@ -2265,7 +2340,8 @@ Mark a threat alert as a false positive.
 
 ### GET /api/v2/threats/rules
 
-List all threat detection rules.
+List all threat detection rules, including built-in rules and JSON DSL-based
+custom rules.
 
 **Response**
 
@@ -2274,21 +2350,49 @@ List all threat detection rules.
   "success": true,
   "data": [
     {
-      "id": "brute-force",
-      "name": "Brute Force Detection",
+      "id": "brute_force",
+      "name": "Brute Force Attack",
+      "builtin": true,
       "enabled": true,
-      "threshold": 5,
-      "window": "5m",
+      "conditions": {
+        "threshold": 10,
+        "window": 300000000000
+      },
       "severity": "high"
     }
   ],
-  "total": 5
+  "total": 11
+}
+```
+
+### POST /api/v2/threats/rules
+
+Create a custom threat rule. Custom rules support generic pattern / threshold
+rules as well as a recursive JSON DSL (`type: "dsl"`).
+
+**Request**
+
+```json
+{
+  "name": "Kubectl Exec Detection",
+  "type": "dsl",
+  "severity": "high",
+  "event_types": ["command"],
+  "expression": {
+    "operator": "and",
+    "children": [
+      { "operator": "contains", "field": "details.command", "value": "kubectl" },
+      { "operator": "contains", "field": "details.command", "value": "exec" }
+    ]
+  }
 }
 ```
 
 ### PUT /api/v2/threats/rules/{id}
 
-Update a threat detection rule.
+Update a threat detection rule. Built-in rules support persisted overrides such
+as `enabled`, `threshold`, `window`, and `pattern`; custom rules can also
+update `name`, `description`, `severity`, and `expression`.
 
 **Request**
 
@@ -2297,7 +2401,8 @@ Update a threat detection rule.
   "enabled": true,
   "threshold": 10,
   "window": "10m",
-  "pattern": ".*"
+  "pattern": ".*",
+  "severity": "medium"
 }
 ```
 
@@ -2305,6 +2410,10 @@ Update a threat detection rule.
 |-------|-------------|
 | 400   | Invalid window duration |
 | 404   | Rule not found |
+
+### DELETE /api/v2/threats/rules/{id}
+
+Delete a custom threat rule. Built-in rules cannot be deleted.
 
 ### GET /api/v2/threats/risk
 
@@ -2462,6 +2571,256 @@ Trigger a network scan for SSH hosts.
 |-------|-------------|
 | 400   | Missing targets |
 | 500   | Scan failed |
+
+### POST /api/v2/discovery/cloud/import
+
+Import provider-native cloud instance inventory JSON into the shared discovery
+inventory.
+
+**Request**
+
+```json
+{
+  "provider": "aws",
+  "content": {
+    "Reservations": [{
+      "Instances": [{
+        "InstanceId": "i-1234567890",
+        "PrivateIpAddress": "10.0.10.15",
+        "Tags": [
+          { "Key": "Name", "Value": "prod-bastion" },
+          { "Key": "env", "Value": "prod" }
+        ]
+      }]
+    }]
+  },
+  "tag_filters": { "env": "prod" },
+  "auto_register": true
+}
+```
+
+`provider` accepts `aws`, `azure`, `gcp`, `aliyun`, and `tencent`. Instead of
+embedding `content`, you can provide `uri` pointing at `http://...` or
+`https://...`; optional `headers` are forwarded for HTTP fetches.
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": {
+    "provider": "aws",
+    "imported": 1,
+    "new_assets": 1,
+    "auto_register": true
+  }
+}
+```
+
+| Error | Description |
+|-------|-------------|
+| 400   | Missing provider / invalid payload / unsupported provider |
+| 500   | Inventory persistence failed |
+
+### POST /api/v2/discovery/cmdb/import
+
+Import CMDB inventory JSON into the shared discovery inventory.
+
+**Request**
+
+```json
+{
+  "provider": "servicenow",
+  "content": {
+    "result": [{
+      "sys_id": "cmdb-123",
+      "name": "prod-app-01",
+      "ip_address": "10.20.10.25",
+      "os": "Ubuntu 22.04",
+      "u_ssh_port": "2222",
+      "environment": "prod"
+    }]
+  }
+}
+```
+
+`provider` accepts `servicenow` and `custom-api`. `servicenow` has built-in
+field defaults. `custom-api` uses explicit `items_path`, `host_field`,
+`id_field`, `name_field`, `port_field`, `os_field`, `status_field`,
+`tag_fields`, and `static_tags` mappings so arbitrary HTTP JSON payloads can be
+projected into discovery assets.
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": {
+    "provider": "servicenow",
+    "imported": 1,
+    "new_assets": 1,
+    "auto_register": false
+  }
+}
+```
+
+| Error | Description |
+|-------|-------------|
+| 400   | Missing provider / invalid mapping / unsupported provider |
+| 500   | Inventory persistence failed |
+
+### POST /api/v2/discovery/ansible/import
+
+Import Ansible inventory into the shared discovery inventory.
+
+**Request**
+
+```json
+{
+  "format": "json",
+  "content": {
+    "_meta": {
+      "hostvars": {
+        "web-1": {
+          "ansible_host": "10.50.0.10",
+          "ansible_port": "2222",
+          "env": "prod"
+        }
+      }
+    },
+    "web": {
+      "hosts": ["web-1"]
+    }
+  }
+}
+```
+
+`format` accepts `json`, `ini`, or can be omitted for auto-detect. JSON imports
+match `ansible-inventory --list`; INI imports use `content_text` or an HTTP(S)
+`uri` that serves the classic inventory syntax.
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": {
+    "format": "json",
+    "imported": 1,
+    "new_assets": 1,
+    "auto_register": false
+  }
+}
+```
+
+| Error | Description |
+|-------|-------------|
+| 400   | Invalid Ansible payload |
+| 500   | Inventory persistence failed |
+
+### GET /api/v2/discovery/sources
+
+List persisted discovery sync sources used for scheduled imports.
+
+### POST /api/v2/discovery/sources
+
+Create a persisted discovery sync source definition.
+
+**Request**
+
+```json
+{
+  "name": "aws-prod-sync",
+  "kind": "cloud",
+  "provider": "aws",
+  "interval": "15m",
+  "auto_register": true,
+  "uri": "https://inventory.example.com/aws.json",
+  "headers": {
+    "Authorization": "Bearer <token>"
+  }
+}
+```
+
+`kind` accepts `cloud`, `cmdb`, and `ansible`. The source can use inline
+`content` / `content_text` or an HTTP(S) `uri`. Background sync will run the
+source on the requested `interval`, update existing assets in place, and mark
+previously seen assets from that source `offline` when they are absent from a
+later successful run.
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "discsrc-1234abcd",
+    "name": "aws-prod-sync",
+    "kind": "cloud",
+    "provider": "aws",
+    "interval": "15m",
+    "enabled": true,
+    "auto_register": true
+  }
+}
+```
+
+| Error | Description |
+|-------|-------------|
+| 400   | Invalid source definition |
+| 500   | Source persistence failed |
+
+### GET /api/v2/discovery/sources/{id}
+
+Get one persisted discovery sync source.
+
+| Error | Description |
+|-------|-------------|
+| 404   | Source not found |
+
+### PUT /api/v2/discovery/sources/{id}
+
+Replace one persisted discovery sync source definition.
+
+### DELETE /api/v2/discovery/sources/{id}
+
+Delete one persisted discovery sync source definition.
+
+| Error | Description |
+|-------|-------------|
+| 404   | Source not found |
+
+### POST /api/v2/discovery/sources/{id}/run
+
+Run one persisted discovery sync source immediately.
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": {
+    "source": {
+      "id": "discsrc-1234abcd",
+      "name": "aws-prod-sync",
+      "kind": "cloud",
+      "provider": "aws"
+    },
+    "result": {
+      "imported": 12,
+      "new_assets": 2,
+      "offlined": 1,
+      "registered": 12
+    }
+  }
+}
+```
+
+| Error | Description |
+|-------|-------------|
+| 400   | Invalid source configuration or payload |
+| 404   | Source not found |
+| 500   | Sync execution failed |
 
 ### GET /api/v2/discovery/assets
 
@@ -2757,7 +3116,8 @@ Create a new collaborative session.
   "session_id": "sess-abc123",
   "target": "web-01",
   "max_viewers": 5,
-  "allow_control": true
+  "allow_control": true,
+  "four_eyes_required": true
 }
 ```
 
@@ -2777,6 +3137,7 @@ Create a new collaborative session.
     ],
     "max_viewers": 5,
     "allow_control": true,
+    "four_eyes_required": true,
     "status": "active"
   }
 }
@@ -2825,6 +3186,10 @@ Leave a collaboration session.
 
 End a collaboration session. Only the session owner can do this.
 
+When the session was created with `four_eyes_required=true`, this endpoint does
+not end immediately. Instead it returns `202 Accepted` with a pending approval,
+and a second participant who is still present in the session must approve it.
+
 | Error | Description |
 |-------|-------------|
 | 403   | Only the session owner can end the session |
@@ -2836,6 +3201,9 @@ Request control of the shared terminal.
 ### POST /api/v2/collab/sessions/{id}/grant-control
 
 Grant control to another user. Only the owner can grant control.
+
+When `four_eyes_required=true`, this endpoint returns `202 Accepted` and a
+pending approval instead of granting control immediately.
 
 **Request**
 
@@ -2851,11 +3219,49 @@ Grant control to another user. Only the owner can grant control.
 
 Revoke control from a user. Only the owner can revoke control.
 
+When `four_eyes_required=true`, this endpoint returns `202 Accepted` and a
+pending approval instead of revoking control immediately.
+
 **Request**
 
 ```json
 { "username": "alice" }
 ```
+
+### GET /api/v2/collab/sessions/{id}/approvals
+
+List four-eyes approval requests for a collaboration session.
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "approval-123",
+      "session_id": "collab-abc123",
+      "action": "grant_control",
+      "requested_by": "admin",
+      "target_username": "alice",
+      "status": "pending",
+      "requested_at": "2025-01-15T10:31:00Z",
+      "expires_at": "2025-01-15T10:36:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+### POST /api/v2/collab/sessions/{id}/approvals/{approvalId}/approve
+
+Approve a pending four-eyes action. The approver must be a different
+participant who is still present in the session.
+
+### POST /api/v2/collab/sessions/{id}/approvals/{approvalId}/deny
+
+Deny a pending four-eyes action. The approver must be a different participant
+who is still present in the session.
 
 ### GET /api/v2/collab/sessions/{id}/chat
 
@@ -2924,5 +3330,367 @@ NDJSON streaming format; otherwise returns a JSON array.
     }
   ],
   "total": 50
+}
+```
+
+---
+
+## Automation
+
+Automation endpoints provide a persisted script library, scheduled or on-demand
+SSH jobs, per-target result collection, and CI/CD trigger hooks.
+
+### POST /api/v2/automation/scripts
+
+Create a reusable automation script.
+
+**Request**
+
+```json
+{
+  "name": "restart-nginx",
+  "shell": "/bin/sh",
+  "body": "sudo systemctl restart nginx\n"
+}
+```
+
+**Response** `201 Created`
+
+### GET /api/v2/automation/scripts
+
+List saved automation scripts.
+
+### POST /api/v2/automation/jobs
+
+Create an automation job. Use `server_ids` to batch across managed servers, set
+`schedule` to a Go duration such as `30m` or `24h`, and optionally restrict
+`trigger_providers` to CI systems that are allowed to invoke the job.
+
+**Request**
+
+```json
+{
+  "name": "nightly-inventory",
+  "command": "hostname && uptime",
+  "server_ids": ["srv-1", "srv-2"],
+  "username": "ops",
+  "password": "${env:OPS_SSH_PASSWORD}",
+  "known_hosts_path": "/etc/ssh/ssh_known_hosts",
+  "schedule": "24h",
+  "trigger_providers": ["github-actions", "jenkins"],
+  "enabled": true
+}
+```
+
+### GET /api/v2/automation/jobs
+
+List automation jobs. Optional query parameters:
+
+| Param | Description |
+|-------|-------------|
+| `enabled` | Filter by enabled state (`true` / `false`) |
+| `provider` | Filter by allowed CI/CD provider |
+
+### POST /api/v2/automation/jobs/{id}/run
+
+Run a job immediately.
+
+**Request**
+
+```json
+{
+  "trigger": "web-ui",
+  "environment": {
+    "DEPLOY_SHA": "abc123"
+  }
+}
+```
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "run-123",
+    "job_id": "job-123",
+    "job_name": "nightly-inventory",
+    "trigger": "web-ui",
+    "status": "completed",
+    "summary": "2 target(s) succeeded, 0 target(s) failed",
+    "results": [
+      {
+        "target_id": "srv-1",
+        "target_name": "server1",
+        "host": "10.0.1.1",
+        "port": 22,
+        "status": "completed",
+        "stdout": "server1\n",
+        "stderr": ""
+      }
+    ]
+  }
+}
+```
+
+### POST /api/v2/automation/jobs/{id}/trigger
+
+Trigger a job from GitHub Actions, GitLab CI, Jenkins, or another allowed CI
+provider.
+
+**Request**
+
+```json
+{
+  "provider": "github-actions",
+  "workflow": "deploy.yml",
+  "ref": "refs/heads/main",
+  "pipeline_id": "run-42"
+}
+```
+
+Returns `202 Accepted` with the collected run payload.
+
+### GET /api/v2/automation/runs
+
+List historical automation runs.
+
+| Param | Description |
+|-------|-------------|
+| `job_id` | Filter by job identifier |
+| `status` | Filter by run status (`completed`, `partial`, `failed`) |
+
+### GET /api/v2/automation/runs/{id}
+
+Return a single automation run including per-target stdout/stderr summaries.
+
+---
+
+## Gateway
+
+Gateway endpoints start ephemeral local listeners that tunnel through SSH using
+protocol presets. This covers:
+
+| Protocol | Default remote port | Typical use |
+|----------|---------------------|-------------|
+| `socks5` | dynamic | Generic egress / browser / CLI network access |
+| `rdp` | `3389` | Remote Desktop |
+| `vnc` | `5900` | VNC viewers |
+| `mysql` | `3306` | MySQL |
+| `postgresql` | `5432` | PostgreSQL |
+| `redis` | `6379` | Redis |
+| `kubernetes` | `6443` | Kubernetes API |
+| `http` | `80` | HTTP applications |
+| `https` | `443` | HTTPS applications |
+| `x11` | `6000` | X11 display traffic |
+| `tcp` | custom | Any TCP service |
+
+All gateway proxies also accept `jump_chain`, so the same API can be used for
+multi-hop SSH access through one or more bastion hosts.
+
+### POST /api/v2/gateway/proxies
+
+Create and start a protocol proxy.
+
+**Request**
+
+```json
+{
+  "protocol": "rdp",
+  "remote_host": "127.0.0.1",
+  "ssh_host": "bastion.internal",
+  "username": "ops",
+  "password": "${env:OPS_SSH_PASSWORD}",
+  "known_hosts_path": "/etc/ssh/ssh_known_hosts"
+}
+```
+
+**Response** `201 Created`
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "proxy-123",
+    "name": "RDP 127.0.0.1:3389 via bastion.internal",
+    "protocol": "rdp",
+    "bind_address": "127.0.0.1",
+    "bind_port": 41213,
+    "local_address": "127.0.0.1:41213",
+    "local_url": "rdp://127.0.0.1:41213",
+    "remote_host": "127.0.0.1",
+    "remote_port": 3389,
+    "ssh_host": "bastion.internal",
+    "ssh_port": 22,
+    "username": "ops",
+    "status": "running"
+  }
+}
+```
+
+### POST /api/v2/gateway/proxies for SOCKS5 / jump-chain
+
+```json
+{
+  "protocol": "socks5",
+  "ssh_host": "bastion.internal",
+  "username": "ops",
+  "password": "${env:OPS_SSH_PASSWORD}",
+  "insecure_skip_host_key_verify": true,
+  "jump_chain": [
+    {
+      "host": "jump-1.internal",
+      "username": "jump",
+      "password": "${env:JUMP_PASSWORD}"
+    }
+  ]
+}
+```
+
+The response returns a `socks5://127.0.0.1:<port>` endpoint that can reach any
+TCP destination through the SSH path.
+
+### GET /api/v2/gateway/proxies
+
+List active gateway proxy listeners.
+
+### GET /api/v2/gateway/proxies/{id}
+
+Return one active gateway proxy.
+
+### DELETE /api/v2/gateway/proxies/{id}
+
+Stop and remove a gateway proxy.
+
+---
+
+## Insights
+
+Insights endpoints turn existing audit logs into higher-level operational
+signals: command intent classification, anomaly baselines, least-privilege
+recommendations, natural-language policy previews, and compact audit summaries.
+
+### GET /api/v2/insights/command-intents
+
+Classify audited command events into intents such as `discovery`,
+`service-operation`, `database-admin`, `kubernetes-admin`, and
+`destructive-change`.
+
+| Param | Description |
+|-------|-------------|
+| `page` / `per_page` | Standard pagination |
+| `user` | Filter by username |
+| `target_host` | Filter by target host substring |
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "event_id": "audit-123",
+      "username": "alice",
+      "target_host": "prod-k8s-1",
+      "command": "kubectl exec deploy/api -- bash",
+      "intent": "kubernetes-admin",
+      "risk": "high",
+      "confidence": 0.96,
+      "labels": ["kubernetes", "platform"],
+      "timestamp": "2026-04-09T23:45:00Z"
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "per_page": 50
+}
+```
+
+### GET /api/v2/insights/anomalies
+
+Build per-user command baselines and return recent deviations such as
+`rare-target`, `rare-intent`, `off-pattern-hours`, and `high-risk-command`.
+
+| Param | Description |
+|-------|-------------|
+| `user` | Optional username filter |
+
+### GET /api/v2/insights/recommendations
+
+Recommend a least-privilege role and operation set from observed command usage.
+The current heuristic promotes users to `admin` when high-risk commands are
+already present, downgrades read-only behavior to `viewer`, and can add
+conditions such as `login_window=09:00-18:00`.
+
+| Param | Description |
+|-------|-------------|
+| `user` | Optional username filter |
+
+### POST /api/v2/insights/policy-preview
+
+Preview a natural-language access request as a policy rule without persisting
+it.
+
+**Request**
+
+```json
+{
+  "text": "允许运维团队在工作时间访问生产服务器"
+}
+```
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": {
+    "raw_text": "允许运维团队在工作时间访问生产服务器",
+    "rule": {
+      "name": "nl-preview",
+      "action": "allow",
+      "role": "operator",
+      "resources": ["prod-*"],
+      "operations": ["exec", "shell"],
+      "conditions": {
+        "login_days": "mon-fri",
+        "login_window": "09:00-18:00"
+      }
+    },
+    "notes": [
+      "Mapped production servers to prod-* resource pattern.",
+      "Expanded work-hours language to 09:00-18:00 on weekdays."
+    ],
+    "confidence": 0.95
+  }
+}
+```
+
+### GET /api/v2/insights/audit-summary
+
+Generate a compact audit summary for the current or filtered time range.
+
+| Param | Description |
+|-------|-------------|
+| `user` | Optional username filter |
+| `from` | Optional RFC3339 start time |
+| `to` | Optional RFC3339 end time |
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": {
+    "from": "2026-04-09T00:00:00Z",
+    "to": "2026-04-10T00:00:00Z",
+    "total_events": 6,
+    "command_events": 5,
+    "failed_logins": 1,
+    "high_risk_commands": 2,
+    "top_users": ["alice", "bob"],
+    "top_targets": ["prod-app-1", "prod-k8s-1", "db-1"],
+    "summary": "Observed 6 audit events, including 5 command events, 1 failed logins, and 2 high-risk commands. Top users: alice, bob. Top targets: prod-app-1, prod-k8s-1, db-1."
+  }
 }
 ```

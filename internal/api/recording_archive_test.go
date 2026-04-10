@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +37,10 @@ func (s *fakeS3Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key, ok := s.parseRequest(r)
 	if !ok {
 		s.writeError(w, http.StatusNotFound, "NoSuchKey")
+		return
+	}
+	if r.Method == http.MethodGet && (r.URL.Query().Get("list-type") == "2" || r.URL.Query().Has("prefix")) && key == "" {
+		s.writeListObjectsV2(w, r.URL.Query().Get("prefix"))
 		return
 	}
 	if strings.HasSuffix(r.URL.RawQuery, "location=") || r.URL.Query().Has("location") {
@@ -145,6 +150,39 @@ func (s *fakeS3Server) writeError(w http.ResponseWriter, status int, code string
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(status)
 	_, _ = io.WriteString(w, "<Error><Code>"+code+"</Code></Error>")
+}
+
+func (s *fakeS3Server) writeListObjectsV2(w http.ResponseWriter, prefix string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keys := make([]string, 0, len(s.objects))
+	for key := range s.objects {
+		if strings.HasPrefix(key, prefix) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+
+	var body strings.Builder
+	body.WriteString(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	body.WriteString(`<Name>bucket</Name>`)
+	body.WriteString(`<Prefix>` + prefix + `</Prefix>`)
+	body.WriteString(fmt.Sprintf(`<KeyCount>%d</KeyCount>`, len(keys)))
+	body.WriteString(`<MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>`)
+	for _, key := range keys {
+		object := s.objects[key]
+		body.WriteString(`<Contents>`)
+		body.WriteString(`<Key>` + key + `</Key>`)
+		body.WriteString(`<LastModified>` + object.modTime.UTC().Format(time.RFC3339) + `</LastModified>`)
+		body.WriteString(`<ETag>"fake-etag"</ETag>`)
+		body.WriteString(fmt.Sprintf(`<Size>%d</Size>`, len(object.body)))
+		body.WriteString(`</Contents>`)
+	}
+	body.WriteString(`</ListBucketResult>`)
+
+	w.Header().Set("Content-Type", "application/xml")
+	_, _ = io.WriteString(w, body.String())
 }
 
 func (s *fakeS3Server) objectBody(key string) []byte {

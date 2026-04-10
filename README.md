@@ -1,6 +1,6 @@
 # SSH Proxy Core
 
-高性能、可扩展的 SSH 协议代理服务器核心库，纯 C 语言实现。零外部依赖设计，约 14,700 行 C 代码。
+高性能、可扩展的 SSH 协议代理平台。C 数据面 (libssh, ~14,700 行) + Go 控制面 (REST API / Web UI / 自动化 / 网关 / 洞察)。
 
 <!-- badges -->
 <!-- ![Build](https://img.shields.io/github/actions/workflow/status/your-org/ssh-proxy-core/ci.yml?branch=main) -->
@@ -25,6 +25,7 @@
 - [API 参考](#api-参考)
 - [开发](#开发)
 - [部署](#部署)
+- [文档索引](#文档索引)
 - [许可证](#许可证)
 
 ---
@@ -72,6 +73,28 @@
 - **C11 标准** — 编译选项 `-Wall -Wextra -Wpedantic -Werror`
 - **线程安全** — 关键路径使用 pthread mutex 和原子操作
 - **全部向后兼容** — 所有新特性默认禁用，可按需开启
+
+### 控制面能力 (Go)
+
+| # | 模块 | 说明 |
+|---|------|------|
+| 1 | 管理 Web UI | 仪表盘、会话列表、用户管理、服务器管理、审计查看器 |
+| 2 | REST API | 完整 CRUD，OpenAPI/Swagger 文档 (`/api/docs`) |
+| 3 | OIDC / SAML SSO | 企业单点登录集成 |
+| 4 | SSH CA | 短期证书签发、自动轮转 |
+| 5 | JIT 访问 | 即时访问请求与多级审批 |
+| 6 | 集群管理 | 多节点集群，支持 DNS / K8s / Consul 发现 |
+| 7 | 资产发现 | 自动导入 AWS / Azure / GCP / CMDB / Ansible 主机 |
+| 8 | 命令控制 | 高危命令实时拦截与审批 |
+| 9 | 会话协作 | 多人共享会话、控制权转移、会话内聊天 |
+| 10 | 合规检查 | 合规策略引擎与报告 |
+| 11 | SIEM 集成 | Splunk / Elasticsearch / Syslog 日志导出 |
+| 12 | 威胁检测 | 基于规则的异常行为告警 |
+| 13 | **工作流自动化** | 脚本库、批量 SSH 作业、Cron 调度、CI/CD 触发 |
+| 14 | **协议网关** | SOCKS5 / RDP / VNC / MySQL / PostgreSQL / Redis / K8s / HTTP(S) / X11 隧道 |
+| 15 | **智能洞察** | 命令意图分类、异常检测、最小权限推荐、自然语言策略预览、审计摘要 |
+
+> 详见 [API 参考](docs/api-reference.md) 和 [架构设计](docs/DESIGN.md)。
 
 ---
 
@@ -1158,6 +1181,22 @@ docker logs -f ssh-proxy
 ```
 
 Dockerfile 使用多阶段构建（builder + runtime），运行时镜像仅包含 libssh 运行时库。默认使用 `ssh-proxy` 非 root 用户运行，暴露端口 2222 (SSH) 和 9090 (Admin API + Health Check)。
+
+---
+
+## 文档索引
+
+| 文档 | 说明 |
+|------|------|
+| [快速上手指南](docs/quickstart.md) | 从安装到首次使用的完整流程 |
+| [API 参考](docs/api-reference.md) | 全部 REST API 端点、请求/响应示例 |
+| [架构设计](docs/DESIGN.md) | 双平面架构、模块设计、数据流 |
+| [部署指南](docs/DEPLOYMENT.md) | 生产环境部署、systemd、Docker、Kubernetes |
+| [测试文档](docs/TESTING.md) | C 和 Go 双套件测试流程、覆盖矩阵 |
+| [配置示例](docs/config.example.ini) | 完整配置文件模板 |
+| [贡献指南](CONTRIBUTING.md) | 开发规范、C 与 Go 两端贡献指引 |
+| [安全政策](SECURITY.md) | 漏洞报告流程 |
+| [变更日志](CHANGELOG.md) | 版本发布记录 |
 
 ---
 

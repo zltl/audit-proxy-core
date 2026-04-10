@@ -1,6 +1,10 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"reflect"
 	"strings"
@@ -12,8 +16,10 @@ import (
 
 // discoveryState holds the runtime state for asset discovery endpoints.
 type discoveryState struct {
-	inventory  *discovery.Inventory
-	scanConfig *discovery.ScanConfig
+	inventory     *discovery.Inventory
+	scanConfig    *discovery.ScanConfig
+	syncSources   *discoverySyncSourceStore
+	syncScheduler *discoverySyncScheduler
 }
 
 // initDiscovery lazily initialises the discovery subsystem.
@@ -33,6 +39,7 @@ func (a *API) initDiscovery() *discoveryState {
 			Concurrency: 50,
 			SSHBanner:   true,
 		},
+		syncSources: newDiscoverySyncSourceStore(dataFilePath(a.config.DataDir, "discovery_sources.json")),
 	}
 	return a.discovery
 }
@@ -141,6 +148,15 @@ func (a *API) removeDiscoveryAssetServer(assetID string) bool {
 // RegisterDiscoveryRoutes adds the /api/v2/discovery/* endpoints to mux.
 func (a *API) RegisterDiscoveryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v2/discovery/scan", a.handleDiscoveryScan)
+	mux.HandleFunc("POST /api/v2/discovery/cloud/import", a.handleDiscoveryCloudImport)
+	mux.HandleFunc("POST /api/v2/discovery/cmdb/import", a.handleDiscoveryCMDBImport)
+	mux.HandleFunc("POST /api/v2/discovery/ansible/import", a.handleDiscoveryAnsibleImport)
+	mux.HandleFunc("GET /api/v2/discovery/sources", a.handleListDiscoverySyncSources)
+	mux.HandleFunc("POST /api/v2/discovery/sources", a.handleCreateDiscoverySyncSource)
+	mux.HandleFunc("GET /api/v2/discovery/sources/{id}", a.handleGetDiscoverySyncSource)
+	mux.HandleFunc("PUT /api/v2/discovery/sources/{id}", a.handleUpdateDiscoverySyncSource)
+	mux.HandleFunc("DELETE /api/v2/discovery/sources/{id}", a.handleDeleteDiscoverySyncSource)
+	mux.HandleFunc("POST /api/v2/discovery/sources/{id}/run", a.handleRunDiscoverySyncSource)
 	mux.HandleFunc("GET /api/v2/discovery/assets", a.handleListDiscoveryAssets)
 	mux.HandleFunc("GET /api/v2/discovery/assets/{id}", a.handleGetDiscoveryAsset)
 	mux.HandleFunc("PUT /api/v2/discovery/assets/{id}", a.handleUpdateDiscoveryAsset)
@@ -204,6 +220,193 @@ func (a *API) handleDiscoveryScan(w http.ResponseWriter, r *http.Request) {
 			"results":    results,
 			"total":      len(results),
 			"new_assets": newCount,
+		},
+	})
+}
+
+// handleDiscoveryAnsibleImport imports Ansible JSON or INI inventory into the
+// shared discovery inventory.
+func (a *API) handleDiscoveryAnsibleImport(w http.ResponseWriter, r *http.Request) {
+	ds := a.initDiscovery()
+
+	var req struct {
+		Format       string            `json:"format"`
+		URI          string            `json:"uri"`
+		Headers      map[string]string `json:"headers"`
+		Content      json.RawMessage   `json:"content"`
+		ContentText  string            `json:"content_text"`
+		Port         int               `json:"port"`
+		AutoRegister bool              `json:"auto_register"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	payload, err := resolveDiscoveryImportPayload(r.Context(), req.URI, req.Headers, req.Content, req.ContentText)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	assets, err := discovery.ImportAnsibleAssets(req.Format, payload, discovery.AnsibleImportConfig{DefaultPort: req.Port})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.AutoRegister {
+		for i := range assets {
+			assets[i].AutoRegister = true
+		}
+	}
+
+	newCount := ds.inventory.UpsertAssets(assets)
+	if err := ds.inventory.Save(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save inventory: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"format":        discovery.DetectAnsibleFormat(req.Format, payload),
+			"imported":      len(assets),
+			"new_assets":    newCount,
+			"auto_register": req.AutoRegister,
+		},
+	})
+}
+
+// handleDiscoveryCMDBImport imports CMDB inventory payloads into the shared
+// discovery inventory. ServiceNow has built-in defaults; custom APIs supply
+// explicit field mappings.
+func (a *API) handleDiscoveryCMDBImport(w http.ResponseWriter, r *http.Request) {
+	ds := a.initDiscovery()
+
+	var req struct {
+		Provider     string            `json:"provider"`
+		URI          string            `json:"uri"`
+		Headers      map[string]string `json:"headers"`
+		Content      json.RawMessage   `json:"content"`
+		ItemsPath    string            `json:"items_path"`
+		IDField      string            `json:"id_field"`
+		NameField    string            `json:"name_field"`
+		HostField    string            `json:"host_field"`
+		PortField    string            `json:"port_field"`
+		OSField      string            `json:"os_field"`
+		StatusField  string            `json:"status_field"`
+		TagFields    []string          `json:"tag_fields"`
+		StaticTags   map[string]string `json:"static_tags"`
+		Port         int               `json:"port"`
+		AutoRegister bool              `json:"auto_register"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Provider) == "" {
+		writeError(w, http.StatusBadRequest, "provider is required")
+		return
+	}
+
+	payload, err := resolveDiscoveryImportPayload(r.Context(), req.URI, req.Headers, req.Content, "")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	assets, err := discovery.ImportCMDBAssets(req.Provider, payload, discovery.CMDBImportConfig{
+		ItemsPath:   req.ItemsPath,
+		IDField:     req.IDField,
+		NameField:   req.NameField,
+		HostField:   req.HostField,
+		PortField:   req.PortField,
+		OSField:     req.OSField,
+		StatusField: req.StatusField,
+		TagFields:   req.TagFields,
+		StaticTags:  req.StaticTags,
+		DefaultPort: req.Port,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.AutoRegister {
+		for i := range assets {
+			assets[i].AutoRegister = true
+		}
+	}
+
+	newCount := ds.inventory.UpsertAssets(assets)
+	if err := ds.inventory.Save(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save inventory: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"provider":      req.Provider,
+			"imported":      len(assets),
+			"new_assets":    newCount,
+			"auto_register": req.AutoRegister,
+		},
+	})
+}
+
+// handleDiscoveryCloudImport imports provider-native cloud inventory JSON into
+// the discovery inventory while reusing the normal register/sync flow.
+func (a *API) handleDiscoveryCloudImport(w http.ResponseWriter, r *http.Request) {
+	ds := a.initDiscovery()
+
+	var req struct {
+		Provider     string            `json:"provider"`
+		URI          string            `json:"uri"`
+		Headers      map[string]string `json:"headers"`
+		Content      json.RawMessage   `json:"content"`
+		TagFilters   map[string]string `json:"tag_filters"`
+		Port         int               `json:"port"`
+		AutoRegister bool              `json:"auto_register"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Provider) == "" {
+		writeError(w, http.StatusBadRequest, "provider is required")
+		return
+	}
+
+	payload, err := resolveDiscoveryImportPayload(r.Context(), req.URI, req.Headers, req.Content, "")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	assets, err := discovery.ImportCloudAssets(req.Provider, payload, req.TagFilters, req.Port)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.AutoRegister {
+		for i := range assets {
+			assets[i].AutoRegister = true
+		}
+	}
+
+	newCount := ds.inventory.UpsertAssets(assets)
+	if err := ds.inventory.Save(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save inventory: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"provider":      req.Provider,
+			"imported":      len(assets),
+			"new_assets":    newCount,
+			"auto_register": req.AutoRegister,
 		},
 	})
 }
@@ -430,4 +633,34 @@ func (a *API) handleUpdateDiscoveryConfig(w http.ResponseWriter, r *http.Request
 			"ssh_banner":  ds.scanConfig.SSHBanner,
 		},
 	})
+}
+
+func fetchDiscoveryImportPayload(ctx context.Context, uri string, headers map[string]string) ([]byte, error) {
+	uri = strings.TrimSpace(uri)
+	if uri == "" {
+		return nil, fmt.Errorf("uri is required")
+	}
+	if !strings.HasPrefix(uri, "http://") && !strings.HasPrefix(uri, "https://") {
+		return nil, fmt.Errorf("unsupported uri scheme: only http:// and https:// are allowed")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build fetch request: %w", err)
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", uri, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("fetch %s: unexpected status %s", uri, resp.Status)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", uri, err)
+	}
+	return data, nil
 }

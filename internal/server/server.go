@@ -23,6 +23,7 @@ import (
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/compliance"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dataplane"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dlp"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/grpcapi"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
@@ -358,35 +359,56 @@ func (s *Server) routes() error {
 
 	// REST API v2 — delegate to api package.
 	apiCfg := &api.Config{
-		AdminUser:                       s.config.AdminUser,
-		AdminPassHash:                   s.config.AdminPassHash,
-		SessionSecret:                   s.config.SessionSecret,
-		AuditLogDir:                     s.config.AuditLogDir,
-		RecordingDir:                    s.config.RecordingDir,
-		RecordingObjectStorageEnabled:   s.config.RecordingObjectStorageEnabled,
-		RecordingObjectStorageEndpoint:  s.config.RecordingObjectStorageEndpoint,
-		RecordingObjectStorageBucket:    s.config.RecordingObjectStorageBucket,
-		RecordingObjectStorageAccessKey: s.config.RecordingObjectStorageAccessKey,
-		RecordingObjectStorageSecretKey: s.config.RecordingObjectStorageSecretKey,
-		RecordingObjectStorageRegion:    s.config.RecordingObjectStorageRegion,
-		RecordingObjectStoragePrefix:    s.config.RecordingObjectStoragePrefix,
-		RecordingObjectStorageUseSSL:    s.config.RecordingObjectStorageUseSSL,
-		DataDir:                         s.config.DataDir,
-		ConfigFile:                      s.config.DataPlaneConfigFile,
-		ConfigVerDir:                    filepath.Join(s.config.DataDir, "config_versions"),
-		ConfigApprovalEnabled:           s.config.ConfigApprovalEnabled,
-		ConfigStoreBackend:              s.config.ConfigStoreBackend,
-		UserStoreBackend:                s.config.UserStoreBackend,
-		PostgresDatabaseURL:             s.config.PostgresDatabaseURL,
-		PostgresReadDatabaseURLs:        s.config.PostgresReadDatabaseURLs,
-		AuditStoreBackend:               s.config.AuditStoreBackend,
-		AuditStoreDatabaseURL:           s.config.AuditStoreDatabaseURL,
-		AuditStoreReadDatabaseURLs:      s.config.AuditStoreReadDatabaseURLs,
-		DatabaseMaxOpenConns:            s.config.DatabaseMaxOpenConns,
-		DatabaseMaxIdleConns:            s.config.DatabaseMaxIdleConns,
-		DatabaseConnMaxLifetime:         s.config.DatabaseConnMaxLifetime,
-		DatabaseConnMaxIdleTime:         s.config.DatabaseConnMaxIdleTime,
-		DatabaseReadAfterWriteWindow:    s.config.DatabaseReadAfterWriteWindow,
+		AdminUser:                          s.config.AdminUser,
+		AdminPassHash:                      s.config.AdminPassHash,
+		SessionSecret:                      s.config.SessionSecret,
+		AuditLogDir:                        s.config.AuditLogDir,
+		RecordingDir:                       s.config.RecordingDir,
+		RecordingObjectStorageEnabled:      s.config.RecordingObjectStorageEnabled,
+		RecordingObjectStorageEndpoint:     s.config.RecordingObjectStorageEndpoint,
+		RecordingObjectStorageBucket:       s.config.RecordingObjectStorageBucket,
+		RecordingObjectStorageAccessKey:    s.config.RecordingObjectStorageAccessKey,
+		RecordingObjectStorageSecretKey:    s.config.RecordingObjectStorageSecretKey,
+		RecordingObjectStorageRegion:       s.config.RecordingObjectStorageRegion,
+		RecordingObjectStoragePrefix:       s.config.RecordingObjectStoragePrefix,
+		RecordingObjectStorageUseSSL:       s.config.RecordingObjectStorageUseSSL,
+		AuditArchiveObjectStorageEnabled:   s.config.AuditArchiveObjectStorageEnabled,
+		AuditArchiveObjectStorageEndpoint:  s.config.AuditArchiveObjectStorageEndpoint,
+		AuditArchiveObjectStorageBucket:    s.config.AuditArchiveObjectStorageBucket,
+		AuditArchiveObjectStorageAccessKey: s.config.AuditArchiveObjectStorageAccessKey,
+		AuditArchiveObjectStorageSecretKey: s.config.AuditArchiveObjectStorageSecretKey,
+		AuditArchiveObjectStorageRegion:    s.config.AuditArchiveObjectStorageRegion,
+		AuditArchiveObjectStoragePrefix:    s.config.AuditArchiveObjectStoragePrefix,
+		AuditArchiveObjectStorageUseSSL:    s.config.AuditArchiveObjectStorageUseSSL,
+		DataDir:                            s.config.DataDir,
+		ConfigFile:                         s.config.DataPlaneConfigFile,
+		ConfigVerDir:                       filepath.Join(s.config.DataDir, "config_versions"),
+		ConfigApprovalEnabled:              s.config.ConfigApprovalEnabled,
+		ConfigStoreBackend:                 s.config.ConfigStoreBackend,
+		UserStoreBackend:                   s.config.UserStoreBackend,
+		PostgresDatabaseURL:                s.config.PostgresDatabaseURL,
+		PostgresReadDatabaseURLs:           s.config.PostgresReadDatabaseURLs,
+		AuditStoreBackend:                  s.config.AuditStoreBackend,
+		AuditStoreDatabaseURL:              s.config.AuditStoreDatabaseURL,
+		AuditStoreReadDatabaseURLs:         s.config.AuditStoreReadDatabaseURLs,
+		AuditStoreEndpoint:                 s.config.AuditStoreEndpoint,
+		AuditStoreToken:                    s.config.AuditStoreToken,
+		AuditStoreUsername:                 s.config.AuditStoreUsername,
+		AuditStorePassword:                 s.config.AuditStorePassword,
+		AuditStoreIndex:                    s.config.AuditStoreIndex,
+		AuditStoreInsecureTLS:              s.config.AuditStoreInsecureTLS,
+		AuditQueueBackend:                  s.config.AuditQueueBackend,
+		AuditQueueEndpoint:                 s.config.AuditQueueEndpoint,
+		AuditQueueTopic:                    s.config.AuditQueueTopic,
+		AuditQueueExchange:                 s.config.AuditQueueExchange,
+		AuditQueueRoutingKey:               s.config.AuditQueueRoutingKey,
+		DatabaseMaxOpenConns:               s.config.DatabaseMaxOpenConns,
+		DatabaseMaxIdleConns:               s.config.DatabaseMaxIdleConns,
+		DatabaseConnMaxLifetime:            s.config.DatabaseConnMaxLifetime,
+		DatabaseConnMaxIdleTime:            s.config.DatabaseConnMaxIdleTime,
+		DatabaseReadAfterWriteWindow:       s.config.DatabaseReadAfterWriteWindow,
+		DLPClipboardAuditEnabled:           s.config.DLPClipboardAuditEnabled,
+		JITChatOpsSlackSigningSecret:       s.config.JITChatOpsSlackSigningSecret,
 	}
 	apiHandler, err := api.New(s.dp, apiCfg)
 	if err != nil {
@@ -395,7 +417,11 @@ func (s *Server) routes() error {
 	s.apiHandler = apiHandler
 	apiHandler.StartSessionMetadataSync(s.backgroundCtx, 5*time.Second)
 	apiHandler.StartAuditSync(s.backgroundCtx, 5*time.Second)
+	apiHandler.StartAuditArchiveSync(s.backgroundCtx, 5*time.Second)
+	apiHandler.StartAuditQueueSync(s.backgroundCtx, 5*time.Second)
 	apiHandler.StartRecordingArchiveSync(s.backgroundCtx, 5*time.Second)
+	apiHandler.StartDiscoverySync(s.backgroundCtx, 5*time.Second)
+	apiHandler.StartAutomationScheduler(s.backgroundCtx, 5*time.Second)
 	apiHandler.RegisterRoutes(s.mux)
 	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
 		s.mux.Handle(method+" /api/v3/", s.handleAPIVersionAlias("/api/v3/", "/api/v2/"))
@@ -470,14 +496,22 @@ func (s *Server) routes() error {
 	// Just-in-time access requests.
 	jitStore := jit.NewStore(dataDir, nil)
 	jitNotifier, err := jit.NewNotifier(jit.NotifierConfig{
-		SMTPAddr:           s.config.JITNotifySMTPAddr,
-		SMTPUsername:       s.config.JITNotifySMTPUsername,
-		SMTPPassword:       s.config.JITNotifySMTPPassword,
-		EmailFrom:          s.config.JITNotifyEmailFrom,
-		EmailTo:            s.config.JITNotifyEmailTo,
-		SlackWebhookURL:    s.config.JITNotifySlackWebhookURL,
-		DingTalkWebhookURL: s.config.JITNotifyDingTalkWebhookURL,
-		WeComWebhookURL:    s.config.JITNotifyWeComWebhookURL,
+		SMTPAddr:               s.config.JITNotifySMTPAddr,
+		SMTPUsername:           s.config.JITNotifySMTPUsername,
+		SMTPPassword:           s.config.JITNotifySMTPPassword,
+		EmailFrom:              s.config.JITNotifyEmailFrom,
+		EmailTo:                s.config.JITNotifyEmailTo,
+		SlackWebhookURL:        s.config.JITNotifySlackWebhookURL,
+		DingTalkWebhookURL:     s.config.JITNotifyDingTalkWebhookURL,
+		WeComWebhookURL:        s.config.JITNotifyWeComWebhookURL,
+		TeamsWebhookURL:        s.config.JITNotifyTeamsWebhookURL,
+		PagerDutyRoutingKey:    s.config.JITNotifyPagerDutyRoutingKey,
+		OpsgenieAPIURL:         s.config.JITNotifyOpsgenieAPIURL,
+		OpsgenieAPIKey:         s.config.JITNotifyOpsgenieAPIKey,
+		SubjectTemplate:        s.config.JITNotifySubjectTemplate,
+		BodyTemplate:           s.config.JITNotifyBodyTemplate,
+		MessageSubjectTemplate: s.config.JITNotifyMessageSubjectTemplate,
+		MessageBodyTemplate:    s.config.JITNotifyMessageBodyTemplate,
 	})
 	if err != nil {
 		return fmt.Errorf("server: init jit notifier: %w", err)
@@ -488,6 +522,25 @@ func (s *Server) routes() error {
 	go jitStore.StartCleanupLoop(s.backgroundCtx, time.Minute)
 	apiHandler.SetJIT(jitStore)
 	apiHandler.RegisterJITRoutes(s.mux)
+	if s.config.DLPTransferApprovalEnabled {
+		approvalTimeout, err := time.ParseDuration(strings.TrimSpace(s.config.DLPTransferApprovalTimeout))
+		if err != nil {
+			return fmt.Errorf("server: invalid dlp transfer approval timeout: %w", err)
+		}
+		transferApprovalStore := api.NewTransferApprovalStore(
+			filepath.Join(dataDir, "transfer_approvals.json"),
+			api.ParseTransferApprovalRoles(s.config.DLPTransferApprovalRoles),
+			approvalTimeout,
+		)
+		if jitNotifier != nil {
+			transferApprovalStore.SetNotifier(jitNotifier)
+		}
+		apiHandler.SetTransferApprovals(transferApprovalStore)
+		apiHandler.RegisterTransferApprovalRoutes(s.mux)
+		if jitNotifier == nil {
+			log.Printf("terminal dlp approvals enabled but no jit_notify_* sink configured; approval requests will not send notifications")
+		}
+	}
 
 	// Command control — policy engine + real-time approvals.
 	policyEngine := cmdctrl.NewPolicyEngine(dataDir)
@@ -526,6 +579,16 @@ func (s *Server) routes() error {
 	s.threatDetector = threatDetector
 	apiHandler.SetThreat(threatDetector)
 	apiHandler.RegisterThreatRoutes(s.mux)
+	apiHandler.StartThreatResponseLoop(s.backgroundCtx, threatDetector, api.ThreatResponseConfig{
+		Enabled:       s.config.ThreatResponseEnabled,
+		BlockSourceIP: s.config.ThreatResponseBlockSourceIP,
+		KillSessions:  s.config.ThreatResponseKillSessions,
+		Notify:        s.config.ThreatResponseNotify,
+		MinSeverity:   threat.Severity(strings.TrimSpace(s.config.ThreatResponseMinSeverity)),
+	}, jitNotifier)
+	if s.config.ThreatResponseEnabled && s.config.ThreatResponseNotify && jitNotifier == nil {
+		log.Printf("server: threat_response_notify is enabled but no jit_notify_* sink is configured")
+	}
 
 	complianceGen := compliance.NewReportGenerator(apiCfg.AuditLogDir, apiCfg.ConfigFile, dataDir)
 	complianceGen.SetSubjectDataProvider(apiHandler.ComplianceDataProvider())
@@ -544,6 +607,7 @@ func (s *Server) routes() error {
 	s.mux.HandleFunc("GET /sessions", s.handlePage("pages/sessions.html", "Sessions"))
 	s.mux.HandleFunc("GET /users", s.handlePage("pages/users.html", "Users"))
 	s.mux.HandleFunc("GET /servers", s.handlePage("pages/servers.html", "Servers"))
+	s.mux.HandleFunc("GET /automation", s.handlePage("pages/automation.html", "Automation"))
 	s.mux.HandleFunc("GET /audit", s.handlePage("pages/audit.html", "Audit Log"))
 	s.mux.HandleFunc("GET /webhooks", s.handlePage("pages/webhooks.html", "Webhook Deliveries"))
 	s.mux.HandleFunc("GET /settings", s.handlePage("pages/settings.html", "Settings"))
@@ -554,9 +618,26 @@ func (s *Server) routes() error {
 	s.mux.Handle("GET /ws/sessions", s.handleSessionsStream())
 	s.mux.Handle("GET /ws/sessions/{id}/live", s.handleSessionLiveStream())
 	terminalHandler := &ws.TerminalHandler{
-		ProxyAddr:         s.config.SSHProxyAddr,
-		RecordingDir:      s.config.RecordingDir,
-		RecordingBasePath: terminalRecordingBasePath,
+		ProxyAddr:               s.config.SSHProxyAddr,
+		RecordingDir:            s.config.RecordingDir,
+		RecordingBasePath:       terminalRecordingBasePath,
+		TransferApprovalEnabled: s.config.DLPTransferApprovalEnabled,
+		ClipboardAuditEnabled:   s.config.DLPClipboardAuditEnabled,
+		TransferPolicy: dlp.NewFileTransferPolicy(dlp.FileTransferPolicyOptions{
+			AllowNames:                dlp.ParsePatternList(s.config.DLPFileAllowNames),
+			DenyNames:                 dlp.ParsePatternList(s.config.DLPFileDenyNames),
+			AllowExtensions:           dlp.ParsePatternList(s.config.DLPFileAllowExtensions),
+			DenyExtensions:            dlp.ParsePatternList(s.config.DLPFileDenyExtensions),
+			AllowPaths:                dlp.ParsePatternList(s.config.DLPFileAllowPaths),
+			DenyPaths:                 dlp.ParsePatternList(s.config.DLPFileDenyPaths),
+			MaxUploadBytes:            s.config.DLPFileMaxUploadBytes,
+			MaxDownloadBytes:          s.config.DLPFileMaxDownloadBytes,
+			SensitiveScanEnabled:      s.config.DLPSensitiveScanEnabled,
+			SensitiveDetectCreditCard: s.config.DLPSensitiveDetectCreditCard,
+			SensitiveDetectCNIDCard:   s.config.DLPSensitiveDetectCNIDCard,
+			SensitiveDetectAPIKey:     s.config.DLPSensitiveDetectAPIKey,
+			SensitiveMaxScanBytes:     s.config.DLPSensitiveMaxScanBytes,
+		}),
 	}
 	s.mux.Handle("GET /ws/terminal", terminalHandler)
 	s.mux.HandleFunc("GET /api/v2/terminal/recordings/{id}/download", s.handleTerminalRecordingDownload(terminalHandler))
