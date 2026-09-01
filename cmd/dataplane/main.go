@@ -56,6 +56,10 @@ func main() {
 			"key for the tamper-evidence chain; must match the control plane's audit_chain_key")
 		metricsAddr = flag.String("metrics-addr", "127.0.0.1:9100",
 			"address for /metrics, /healthz, and /readyz; empty disables it")
+		compressRecordings = flag.Bool("compress-recordings", true,
+			"compress session recordings; terminal output shrinks by roughly an order of magnitude")
+		recordingKey = flag.String("recording-encryption-key", "",
+			"32-byte hex key sealing recordings at rest; a transcript contains whatever the user typed")
 	)
 	flag.Parse()
 
@@ -100,6 +104,8 @@ func main() {
 	cfg.AuditSpoolDir = *auditSpoolDir
 	cfg.AuditSpoolSync = *auditSpoolSync
 	cfg.AuditChainKey = *auditChainKey
+	cfg.CompressRecordings = *compressRecordings
+	cfg.RecordingEncryptionKey = *recordingKey
 
 	server, err := dp.New(cfg, client)
 	if err != nil {

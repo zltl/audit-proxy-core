@@ -538,15 +538,21 @@ func (s *sessionChannel) startRecording(title string) {
 	}
 	s.started = time.Now()
 
-	path := filepath.Join(s.conn.proxy.config.RecordingDir,
-		s.conn.sessionID+"-"+s.started.UTC().Format("20060102T150405")+".cast")
+	cfg := s.conn.proxy.config
+	// The name says what the file is, so a reader does not have to guess at
+	// the container before it can open one.
+	path := filepath.Join(cfg.RecordingDir,
+		s.conn.sessionID+"-"+s.started.UTC().Format("20060102T150405")+
+			recordingExtension(cfg.CompressRecordings, s.conn.proxy.recordingKey != nil))
 	recorder, err := NewRecorder(RecorderOptions{
-		Path:         path,
-		Width:        s.width,
-		Height:       s.height,
-		Title:        title,
-		CaptureInput: s.conn.proxy.config.CaptureKeystrokes,
-		StartedAt:    s.started,
+		Path:          path,
+		Width:         s.width,
+		Height:        s.height,
+		Title:         title,
+		CaptureInput:  cfg.CaptureKeystrokes,
+		StartedAt:     s.started,
+		Compress:      cfg.CompressRecordings,
+		EncryptionKey: s.conn.proxy.recordingKey,
 		Env: map[string]string{
 			"SSH_PROXY_SESSION": s.conn.sessionID,
 			"SSH_PROXY_USER":    s.conn.username,

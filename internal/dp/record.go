@@ -2,6 +2,7 @@ package dp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,9 +18,13 @@ import (
 // written — useful when someone is watching a live session, and it means a
 // crashed proxy leaves a truncated but valid recording rather than nothing.
 type Recorder struct {
-	mu      sync.Mutex
-	file    *os.File
-	writer  io.Writer
+	mu     sync.Mutex
+	file   *os.File
+	writer io.Writer
+	// sink is the head of the compression and encryption chain, closed before
+	// the file so buffered data is not lost.
+	sink    io.WriteCloser
+	flush   func() error
 	started time.Time
 	closed  bool
 	path    string
@@ -37,6 +42,13 @@ type RecorderOptions struct {
 	Env          map[string]string
 	CaptureInput bool
 	StartedAt    time.Time
+	// Compress shrinks a recording by roughly an order of magnitude, which is
+	// what makes keeping one for a compliance period affordable.
+	Compress bool
+	// EncryptionKey seals the recording at rest. A transcript contains whatever
+	// the user typed, so reading the disk should not be the same as reading the
+	// sessions.
+	EncryptionKey []byte
 }
 
 // NewRecorder creates the file and writes the asciicast header.
@@ -60,6 +72,12 @@ func NewRecorder(opts RecorderOptions) (*Recorder, error) {
 		return nil, fmt.Errorf("dp: create recording: %w", err)
 	}
 
+	sink, err := recordingWriterChain(file, opts.Compress, opts.EncryptionKey)
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+
 	header := map[string]interface{}{
 		"version":   2,
 		"width":     opts.Width,
@@ -77,18 +95,25 @@ func NewRecorder(opts RecorderOptions) (*Recorder, error) {
 		_ = file.Close()
 		return nil, fmt.Errorf("dp: encode recording header: %w", err)
 	}
-	if _, err := file.Write(append(encoded, '\n')); err != nil {
-		_ = file.Close()
+	if _, err := sink.Write(append(encoded, '\n')); err != nil {
+		_ = sink.Close()
 		return nil, fmt.Errorf("dp: write recording header: %w", err)
 	}
 
-	return &Recorder{
+	recorder := &Recorder{
 		file:         file,
-		writer:       file,
+		writer:       sink,
+		sink:         sink,
 		started:      opts.StartedAt,
 		path:         opts.Path,
 		captureInput: opts.CaptureInput,
-	}, nil
+	}
+	if flusher, ok := sink.(interface{ Flush() error }); ok {
+		// Flushing after each event keeps a live recording readable, which is
+		// what makes watching a session in progress possible.
+		recorder.flush = flusher.Flush
+	}
+	return recorder, nil
 }
 
 // Path reports where the recording is being written.
@@ -149,6 +174,9 @@ func (r *Recorder) write(kind string, data []byte) {
 		return
 	}
 	n, err := r.writer.Write(append(line, '\n'))
+	if err == nil && r.flush != nil {
+		err = r.flush()
+	}
 	if err != nil {
 		// A recording that cannot be written must not take the session down,
 		// but it must not silently continue either; the close path reports it.
@@ -169,11 +197,19 @@ func (r *Recorder) Close() error {
 		return nil
 	}
 	r.closed = true
-	err := r.file.Sync()
-	if closeErr := r.file.Close(); err == nil {
-		err = closeErr
+	// The chain is closed first: a compressor holds a trailer that is only
+	// written on close, and closing the file first would truncate it.
+	var err error
+	if r.sink != nil {
+		err = r.sink.Close()
+		r.sink = nil
 	}
-	r.file = nil
+	if r.file != nil {
+		if syncErr := r.file.Sync(); err == nil && syncErr != nil && !errors.Is(syncErr, os.ErrClosed) {
+			err = syncErr
+		}
+		r.file = nil
+	}
 	return err
 }
 

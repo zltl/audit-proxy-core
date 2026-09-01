@@ -34,6 +34,17 @@ type Config struct {
 	// Off by default: keystrokes include passwords typed at upstream prompts.
 	CaptureKeystrokes bool
 
+	// CompressRecordings shrinks recordings by roughly an order of magnitude.
+	// Terminal output is overwhelmingly repetitive, and the difference decides
+	// whether keeping a year of sessions is affordable.
+	CompressRecordings bool
+
+	// RecordingEncryptionKey is a 32-byte hex key sealing recordings at rest.
+	// A transcript contains whatever the user typed, including passwords
+	// entered at an upstream prompt, so reading the disk should not be the
+	// same as reading the sessions.
+	RecordingEncryptionKey string
+
 	// MaxSessions bounds concurrent connections on this node. Policy limits are
 	// per user and enforced centrally; this is the node's own capacity guard.
 	MaxSessions int
@@ -149,6 +160,9 @@ func (c Config) Validate() error {
 	}
 	if !strings.HasPrefix(c.ServerVersion, "SSH-2.0-") {
 		return fmt.Errorf("dp: server version must begin with SSH-2.0-, got %q", c.ServerVersion)
+	}
+	if _, err := recordingKeyBytes(c.RecordingEncryptionKey); err != nil {
+		return err
 	}
 	return nil
 }
