@@ -60,6 +60,10 @@ func (s *Server) startAccessDecisionPoint() error {
 		if ca := s.apiHandler.CertificateAuthority(); ca != nil {
 			decisionPoint.SetCertificateSigner(upstreamCertificateSigner{ca: ca})
 		}
+		// The administration API for these tables only exists when the store
+		// does, so it is registered here rather than with the other routes.
+		s.apiHandler.SetDataPlaneStore(st)
+		s.apiHandler.RegisterDataPlaneRoutes(s.mux)
 	}
 
 	listener, err := listenForDecisionPoint(address)

@@ -95,6 +95,10 @@ func DefaultAuthzConfig() AuthzConfig {
 		Rules: []RouteRule{
 			// Identity and access management.
 			admin("/api/v2/users"),
+			// The data-plane tables decide who may reach which host as which
+			// account; every endpoint under them grants access rather than
+			// merely using it.
+			admin("/api/v2/dp/"),
 			admin("/api/v2/rbac/"),
 
 			// Anything that changes what a session may reach.

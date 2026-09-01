@@ -14,6 +14,7 @@ import (
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/threat"
 )
 
@@ -130,6 +131,7 @@ type API struct {
 	recordingSyncOnce  sync.Once
 	threatResponseOnce sync.Once
 	features           *featureGate
+	dpStore            *store.Store
 }
 
 // userStore holds the in-memory user list backed by a JSON file.
