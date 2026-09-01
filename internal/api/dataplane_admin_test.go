@@ -507,3 +507,38 @@ func TestDPRoutesReportWhenTheStoreIsAbsent(t *testing.T) {
 		t.Errorf("the error should say how to enable it: %s", rr.Body.String())
 	}
 }
+
+func TestDPHandlesFingerprintsContainingASlash(t *testing.T) {
+	_, mux, st := setupDPAdmin(t)
+	if _, err := st.CreateTarget(store.Target{Name: "web-1", Host: "10.0.1.10", Enabled: true}); err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	target, _ := st.GetTarget("web-1")
+
+	// SHA256 fingerprints are base64, so roughly one in three contains a
+	// forward slash. Relying on a random key to produce one makes this a bug
+	// that appears intermittently in production and never in review.
+	fingerprint := "SHA256:abc/def+ghi/jkl"
+	if _, err := st.PutHostKey(store.HostKey{
+		TargetID: target.ID, Fingerprint: fingerprint, Status: store.HostKeyPending,
+	}); err != nil {
+		t.Fatalf("PutHostKey: %v", err)
+	}
+
+	rr := doRequest(mux, http.MethodPut,
+		"/api/v2/dp/targets/web-1/host-keys/"+fingerprint,
+		map[string]interface{}{"status": "trusted"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("trusting a key whose fingerprint contains a slash = %d: %s", rr.Code, rr.Body.String())
+	}
+	keys, _ := st.ListHostKeys(target.ID)
+	if len(keys) != 1 || keys[0].Status != store.HostKeyTrusted {
+		t.Fatalf("host key was not promoted: %+v", keys)
+	}
+
+	rr = doRequest(mux, http.MethodDelete,
+		"/api/v2/dp/targets/web-1/host-keys/"+fingerprint, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("deleting it = %d: %s", rr.Code, rr.Body.String())
+	}
+}

@@ -32,16 +32,19 @@ func (a *API) RegisterDataPlaneRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v2/dp/users/{username}", a.handleDPDeleteUser)
 	mux.HandleFunc("GET /api/v2/dp/users/{username}/keys", a.handleDPListKeys)
 	mux.HandleFunc("POST /api/v2/dp/users/{username}/keys", a.handleDPAddKey)
-	mux.HandleFunc("DELETE /api/v2/dp/users/{username}/keys/{fingerprint}", a.handleDPDeleteKey)
+	mux.HandleFunc("DELETE /api/v2/dp/users/{username}/keys/{fingerprint...}", a.handleDPDeleteKey)
 
 	mux.HandleFunc("GET /api/v2/dp/targets", a.handleDPListTargets)
 	mux.HandleFunc("POST /api/v2/dp/targets", a.handleDPCreateTarget)
 	mux.HandleFunc("GET /api/v2/dp/targets/{name}", a.handleDPGetTarget)
 	mux.HandleFunc("PATCH /api/v2/dp/targets/{name}", a.handleDPUpdateTarget)
 	mux.HandleFunc("DELETE /api/v2/dp/targets/{name}", a.handleDPDeleteTarget)
+	// The fingerprint segments below use a trailing wildcard because a SHA256
+	// fingerprint is base64 and routinely contains a forward slash, which a
+	// single path segment cannot hold.
 	mux.HandleFunc("GET /api/v2/dp/targets/{name}/host-keys", a.handleDPListHostKeys)
-	mux.HandleFunc("PUT /api/v2/dp/targets/{name}/host-keys/{fingerprint}", a.handleDPSetHostKeyStatus)
-	mux.HandleFunc("DELETE /api/v2/dp/targets/{name}/host-keys/{fingerprint}", a.handleDPDeleteHostKey)
+	mux.HandleFunc("PUT /api/v2/dp/targets/{name}/host-keys/{fingerprint...}", a.handleDPSetHostKeyStatus)
+	mux.HandleFunc("DELETE /api/v2/dp/targets/{name}/host-keys/{fingerprint...}", a.handleDPDeleteHostKey)
 	mux.HandleFunc("GET /api/v2/dp/host-keys/pending", a.handleDPPendingHostKeys)
 
 	mux.HandleFunc("GET /api/v2/dp/credentials", a.handleDPListCredentials)
