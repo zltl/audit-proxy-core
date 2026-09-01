@@ -3,6 +3,7 @@ package pdpclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"strings"
@@ -349,4 +350,45 @@ func (c *Client) WatchRevocations(ctx context.Context, handle func(*sshproxyv1.R
 			backoff *= 2
 		}
 	}
+}
+
+// ReportEvents delivers a batch of audit records.
+//
+// The caller keeps the batch spooled until this returns without error, so a
+// failure here delays delivery rather than losing it. A partial acceptance is
+// treated as a failure for the same reason: replaying a few records is
+// harmless because the store deduplicates them, whereas dropping any is not.
+func (c *Client) ReportEvents(ctx context.Context, nodeID string, events []*sshproxyv1.AuditEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	callCtx, cancel := c.callContext(ctx)
+	defer cancel()
+
+	stream, err := c.api.ReportEvents(callCtx)
+	if err != nil {
+		if unreachable(err) {
+			c.markUnhealthy(err)
+		}
+		return err
+	}
+	if err := stream.Send(&sshproxyv1.AuditEventBatch{NodeId: nodeID, Events: events}); err != nil {
+		if unreachable(err) {
+			c.markUnhealthy(err)
+		}
+		return err
+	}
+	resp, err := stream.CloseAndRecv()
+	if err != nil {
+		if unreachable(err) {
+			c.markUnhealthy(err)
+		}
+		return err
+	}
+	c.markHealthy()
+	if resp.GetAccepted() < int64(len(events)) {
+		return fmt.Errorf("pdpclient: the control plane accepted %d of %d audit events",
+			resp.GetAccepted(), len(events))
+	}
+	return nil
 }

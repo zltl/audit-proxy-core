@@ -97,12 +97,14 @@ func (c *connection) recordTransfer(transfer FileTransfer) {
 	c.transfersMu.Lock()
 	c.transfers = append(c.transfers, transfer)
 	c.transfersMu.Unlock()
+	c.emitFileTransfer(transfer)
 }
 
 func (c *connection) recordOperation(op FileOperation) {
 	c.transfersMu.Lock()
 	c.operations = append(c.operations, op)
 	c.transfersMu.Unlock()
+	c.emitFileOperation(op)
 }
 
 // Transfers returns the file transfers seen on this session.

@@ -326,14 +326,18 @@ func (s *sessionChannel) screenCommand(ctx context.Context, command string) comm
 	switch resp.GetDecision() {
 	case sshproxyv1.CommandDecision_COMMAND_DECISION_DENY:
 		recorder.Marker("blocked: " + command)
+		s.conn.emitCommand(command, "deny", resp.GetRuleId())
 		return commandDecision{blocked: true, message: resp.GetReason()}
 	case sshproxyv1.CommandDecision_COMMAND_DECISION_REWRITE:
 		recorder.Marker("rewritten: " + command)
+		s.conn.emitCommand(command, "rewrite", resp.GetRuleId())
 		return commandDecision{rewritten: resp.GetRewrittenCommand()}
 	case sshproxyv1.CommandDecision_COMMAND_DECISION_AUDIT:
 		recorder.Marker("flagged: " + command)
+		s.conn.emitCommand(command, "audit", resp.GetRuleId())
 		return commandDecision{}
 	default:
+		s.conn.emitCommand(command, "allow", resp.GetRuleId())
 		return commandDecision{}
 	}
 }

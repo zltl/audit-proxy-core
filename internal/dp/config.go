@@ -55,6 +55,23 @@ type Config struct {
 	// DrainTimeout is how long Shutdown waits for sessions to end before
 	// closing them.
 	DrainTimeout time.Duration
+
+	// AuditSpoolDir is where audit events are buffered before delivery. They go
+	// to disk first so a session never waits on the control plane and a record
+	// is not lost to a restart during an outage.
+	AuditSpoolDir string
+
+	// AuditSpoolSync forces each audit event to durable storage before the
+	// session continues. It is the difference between surviving a process crash
+	// and surviving a machine crash, at a substantial cost in throughput.
+	AuditSpoolSync bool
+
+	// AuditSpoolMaxBytes bounds the spool. Past it the oldest records are
+	// dropped, because a proxy that fills its disk stops serving sessions.
+	AuditSpoolMaxBytes int64
+
+	// AuditFlushInterval is how often spooled events are shipped.
+	AuditFlushInterval time.Duration
 }
 
 // DefaultConfig returns the shipped defaults.
@@ -69,6 +86,9 @@ func DefaultConfig() Config {
 		UpstreamDialTimeout: 15 * time.Second,
 		KeepAliveInterval:   30 * time.Second,
 		DrainTimeout:        30 * time.Second,
+		AuditSpoolDir:       "/var/lib/ssh-proxy/audit-spool",
+		AuditSpoolMaxBytes:  1 << 30,
+		AuditFlushInterval:  time.Second,
 	}
 }
 
@@ -100,6 +120,15 @@ func (c Config) withDefaults() Config {
 	}
 	if c.DrainTimeout == 0 {
 		c.DrainTimeout = defaults.DrainTimeout
+	}
+	if c.AuditSpoolDir == "" {
+		c.AuditSpoolDir = defaults.AuditSpoolDir
+	}
+	if c.AuditSpoolMaxBytes == 0 {
+		c.AuditSpoolMaxBytes = defaults.AuditSpoolMaxBytes
+	}
+	if c.AuditFlushInterval == 0 {
+		c.AuditFlushInterval = defaults.AuditFlushInterval
 	}
 	return c
 }

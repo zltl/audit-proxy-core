@@ -31,6 +31,7 @@ type Server struct {
 	hostSigners []ssh.Signer
 
 	authState *authStateTable
+	audit     *auditEmitter
 
 	listenerMu sync.Mutex
 	listener   net.Listener
@@ -67,11 +68,22 @@ func New(cfg Config, pdp *pdpclient.Client) (*Server, error) {
 		return nil, err
 	}
 
+	emitter, err := newAuditEmitter(auditEmitterOptions{
+		NodeID:         cfg.NodeID,
+		Dir:            cfg.AuditSpoolDir,
+		SyncEveryWrite: cfg.AuditSpoolSync,
+		MaxTotalBytes:  cfg.AuditSpoolMaxBytes,
+	}, pdp)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Server{
 		config:      cfg,
 		pdp:         pdp,
 		hostSigners: signers,
 		authState:   newAuthStateTable(),
+		audit:       emitter,
 		connections: make(map[*connection]struct{}),
 		recordings:  make(map[string]string),
 		shutdown:    make(chan struct{}),
@@ -123,6 +135,7 @@ func (s *Server) serveListener(ctx context.Context, listener net.Listener) error
 	// Revocations arrive out of band as well as on the heartbeat, so a kill
 	// takes effect promptly rather than at the next heartbeat interval.
 	go s.pdp.WatchRevocations(ctx, s.applyRevocation)
+	go s.audit.Run(ctx, s.config.AuditFlushInterval)
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -226,8 +239,18 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		log.Printf("dp: closing %d session(s) that outlasted the drain timeout", remaining)
 		s.closeAllConnections("the proxy is shutting down")
 	}
-	return nil
+
+	// The spool is flushed last so that the events of the sessions just closed
+	// are included rather than left behind.
+	if pending := s.audit.Pending(); pending > 0 {
+		log.Printf("dp: %d bytes of audit events are still spooled at shutdown", pending)
+	}
+	return s.audit.Close()
 }
+
+// AuditBacklog reports how many bytes of audit events are awaiting delivery,
+// which is what distinguishes a brief hiccup from an outage that is piling up.
+func (s *Server) AuditBacklog() int64 { return s.audit.Pending() }
 
 func (s *Server) trackConnection(c *connection) {
 	s.connectionsMu.Lock()

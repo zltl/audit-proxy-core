@@ -56,6 +56,7 @@ func (c *connection) handleDirectTCPIP(ctx context.Context, newChannel ssh.NewCh
 	}); err != nil {
 		log.Printf("dp: session %s: refusing forward to %s:%d: %v",
 			c.sessionID, payload.DestHost, payload.DestPort, err)
+		c.emitPortForward("local", payload.DestHost, int(payload.DestPort), false, err.Error())
 		_ = newChannel.Reject(ssh.Prohibited, err.Error())
 		return
 	}
@@ -78,6 +79,7 @@ func (c *connection) handleDirectTCPIP(ctx context.Context, newChannel ssh.NewCh
 	defer c.untrackChannel(clientChannel)
 
 	log.Printf("dp: session %s: forwarding to %s:%d", c.sessionID, payload.DestHost, payload.DestPort)
+	c.emitPortForward("local", payload.DestHost, int(payload.DestPort), true, "")
 	c.pipeTunnel(clientChannel, upstreamChannel)
 }
 

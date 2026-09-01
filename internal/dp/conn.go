@@ -87,6 +87,7 @@ func (s *Server) handle(ctx context.Context, rawConn net.Conn) {
 	}
 
 	if err := conn.authorizeAndConnect(ctx); err != nil {
+		conn.emitSessionDenied(err.Error())
 		conn.rejectAllChannels(chans, err)
 		_ = serverConn.Close()
 		return
@@ -175,6 +176,7 @@ func (c *connection) authorizeAndConnect(ctx context.Context) error {
 
 	log.Printf("dp: session %s: %s connected to %s@%s:%d",
 		c.sessionID, c.username, c.upstreamLogin, c.targetHost, c.targetPort)
+	c.emitSessionStart(decision.GetRuleId())
 	return nil
 }
 
@@ -285,6 +287,7 @@ func (c *connection) authorizeChannel(ctx context.Context, req *sshproxyv1.Autho
 		return fmt.Errorf("policy could not be consulted: %w", err)
 	}
 	if !resp.GetAllowed() {
+		c.emitChannelDenied(req.GetChannelType().String(), resp.GetReason())
 		return errors.New(resp.GetReason())
 	}
 	return nil
@@ -386,6 +389,7 @@ func (c *connection) close(ctx context.Context) {
 		if c.terminationReason() != "" {
 			status = "terminated"
 		}
+		c.emitSessionEnd(status, c.terminationReason())
 		// A fresh context: the session's own may already be cancelled, and the
 		// record of how it ended is the part that must not be lost.
 		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

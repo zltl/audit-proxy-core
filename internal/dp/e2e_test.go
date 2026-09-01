@@ -65,6 +65,9 @@ type scriptedPDP struct {
 
 	revocations chan *sshproxyv1.Revocation
 	events      []*sshproxyv1.AuditEvent
+	// rejectEvents makes the control plane refuse audit batches, so a test can
+	// prove the records survive an outage rather than being dropped.
+	rejectEvents bool
 }
 
 func newScriptedPDP() *scriptedPDP {
@@ -194,6 +197,35 @@ func (p *scriptedPDP) StreamRevocations(_ *sshproxyv1.StreamRevocationsRequest, 
 	}
 }
 
+func (p *scriptedPDP) ReportEvents(stream sshproxyv1.AccessDecisionService_ReportEventsServer) error {
+	var accepted int64
+	for {
+		batch, err := stream.Recv()
+		if err == io.EOF {
+			return stream.SendAndClose(&sshproxyv1.ReportEventsResponse{Accepted: accepted})
+		}
+		if err != nil {
+			return err
+		}
+		p.mu.Lock()
+		reject := p.rejectEvents
+		if !reject {
+			p.events = append(p.events, batch.GetEvents()...)
+			accepted += int64(len(batch.GetEvents()))
+		}
+		p.mu.Unlock()
+		if reject {
+			return errors.New("audit sink is unavailable")
+		}
+	}
+}
+
+func (p *scriptedPDP) auditEvents() []*sshproxyv1.AuditEvent {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]*sshproxyv1.AuditEvent(nil), p.events...)
+}
+
 func (p *scriptedPDP) closedRequests() []*sshproxyv1.CloseSessionRequest {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -237,6 +269,8 @@ func newHarness(t *testing.T, configure func(*Config, *scriptedPDP)) *harness {
 	cfg.HostKeyPaths = []string{writeTestHostKey(t)}
 	cfg.HeartbeatInterval = 100 * time.Millisecond
 	cfg.CaptureKeystrokes = true
+	cfg.AuditSpoolDir = filepath.Join(t.TempDir(), "audit-spool")
+	cfg.AuditFlushInterval = 50 * time.Millisecond
 
 	if configure != nil {
 		configure(&cfg, pdp)
@@ -1142,4 +1176,209 @@ func waitForTransfer(t *testing.T, h *harness, path string) FileTransfer {
 	}
 	t.Fatalf("no transfer was recorded for %s", path)
 	return FileTransfer{}
+}
+
+// waitForEvents polls until the expected event types have been delivered.
+func waitForEvents(t *testing.T, h *harness, types ...string) []*sshproxyv1.AuditEvent {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		events := h.pdp.auditEvents()
+		seen := make(map[string]bool, len(events))
+		for _, event := range events {
+			seen[event.GetEventType()] = true
+		}
+		complete := true
+		for _, want := range types {
+			if !seen[want] {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			return events
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	var got []string
+	for _, event := range h.pdp.auditEvents() {
+		got = append(got, event.GetEventType())
+	}
+	t.Fatalf("audit events %v never arrived; saw %v", types, got)
+	return nil
+}
+
+func TestAuditEventsReachTheControlPlane(t *testing.T) {
+	h := newHarness(t, nil)
+	client := h.mustConnect("alice@web-1")
+
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.Output("uptime"); err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	_ = session.Close()
+	_ = client.Close()
+
+	events := waitForEvents(t, h, EventSessionStart, EventSessionEnd)
+
+	var start, end *sshproxyv1.AuditEvent
+	for _, event := range events {
+		switch event.GetEventType() {
+		case EventSessionStart:
+			start = event
+		case EventSessionEnd:
+			end = event
+		}
+	}
+	if start.GetUsername() != "alice" || start.GetTargetHost() == "" {
+		t.Fatalf("session start event is missing context: %+v", start)
+	}
+	if start.GetUpstreamLogin() != "deploy" {
+		t.Errorf("upstream login = %q; the record should say which account was assumed", start.GetUpstreamLogin())
+	}
+	if end.GetBytesOut() == 0 {
+		t.Error("the session end event carries no byte counters")
+	}
+	if start.GetNodeId() != "node-test" {
+		t.Errorf("node id = %q; records must be attributable to a node", start.GetNodeId())
+	}
+}
+
+func TestAuditEventsAreChained(t *testing.T) {
+	h := newHarness(t, nil)
+	client := h.mustConnect("alice@web-1")
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.Output("uptime"); err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	_ = session.Close()
+	_ = client.Close()
+
+	events := waitForEvents(t, h, EventSessionStart, EventSessionEnd)
+	if len(events) < 2 {
+		t.Fatalf("expected several events, got %d", len(events))
+	}
+
+	// Each record must carry its own hash and the previous one's, so removing
+	// or altering a record breaks the chain and is detectable.
+	for i, event := range events {
+		if event.GetIntegrityHash() == "" {
+			t.Fatalf("event %d has no integrity hash", i)
+		}
+		if i > 0 && event.GetPrevHash() != events[i-1].GetIntegrityHash() {
+			t.Fatalf("event %d does not link to the one before it", i)
+		}
+	}
+}
+
+func TestAuditEventsSurviveAControlPlaneOutage(t *testing.T) {
+	h := newHarness(t, func(_ *Config, pdp *scriptedPDP) {
+		pdp.rejectEvents = true
+	})
+	client := h.mustConnect("alice@web-1")
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.Output("uptime"); err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	_ = session.Close()
+
+	// While the sink refuses, nothing is accepted, but the session still works:
+	// audit delivery must never be in the path of a user's shell.
+	time.Sleep(300 * time.Millisecond)
+	if len(h.pdp.auditEvents()) != 0 {
+		t.Fatal("events were recorded as delivered despite the sink refusing them")
+	}
+	if h.proxy.AuditBacklog() == 0 {
+		t.Fatal("undelivered events were not retained; an outage would lose them")
+	}
+
+	// Once the sink recovers the backlog is delivered rather than discarded.
+	h.pdp.mu.Lock()
+	h.pdp.rejectEvents = false
+	h.pdp.mu.Unlock()
+
+	waitForEvents(t, h, EventSessionStart)
+}
+
+func TestRefusedSessionIsAudited(t *testing.T) {
+	h := newHarness(t, func(_ *Config, pdp *scriptedPDP) {
+		pdp.sessionAllowed = false
+		pdp.sessionReason = "no rule permits this target"
+	})
+
+	client, err := h.connect("alice@web-1")
+	if err == nil {
+		_, _ = client.NewSession()
+		_ = client.Close()
+	}
+
+	// A refusal is at least as interesting as a success and must not be the one
+	// thing that leaves no trace.
+	events := waitForEvents(t, h, EventSessionDenied)
+	for _, event := range events {
+		if event.GetEventType() == EventSessionDenied {
+			if event.GetDecision() != "deny" {
+				t.Errorf("decision = %q, want deny", event.GetDecision())
+			}
+			if event.GetDetails() == "" {
+				t.Error("the refusal record does not say why")
+			}
+			return
+		}
+	}
+}
+
+func TestFileTransferProducesAnAuditEvent(t *testing.T) {
+	h := newHarness(t, func(_ *Config, pdp *scriptedPDP) {
+		pdp.sessionFeatures = []string{"shell", "exec", "sftp", "upload", "download", "subsystem"}
+	})
+	client := h.mustConnect("alice@web-1")
+	sftp := newSFTPClient(t, client)
+
+	openPayload := sftpUint32(nil, 1)
+	openPayload = sftpString(openPayload, "/srv/app/artifact.bin")
+	openPayload = sftpUint32(openPayload, 0x00000002|0x00000008)
+	openPayload = sftpUint32(openPayload, 0)
+	sftp.send(3, openPayload)
+	packetType, body := sftp.receive()
+	if packetType != 102 {
+		t.Fatalf("expected a handle, got type %d", packetType)
+	}
+	handleLen := binary.BigEndian.Uint32(body[4:8])
+	handle := string(body[8 : 8+handleLen])
+
+	closePayload := sftpUint32(nil, 2)
+	closePayload = sftpString(closePayload, handle)
+	sftp.send(4, closePayload)
+	_, _ = sftp.receive()
+
+	events := waitForEvents(t, h, EventFileTransfer)
+	for _, event := range events {
+		if event.GetEventType() != EventFileTransfer {
+			continue
+		}
+		record := event.GetFileTransfer()
+		if record == nil {
+			t.Fatal("the transfer event carries no file record")
+		}
+		if record.GetPath() != "/srv/app/artifact.bin" {
+			t.Errorf("path = %q", record.GetPath())
+		}
+		if record.GetFilename() != "artifact.bin" {
+			t.Errorf("filename = %q", record.GetFilename())
+		}
+		if record.GetDirection() != "upload" {
+			t.Errorf("direction = %q", record.GetDirection())
+		}
+		return
+	}
 }
