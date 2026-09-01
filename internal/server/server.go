@@ -413,6 +413,7 @@ func (s *Server) routes() error {
 		DLPClipboardAuditEnabled:           s.config.DLPClipboardAuditEnabled,
 		JITChatOpsSlackSigningSecret:       s.config.JITChatOpsSlackSigningSecret,
 		ExperimentalFeatures:               s.config.ExperimentalFeatures,
+		AuditRetentionDays:                 s.config.AuditRetentionDays,
 		SSHAllowInsecureHostKeys:           s.config.SSHAllowInsecureHostKeys,
 	}
 	apiHandler, err := api.New(s.dp, apiCfg)

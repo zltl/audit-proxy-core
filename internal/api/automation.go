@@ -63,34 +63,34 @@ type automationTarget struct {
 }
 
 type automationJob struct {
-	ID                        string            `json:"id"`
-	Name                      string            `json:"name"`
-	Description               string            `json:"description,omitempty"`
-	Command                   string            `json:"command,omitempty"`
-	ScriptID                  string            `json:"script_id,omitempty"`
-	Schedule                  string            `json:"schedule,omitempty"`
-	Timeout                   string            `json:"timeout,omitempty"`
-	ServerIDs                 []string          `json:"server_ids,omitempty"`
+	ID                        string             `json:"id"`
+	Name                      string             `json:"name"`
+	Description               string             `json:"description,omitempty"`
+	Command                   string             `json:"command,omitempty"`
+	ScriptID                  string             `json:"script_id,omitempty"`
+	Schedule                  string             `json:"schedule,omitempty"`
+	Timeout                   string             `json:"timeout,omitempty"`
+	ServerIDs                 []string           `json:"server_ids,omitempty"`
 	Targets                   []automationTarget `json:"targets,omitempty"`
-	Environment               map[string]string `json:"environment,omitempty"`
-	Username                  string            `json:"username,omitempty"`
-	Password                  string            `json:"password,omitempty"`
-	PrivateKey                string            `json:"private_key,omitempty"`
-	Passphrase                string            `json:"passphrase,omitempty"`
-	KnownHostsPath            string            `json:"known_hosts_path,omitempty"`
-	InsecureSkipHostKeyVerify bool              `json:"insecure_skip_host_key_verify,omitempty"`
-	JumpChain                 []automationHop   `json:"jump_chain,omitempty"`
-	TriggerProviders          []string          `json:"trigger_providers,omitempty"`
-	Enabled                   bool              `json:"enabled"`
-	NextRunAt                 time.Time         `json:"next_run_at,omitempty"`
-	LastRunAt                 time.Time         `json:"last_run_at,omitempty"`
-	LastStatus                string            `json:"last_status,omitempty"`
-	LastSummary               string            `json:"last_summary,omitempty"`
-	LastError                 string            `json:"last_error,omitempty"`
-	CreatedAt                 time.Time         `json:"created_at"`
-	UpdatedAt                 time.Time         `json:"updated_at"`
-	CreatedBy                 string            `json:"created_by,omitempty"`
-	UpdatedBy                 string            `json:"updated_by,omitempty"`
+	Environment               map[string]string  `json:"environment,omitempty"`
+	Username                  string             `json:"username,omitempty"`
+	Password                  string             `json:"password,omitempty"`
+	PrivateKey                string             `json:"private_key,omitempty"`
+	Passphrase                string             `json:"passphrase,omitempty"`
+	KnownHostsPath            string             `json:"known_hosts_path,omitempty"`
+	InsecureSkipHostKeyVerify bool               `json:"insecure_skip_host_key_verify,omitempty"`
+	JumpChain                 []automationHop    `json:"jump_chain,omitempty"`
+	TriggerProviders          []string           `json:"trigger_providers,omitempty"`
+	Enabled                   bool               `json:"enabled"`
+	NextRunAt                 time.Time          `json:"next_run_at,omitempty"`
+	LastRunAt                 time.Time          `json:"last_run_at,omitempty"`
+	LastStatus                string             `json:"last_status,omitempty"`
+	LastSummary               string             `json:"last_summary,omitempty"`
+	LastError                 string             `json:"last_error,omitempty"`
+	CreatedAt                 time.Time          `json:"created_at"`
+	UpdatedAt                 time.Time          `json:"updated_at"`
+	CreatedBy                 string             `json:"created_by,omitempty"`
+	UpdatedBy                 string             `json:"updated_by,omitempty"`
 }
 
 type automationTargetResult struct {
@@ -109,16 +109,16 @@ type automationTargetResult struct {
 }
 
 type automationRun struct {
-	ID         string                   `json:"id"`
-	JobID      string                   `json:"job_id"`
-	JobName    string                   `json:"job_name"`
-	Trigger    string                   `json:"trigger"`
-	RequestedBy string                  `json:"requested_by,omitempty"`
-	Status     string                   `json:"status"`
-	Summary    string                   `json:"summary,omitempty"`
-	StartedAt  time.Time                `json:"started_at"`
-	FinishedAt time.Time                `json:"finished_at,omitempty"`
-	Results    []automationTargetResult `json:"results,omitempty"`
+	ID          string                   `json:"id"`
+	JobID       string                   `json:"job_id"`
+	JobName     string                   `json:"job_name"`
+	Trigger     string                   `json:"trigger"`
+	RequestedBy string                   `json:"requested_by,omitempty"`
+	Status      string                   `json:"status"`
+	Summary     string                   `json:"summary,omitempty"`
+	StartedAt   time.Time                `json:"started_at"`
+	FinishedAt  time.Time                `json:"finished_at,omitempty"`
+	Results     []automationTargetResult `json:"results,omitempty"`
 }
 
 type automationResolvedTarget struct {

@@ -124,15 +124,15 @@ func TestAutomationJobRunCollectsBatchResults(t *testing.T) {
 	}
 
 	createJob := doAutomationRequest(t, mux, http.MethodPost, "/api/v2/automation/jobs", map[string]interface{}{
-		"name":                           "batch-hostname",
-		"command":                        "hostname",
-		"server_ids":                     []string{"srv-1", "srv-2"},
-		"username":                       "ops",
-		"password":                       "secret",
-		"insecure_skip_host_key_verify":  true,
-		"enabled":                        true,
-		"schedule":                       "1h",
-		"trigger_providers":              []string{"github-actions", "jenkins"},
+		"name":                          "batch-hostname",
+		"command":                       "hostname",
+		"server_ids":                    []string{"srv-1", "srv-2"},
+		"username":                      "ops",
+		"password":                      "secret",
+		"insecure_skip_host_key_verify": true,
+		"enabled":                       true,
+		"schedule":                      "1h",
+		"trigger_providers":             []string{"github-actions", "jenkins"},
 	}, map[string]string{"X-User": "admin"})
 	if createJob.Code != http.StatusCreated {
 		t.Fatalf("POST /api/v2/automation/jobs status = %d body = %s", createJob.Code, createJob.Body.String())
@@ -182,14 +182,14 @@ func TestAutomationTriggerRestrictsProviders(t *testing.T) {
 	}
 
 	createJob := doAutomationRequest(t, mux, http.MethodPost, "/api/v2/automation/jobs", map[string]interface{}{
-		"name":                           "deploy",
-		"command":                        "echo deploy",
-		"server_ids":                     []string{"srv-1"},
-		"username":                       "ops",
-		"password":                       "secret",
-		"insecure_skip_host_key_verify":  true,
-		"enabled":                        true,
-		"trigger_providers":              []string{"github-actions"},
+		"name":                          "deploy",
+		"command":                       "echo deploy",
+		"server_ids":                    []string{"srv-1"},
+		"username":                      "ops",
+		"password":                      "secret",
+		"insecure_skip_host_key_verify": true,
+		"enabled":                       true,
+		"trigger_providers":             []string{"github-actions"},
 	}, map[string]string{"X-User": "admin"})
 	if createJob.Code != http.StatusCreated {
 		t.Fatalf("POST /api/v2/automation/jobs status = %d body = %s", createJob.Code, createJob.Body.String())
@@ -204,9 +204,9 @@ func TestAutomationTriggerRestrictsProviders(t *testing.T) {
 	}
 
 	accepted := doAutomationRequest(t, mux, http.MethodPost, "/api/v2/automation/jobs/"+jobID+"/trigger", map[string]interface{}{
-		"provider":   "github-actions",
-		"workflow":   "deploy.yml",
-		"ref":        "refs/heads/main",
+		"provider":    "github-actions",
+		"workflow":    "deploy.yml",
+		"ref":         "refs/heads/main",
 		"pipeline_id": "run-42",
 	}, map[string]string{"X-User": "admin"})
 	if accepted.Code != http.StatusAccepted {
@@ -225,14 +225,14 @@ func TestAutomationSchedulerRunsDueJob(t *testing.T) {
 	api.automation.executor = executor
 
 	createJob := doAutomationRequest(t, mux, http.MethodPost, "/api/v2/automation/jobs", map[string]interface{}{
-		"name":                           "scheduled-check",
-		"command":                        "echo ok",
-		"server_ids":                     []string{"srv-1"},
-		"username":                       "ops",
-		"password":                       "secret",
-		"insecure_skip_host_key_verify":  true,
-		"enabled":                        true,
-		"schedule":                       "1m",
+		"name":                          "scheduled-check",
+		"command":                       "echo ok",
+		"server_ids":                    []string{"srv-1"},
+		"username":                      "ops",
+		"password":                      "secret",
+		"insecure_skip_host_key_verify": true,
+		"enabled":                       true,
+		"schedule":                      "1m",
 	}, map[string]string{"X-User": "admin"})
 	if createJob.Code != http.StatusCreated {
 		t.Fatalf("POST /api/v2/automation/jobs status = %d body = %s", createJob.Code, createJob.Body.String())

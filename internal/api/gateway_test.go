@@ -80,13 +80,13 @@ func TestGatewayProxyLifecycleAndTCPForward(t *testing.T) {
 	}
 
 	createResp := doAutomationRequest(t, mux, http.MethodPost, "/api/v2/gateway/proxies", map[string]interface{}{
-		"protocol":                       "rdp",
-		"remote_host":                    backendHost,
-		"remote_port":                    backendPort,
-		"ssh_host":                       "bastion.internal",
-		"username":                       "ops",
-		"password":                       "secret",
-		"insecure_skip_host_key_verify":  true,
+		"protocol":                      "rdp",
+		"remote_host":                   backendHost,
+		"remote_port":                   backendPort,
+		"ssh_host":                      "bastion.internal",
+		"username":                      "ops",
+		"password":                      "secret",
+		"insecure_skip_host_key_verify": true,
 	}, map[string]string{"X-User": "admin"})
 	if createResp.Code != http.StatusCreated {
 		t.Fatalf("POST /api/v2/gateway/proxies status = %d body = %s", createResp.Code, createResp.Body.String())

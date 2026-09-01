@@ -72,6 +72,7 @@ type Config struct {
 	DLPClipboardAuditEnabled           bool
 	JITChatOpsSlackSigningSecret       string
 	ExperimentalFeatures               string
+	AuditRetentionDays                 int
 	SSHAllowInsecureHostKeys           bool
 }
 
@@ -199,6 +200,14 @@ func New(dp DataPlaneClient, cfg *Config) (*API, error) {
 		} else {
 			auditStore, err = newAuditSQLStoreWithDriverOptions(cfg.AuditStoreBackend, auditDriver, auditDSN, auditReaderDSNs, poolSettings)
 		}
+		if err != nil {
+			if storage != nil {
+				_ = storage.Close()
+			}
+			return nil, fmt.Errorf("api: init audit store: %w", err)
+		}
+	} else if cfg != nil && auditStoreUsesClickHouse(cfg.AuditStoreBackend) {
+		auditStore, err = newAuditClickHouseStore(cfg)
 		if err != nil {
 			if storage != nil {
 				_ = storage.Close()

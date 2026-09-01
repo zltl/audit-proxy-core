@@ -465,6 +465,12 @@ type Config struct {
 	// endpoint by verifying Slack request signatures with this secret.
 	JITChatOpsSlackSigningSecret string `json:"jit_chatops_slack_signing_secret"`
 
+	// AuditRetentionDays bounds how long indexed audit events are kept. It is
+	// applied as a table TTL where the backend supports one, so retention holds
+	// without depending on a deletion job that might not be running. Zero keeps
+	// the backend's own default.
+	AuditRetentionDays int `json:"audit_retention_days"`
+
 	// ExperimentalFeatures is a comma-separated list of subsystems to enable
 	// that carry a caveat: they are unaudited, keep state only in memory, or
 	// produce heuristic output. Empty by default so those trade-offs are opted
@@ -703,6 +709,14 @@ func validate(cfg *Config) error {
 		strings.TrimSpace(cfg.AuditStoreDatabaseURL) == "" &&
 		strings.TrimSpace(cfg.PostgresDatabaseURL) == "" {
 		return fmt.Errorf("config: audit_store_database_url or postgres_database_url is required when audit_store_backend is enabled")
+	}
+	if auditStoreUsesClickHouse(cfg.AuditStoreBackend) &&
+		strings.TrimSpace(cfg.AuditStoreDatabaseURL) == "" &&
+		strings.TrimSpace(cfg.AuditStoreEndpoint) == "" {
+		return fmt.Errorf("config: audit_store_database_url is required when audit_store_backend is clickhouse")
+	}
+	if cfg.AuditRetentionDays < 0 {
+		return fmt.Errorf("config: audit_retention_days must be >= 0")
 	}
 	if auditStoreUsesSearch(cfg.AuditStoreBackend) {
 		endpoint := strings.TrimSpace(cfg.AuditStoreEndpoint)
@@ -947,8 +961,10 @@ func normalizeAuditStoreBackend(raw string) (string, error) {
 		return "elasticsearch", nil
 	case "opensearch":
 		return "opensearch", nil
+	case "clickhouse":
+		return "clickhouse", nil
 	default:
-		return "", fmt.Errorf("must be one of: file, postgres, timescaledb, elasticsearch, opensearch")
+		return "", fmt.Errorf("must be one of: file, postgres, timescaledb, elasticsearch, opensearch, clickhouse")
 	}
 }
 
@@ -983,6 +999,10 @@ func auditStoreUsesSQL(raw string) bool {
 	default:
 		return false
 	}
+}
+
+func auditStoreUsesClickHouse(raw string) bool {
+	return strings.ToLower(strings.TrimSpace(raw)) == "clickhouse"
 }
 
 func auditStoreUsesSearch(raw string) bool {

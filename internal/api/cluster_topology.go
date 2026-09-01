@@ -8,24 +8,24 @@ import (
 )
 
 type clusterTopologyPayload struct {
-	SelfRegion                     string         `json:"self_region"`
-	SelfZone                       string         `json:"self_zone"`
-	Regions                        []string       `json:"regions"`
-	HealthyRegions                 []string       `json:"healthy_regions"`
-	Zones                          []string       `json:"zones"`
-	HealthyZones                   []string       `json:"healthy_zones"`
-	NodeCountsByRegion             map[string]int `json:"node_counts_by_region"`
-	HealthyNodeCountsByRegion      map[string]int `json:"healthy_node_counts_by_region"`
-	NodeCountsByZone               map[string]int `json:"node_counts_by_zone"`
-	HealthyNodeCountsByZone        map[string]int `json:"healthy_node_counts_by_zone"`
-	CrossRegionRedundant           bool           `json:"cross_region_redundant"`
-	CrossZoneRedundant             bool           `json:"cross_zone_redundant"`
-	OtherHealthyNodesInRegion      int            `json:"other_healthy_nodes_in_region"`
-	OtherHealthyNodesInOtherRegions int           `json:"other_healthy_nodes_in_other_regions"`
-	OtherHealthyNodesInZone        int            `json:"other_healthy_nodes_in_zone"`
-	OtherHealthyNodesInOtherZones  int            `json:"other_healthy_nodes_in_other_zones"`
-	LastHealthyInRegion            bool           `json:"last_healthy_in_region"`
-	LastHealthyInZone              bool           `json:"last_healthy_in_zone"`
+	SelfRegion                      string         `json:"self_region"`
+	SelfZone                        string         `json:"self_zone"`
+	Regions                         []string       `json:"regions"`
+	HealthyRegions                  []string       `json:"healthy_regions"`
+	Zones                           []string       `json:"zones"`
+	HealthyZones                    []string       `json:"healthy_zones"`
+	NodeCountsByRegion              map[string]int `json:"node_counts_by_region"`
+	HealthyNodeCountsByRegion       map[string]int `json:"healthy_node_counts_by_region"`
+	NodeCountsByZone                map[string]int `json:"node_counts_by_zone"`
+	HealthyNodeCountsByZone         map[string]int `json:"healthy_node_counts_by_zone"`
+	CrossRegionRedundant            bool           `json:"cross_region_redundant"`
+	CrossZoneRedundant              bool           `json:"cross_zone_redundant"`
+	OtherHealthyNodesInRegion       int            `json:"other_healthy_nodes_in_region"`
+	OtherHealthyNodesInOtherRegions int            `json:"other_healthy_nodes_in_other_regions"`
+	OtherHealthyNodesInZone         int            `json:"other_healthy_nodes_in_zone"`
+	OtherHealthyNodesInOtherZones   int            `json:"other_healthy_nodes_in_other_zones"`
+	LastHealthyInRegion             bool           `json:"last_healthy_in_region"`
+	LastHealthyInZone               bool           `json:"last_healthy_in_zone"`
 }
 
 func buildClusterTopology(self cluster.Node, nodes []*cluster.Node) clusterTopologyPayload {
