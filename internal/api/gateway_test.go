@@ -67,7 +67,7 @@ func closeWrite(t *testing.T, conn net.Conn) {
 func TestGatewayProxyLifecycleAndTCPForward(t *testing.T) {
 	api, mux, _ := setupTestAPI(t)
 	dialer := &fakeGatewayDialer{}
-	api.gateway = newGatewayState(dialer)
+	api.gateway = newGatewayState(dialer, false)
 
 	backendAddr := startGatewayEchoServer(t)
 	backendHost, backendPortRaw, err := net.SplitHostPort(backendAddr)
@@ -144,7 +144,7 @@ func TestGatewayProxyLifecycleAndTCPForward(t *testing.T) {
 func TestGatewaySOCKS5ProxyUsesJumpChain(t *testing.T) {
 	api, mux, _ := setupTestAPI(t)
 	dialer := &fakeGatewayDialer{}
-	api.gateway = newGatewayState(dialer)
+	api.gateway = newGatewayState(dialer, false)
 
 	backendAddr := startGatewayEchoServer(t)
 	backendHost, backendPortRaw, err := net.SplitHostPort(backendAddr)

@@ -175,9 +175,9 @@ type automationRunStore struct {
 	runs map[string]automationRun
 }
 
-func newAutomationState(dataDir string, executor automationExecutor) *automationState {
+func newAutomationState(dataDir string, executor automationExecutor, allowInsecureHostKeys bool) *automationState {
 	if executor == nil {
-		executor = newSSHAutomationExecutor()
+		executor = newSSHAutomationExecutor(allowInsecureHostKeys)
 	}
 	return &automationState{
 		scripts:    newAutomationScriptStore(dataFilePath(dataDir, "automation_scripts.json")),

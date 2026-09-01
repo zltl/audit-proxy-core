@@ -72,6 +72,9 @@ func newControlPlaneTestServer(t *testing.T, dataPlaneURL, token string) (*confi
 		AuditLogDir:    t.TempDir(),
 		RecordingDir:   t.TempDir(),
 		DataDir:        t.TempDir(),
+		// Integration tests exercise the experimental subsystems; the gate's
+		// default-off behaviour is covered in the api package.
+		ExperimentalFeatures: "all",
 	}
 
 	srv, err := New(cfg)

@@ -15,8 +15,8 @@ type sshAutomationExecutor struct {
 	connector *sshClientConnector
 }
 
-func newSSHAutomationExecutor() automationExecutor {
-	return &sshAutomationExecutor{connector: newSSHClientConnector()}
+func newSSHAutomationExecutor(allowInsecureHostKeys bool) automationExecutor {
+	return &sshAutomationExecutor{connector: newSSHClientConnectorWithPolicy(allowInsecureHostKeys)}
 }
 
 func (e *sshAutomationExecutor) Execute(ctx context.Context, req automationExecutionRequest) automationTargetResult {

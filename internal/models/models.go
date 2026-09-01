@@ -7,18 +7,21 @@ import "time"
 
 // User represents an authenticated control-plane user.
 type User struct {
-	Username    string    `json:"username"`
-	DisplayName string    `json:"display_name"`
-	Email       string    `json:"email"`
-	Role        string    `json:"role"` // "admin", "operator", "viewer"
-	MFASecret   string    `json:"-"`    // never serialised to clients
-	PassHash    string    `json:"-"`    // bcrypt hash, never serialised
-	Enabled     bool      `json:"enabled"`
-	MFAEnabled  bool      `json:"mfa_enabled"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	LastLogin   time.Time `json:"last_login"`
-	AllowedIPs  []string  `json:"allowed_ips,omitempty"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
+	Role        string `json:"role"` // "admin", "operator", "viewer"
+	MFASecret   string `json:"-"`    // never serialised to clients
+	PassHash    string `json:"-"`    // argon2id PHC string, never serialised
+	Enabled     bool   `json:"enabled"`
+	MFAEnabled  bool   `json:"mfa_enabled"`
+	// MFAPending marks an enrolment that has been issued a secret but has not
+	// yet proved possession of it. The secret is only readable while pending.
+	MFAPending bool      `json:"mfa_pending"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	LastLogin  time.Time `json:"last_login"`
+	AllowedIPs []string  `json:"allowed_ips,omitempty"`
 }
 
 // Session describes an active or historical SSH proxy session.

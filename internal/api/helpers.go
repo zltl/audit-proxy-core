@@ -6,6 +6,9 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
+
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
 )
 
 // APIResponse is the standard envelope for all API responses.
@@ -49,6 +52,34 @@ func readJSON(r *http.Request, dst interface{}) error {
 		return fmt.Errorf("invalid JSON: %w", err)
 	}
 	return nil
+}
+
+// callerUsername returns the authenticated principal for the request. The Auth
+// middleware sets both header spellings; read them in a single place so
+// handlers cannot disagree about which one is authoritative.
+func callerUsername(r *http.Request) string {
+	for _, header := range []string{"X-Auth-User", "X-User"} {
+		if v := strings.TrimSpace(r.Header.Get(header)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// callerRole returns the authenticated principal's role, defaulting to the
+// least privileged role when the session predates role-carrying cookies.
+func callerRole(r *http.Request) string {
+	for _, header := range []string{"X-Auth-Role", "X-Role", "X-User-Role"} {
+		if v := strings.TrimSpace(r.Header.Get(header)); v != "" {
+			return strings.ToLower(v)
+		}
+	}
+	return middleware.RoleViewer
+}
+
+// callerIsAdmin reports whether the request carries administrative privileges.
+func callerIsAdmin(r *http.Request) bool {
+	return callerRole(r) == middleware.RoleAdmin
 }
 
 // parsePagination extracts page and per_page query parameters with defaults.

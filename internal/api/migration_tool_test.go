@@ -110,8 +110,11 @@ func TestRunDataMigrationImportsFileBackedStateIntoSQLStores(t *testing.T) {
 	if result.AuditEventImports != 1 {
 		t.Fatalf("AuditEventImports = %d, want 1", result.AuditEventImports)
 	}
-	if result.StorageSchemaVersion != 1 || result.AuditSchemaVersion != 1 || result.SessionMetadataSchemaVersion != 1 {
-		t.Fatalf("schema versions = %+v, want all 1", result)
+	if result.StorageSchemaVersion != sqlStorageSchemaVersion {
+		t.Fatalf("StorageSchemaVersion = %d, want %d", result.StorageSchemaVersion, sqlStorageSchemaVersion)
+	}
+	if result.AuditSchemaVersion != 1 || result.SessionMetadataSchemaVersion != 1 {
+		t.Fatalf("schema versions = %+v, want audit/session-metadata at 1", result)
 	}
 
 	storage, err := newSQLStorage("sqlite", storageDB)

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/features"
 )
 
 type commandIntentInsight struct {
@@ -101,11 +103,12 @@ var commandIntentRules = []commandIntentRule{
 }
 
 func (a *API) RegisterInsightsRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v2/insights/command-intents", a.handleListCommandIntents)
-	mux.HandleFunc("GET /api/v2/insights/anomalies", a.handleListAnomalies)
-	mux.HandleFunc("GET /api/v2/insights/recommendations", a.handleListPrivilegeRecommendations)
-	mux.HandleFunc("POST /api/v2/insights/policy-preview", a.handlePreviewNaturalLanguagePolicy)
-	mux.HandleFunc("GET /api/v2/insights/audit-summary", a.handleGetAuditSummaryInsight)
+	gate := func(h http.HandlerFunc) http.HandlerFunc { return a.requireFeature(features.Insights, h) }
+	mux.HandleFunc("GET /api/v2/insights/command-intents", gate(a.handleListCommandIntents))
+	mux.HandleFunc("GET /api/v2/insights/anomalies", gate(a.handleListAnomalies))
+	mux.HandleFunc("GET /api/v2/insights/recommendations", gate(a.handleListPrivilegeRecommendations))
+	mux.HandleFunc("POST /api/v2/insights/policy-preview", gate(a.handlePreviewNaturalLanguagePolicy))
+	mux.HandleFunc("GET /api/v2/insights/audit-summary", gate(a.handleGetAuditSummaryInsight))
 }
 
 func (a *API) handleListCommandIntents(w http.ResponseWriter, r *http.Request) {

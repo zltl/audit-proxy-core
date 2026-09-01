@@ -12,26 +12,28 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/features"
 )
 
 var errGatewayProxyNotFound = errors.New("gateway proxy not found")
 
 type gatewayProxyRequest struct {
-	Name                      string               `json:"name"`
-	Protocol                  string               `json:"protocol"`
-	BindAddress               string               `json:"bind_address,omitempty"`
-	BindPort                  int                  `json:"bind_port,omitempty"`
-	RemoteHost                string               `json:"remote_host,omitempty"`
-	RemotePort                int                  `json:"remote_port,omitempty"`
-	SSHHost                   string               `json:"ssh_host"`
-	SSHPort                   int                  `json:"ssh_port,omitempty"`
-	Username                  string               `json:"username"`
-	Password                  string               `json:"password,omitempty"`
-	PrivateKey                string               `json:"private_key,omitempty"`
-	Passphrase                string               `json:"passphrase,omitempty"`
-	KnownHostsPath            string               `json:"known_hosts_path,omitempty"`
-	InsecureSkipHostKeyVerify bool                 `json:"insecure_skip_host_key_verify,omitempty"`
-	JumpChain                 []gatewayHopRequest  `json:"jump_chain,omitempty"`
+	Name                      string              `json:"name"`
+	Protocol                  string              `json:"protocol"`
+	BindAddress               string              `json:"bind_address,omitempty"`
+	BindPort                  int                 `json:"bind_port,omitempty"`
+	RemoteHost                string              `json:"remote_host,omitempty"`
+	RemotePort                int                 `json:"remote_port,omitempty"`
+	SSHHost                   string              `json:"ssh_host"`
+	SSHPort                   int                 `json:"ssh_port,omitempty"`
+	Username                  string              `json:"username"`
+	Password                  string              `json:"password,omitempty"`
+	PrivateKey                string              `json:"private_key,omitempty"`
+	Passphrase                string              `json:"passphrase,omitempty"`
+	KnownHostsPath            string              `json:"known_hosts_path,omitempty"`
+	InsecureSkipHostKeyVerify bool                `json:"insecure_skip_host_key_verify,omitempty"`
+	JumpChain                 []gatewayHopRequest `json:"jump_chain,omitempty"`
 }
 
 type gatewayHopRequest struct {
@@ -66,12 +68,12 @@ type gatewayProxy struct {
 }
 
 type gatewayRuntime struct {
-	mu       sync.RWMutex
+	mu        sync.RWMutex
 	closeOnce sync.Once
-	proxy    gatewayProxy
-	target   sshTargetConfig
-	listener net.Listener
-	closed   chan struct{}
+	proxy     gatewayProxy
+	target    sshTargetConfig
+	listener  net.Listener
+	closed    chan struct{}
 }
 
 type gatewayState struct {
@@ -88,9 +90,9 @@ type sshGatewayDialer struct {
 	connector *sshClientConnector
 }
 
-func newGatewayState(dialer gatewayDialer) *gatewayState {
+func newGatewayState(dialer gatewayDialer, allowInsecureHostKeys bool) *gatewayState {
 	if dialer == nil {
-		dialer = &sshGatewayDialer{connector: newSSHClientConnector()}
+		dialer = &sshGatewayDialer{connector: newSSHClientConnectorWithPolicy(allowInsecureHostKeys)}
 	}
 	return &gatewayState{
 		proxies: make(map[string]*gatewayRuntime),
@@ -292,21 +294,21 @@ func normalizeGatewayProxyRequest(req gatewayProxyRequest, requestedBy string) (
 	}
 	now := time.Now().UTC()
 	proxy := gatewayProxy{
-		ID:           newAutomationID("proxy"),
-		Name:         name,
-		Protocol:     protocol,
-		BindAddress:  bindAddress,
-		BindPort:     req.BindPort,
-		RemoteHost:   remoteHost,
-		RemotePort:   remotePort,
-		SSHHost:      sshHost,
-		SSHPort:      target.Port,
-		Username:     username,
-		JumpHops:     len(jumps),
-		Status:       "running",
-		RequestedBy:  strings.TrimSpace(requestedBy),
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:          newAutomationID("proxy"),
+		Name:        name,
+		Protocol:    protocol,
+		BindAddress: bindAddress,
+		BindPort:    req.BindPort,
+		RemoteHost:  remoteHost,
+		RemotePort:  remotePort,
+		SSHHost:     sshHost,
+		SSHPort:     target.Port,
+		Username:    username,
+		JumpHops:    len(jumps),
+		Status:      "running",
+		RequestedBy: strings.TrimSpace(requestedBy),
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	bind := net.JoinHostPort(bindAddress, fmt.Sprintf("%d", req.BindPort))
 	return proxy, target, bind, nil
@@ -566,10 +568,11 @@ func writeSOCKS5Reply(writer io.Writer, code byte) error {
 }
 
 func (a *API) RegisterGatewayRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v2/gateway/proxies", a.handleListGatewayProxies)
-	mux.HandleFunc("POST /api/v2/gateway/proxies", a.handleCreateGatewayProxy)
-	mux.HandleFunc("GET /api/v2/gateway/proxies/{id}", a.handleGetGatewayProxy)
-	mux.HandleFunc("DELETE /api/v2/gateway/proxies/{id}", a.handleDeleteGatewayProxy)
+	gate := func(h http.HandlerFunc) http.HandlerFunc { return a.requireFeature(features.Gateway, h) }
+	mux.HandleFunc("GET /api/v2/gateway/proxies", gate(a.handleListGatewayProxies))
+	mux.HandleFunc("POST /api/v2/gateway/proxies", gate(a.handleCreateGatewayProxy))
+	mux.HandleFunc("GET /api/v2/gateway/proxies/{id}", gate(a.handleGetGatewayProxy))
+	mux.HandleFunc("DELETE /api/v2/gateway/proxies/{id}", gate(a.handleDeleteGatewayProxy))
 }
 
 func (a *API) handleListGatewayProxies(w http.ResponseWriter, r *http.Request) {

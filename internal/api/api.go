@@ -71,6 +71,8 @@ type Config struct {
 	DatabaseReadAfterWriteWindow       string
 	DLPClipboardAuditEnabled           bool
 	JITChatOpsSlackSigningSecret       string
+	ExperimentalFeatures               string
+	SSHAllowInsecureHostKeys           bool
 }
 
 // DataPlaneClient defines the interface for communicating with the C data plane.
@@ -126,6 +128,7 @@ type API struct {
 	recordingStore     *recordingObjectStore
 	recordingSyncOnce  sync.Once
 	threatResponseOnce sync.Once
+	features           *featureGate
 }
 
 // userStore holds the in-memory user list backed by a JSON file.
@@ -228,8 +231,9 @@ func New(dp DataPlaneClient, cfg *Config) (*API, error) {
 		auditQueue:        nil,
 		sessionMetadata:   newSessionMetadataStore(dataFilePath(cfg.DataDir, "sessions.db")),
 		recordingStore:    newRecordingObjectStore(cfg),
-		automation:        newAutomationState(cfg.DataDir, nil),
-		gateway:           newGatewayState(nil),
+		automation:        newAutomationState(cfg.DataDir, nil, cfg.SSHAllowInsecureHostKeys),
+		gateway:           newGatewayState(nil, cfg.SSHAllowInsecureHostKeys),
+		features:          newFeatureGate(cfg.ExperimentalFeatures),
 	}
 	if cfg != nil && strings.TrimSpace(cfg.AuditQueueBackend) != "" {
 		a.auditQueue, err = newAuditQueueForwarder(cfg)
@@ -363,6 +367,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v2/users/{username}", a.handleDeleteUser)
 	mux.HandleFunc("PUT /api/v2/users/{username}/password", a.handleChangePassword)
 	mux.HandleFunc("PUT /api/v2/users/{username}/mfa", a.handleConfigureMFA)
+	mux.HandleFunc("POST /api/v2/users/{username}/mfa/verify", a.handleVerifyMFA)
 	mux.HandleFunc("GET /api/v2/users/{username}/mfa/qrcode", a.handleMFAQRCode)
 
 	// Servers
@@ -407,6 +412,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v2/system/health", a.handleSystemHealth)
 	mux.HandleFunc("GET /api/v2/system/info", a.handleSystemInfo)
 	mux.HandleFunc("GET /api/v2/system/metrics", a.handleSystemMetrics)
+	mux.HandleFunc("GET /api/v2/system/features", a.handleListFeatures)
 	mux.HandleFunc("GET /api/v2/system/upgrade", a.handleSystemUpgradeStatus)
 	mux.HandleFunc("PUT /api/v2/system/upgrade", a.handleSystemUpgrade)
 

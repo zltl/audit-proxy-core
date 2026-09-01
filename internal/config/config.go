@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cluster"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/features"
 )
 
 // Config holds every tunable for the control-plane process.
@@ -143,6 +144,12 @@ type Config struct {
 	// SSHProxyAddr is the TCP address of the SSH proxy entrypoint used by the
 	// browser terminal bridge.
 	SSHProxyAddr string `json:"ssh_proxy_addr"`
+
+	// SSHAllowInsecureHostKeys permits API callers to disable upstream host key
+	// verification with insecure_skip_host_key_verify. It is off by default: a
+	// single API request must not be able to open the proxy's connection to a
+	// target host to interception.
+	SSHAllowInsecureHostKeys bool `json:"ssh_allow_insecure_host_keys"`
 
 	// SessionSecret is the HMAC key used to sign web session cookies.
 	SessionSecret string `json:"session_secret"`
@@ -458,6 +465,13 @@ type Config struct {
 	// endpoint by verifying Slack request signatures with this secret.
 	JITChatOpsSlackSigningSecret string `json:"jit_chatops_slack_signing_secret"`
 
+	// ExperimentalFeatures is a comma-separated list of subsystems to enable
+	// that carry a caveat: they are unaudited, keep state only in memory, or
+	// produce heuristic output. Empty by default so those trade-offs are opted
+	// into deliberately. Use "all" for development. Recognised names are listed
+	// by GET /api/v2/system/features.
+	ExperimentalFeatures string `json:"experimental_features"`
+
 	// ThreatResponseEnabled consumes new threat alerts and can automatically
 	// block the source IP, terminate matching sessions, and notify admins.
 	ThreatResponseEnabled bool `json:"threat_response_enabled"`
@@ -635,6 +649,10 @@ func validate(cfg *Config) error {
 	}
 	if cfg.DLPClipboardAuditEnabled && !cfg.DLPSensitiveScanEnabled {
 		return fmt.Errorf("config: dlp_clipboard_audit_enabled requires dlp_sensitive_scan_enabled")
+	}
+	if unknown := features.Unknown(cfg.ExperimentalFeatures); len(unknown) > 0 {
+		return fmt.Errorf("config: unknown experimental_features %s (known: %s)",
+			strings.Join(unknown, ", "), strings.Join(features.Known(), ", "))
 	}
 	if cfg.DLPTransferApprovalEnabled {
 		if strings.TrimSpace(cfg.DLPTransferApprovalRoles) == "" {

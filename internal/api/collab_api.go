@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/collab"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/features"
 )
 
 // SetCollab attaches a collaboration Manager to the API.
@@ -16,21 +17,22 @@ func (a *API) SetCollab(mgr *collab.Manager) {
 
 // RegisterCollabRoutes registers all collaboration routes on the given mux.
 func (a *API) RegisterCollabRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v2/collab/sessions", a.handleCreateCollabSession)
-	mux.HandleFunc("GET /api/v2/collab/sessions", a.handleListCollabSessions)
-	mux.HandleFunc("GET /api/v2/collab/sessions/{id}", a.handleGetCollabSession)
-	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/join", a.handleJoinCollabSession)
-	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/leave", a.handleLeaveCollabSession)
-	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/end", a.handleEndCollabSession)
-	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/request-control", a.handleRequestControl)
-	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/grant-control", a.handleGrantControl)
-	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/revoke-control", a.handleRevokeControl)
-	mux.HandleFunc("GET /api/v2/collab/sessions/{id}/approvals", a.handleListCollabApprovals)
-	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/approvals/{approvalId}/approve", a.handleApproveCollabApproval)
-	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/approvals/{approvalId}/deny", a.handleDenyCollabApproval)
-	mux.HandleFunc("GET /api/v2/collab/sessions/{id}/chat", a.handleGetChat)
-	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/chat", a.handleSendChat)
-	mux.HandleFunc("GET /api/v2/collab/sessions/{id}/recording", a.handleGetCollabRecording)
+	gate := func(h http.HandlerFunc) http.HandlerFunc { return a.requireFeature(features.Collab, h) }
+	mux.HandleFunc("POST /api/v2/collab/sessions", gate(a.handleCreateCollabSession))
+	mux.HandleFunc("GET /api/v2/collab/sessions", gate(a.handleListCollabSessions))
+	mux.HandleFunc("GET /api/v2/collab/sessions/{id}", gate(a.handleGetCollabSession))
+	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/join", gate(a.handleJoinCollabSession))
+	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/leave", gate(a.handleLeaveCollabSession))
+	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/end", gate(a.handleEndCollabSession))
+	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/request-control", gate(a.handleRequestControl))
+	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/grant-control", gate(a.handleGrantControl))
+	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/revoke-control", gate(a.handleRevokeControl))
+	mux.HandleFunc("GET /api/v2/collab/sessions/{id}/approvals", gate(a.handleListCollabApprovals))
+	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/approvals/{approvalId}/approve", gate(a.handleApproveCollabApproval))
+	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/approvals/{approvalId}/deny", gate(a.handleDenyCollabApproval))
+	mux.HandleFunc("GET /api/v2/collab/sessions/{id}/chat", gate(a.handleGetChat))
+	mux.HandleFunc("POST /api/v2/collab/sessions/{id}/chat", gate(a.handleSendChat))
+	mux.HandleFunc("GET /api/v2/collab/sessions/{id}/recording", gate(a.handleGetCollabRecording))
 }
 
 func (a *API) requireCollab(w http.ResponseWriter) bool {

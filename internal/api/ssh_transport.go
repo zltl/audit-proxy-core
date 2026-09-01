@@ -36,10 +36,24 @@ type sshTargetConfig struct {
 
 type sshClientConnector struct {
 	dialTimeout time.Duration
+	// allowInsecureHostKeys decides whether a request may switch off upstream
+	// host key verification. Callers pass the per-request flag in the target,
+	// but a request must never be able to weaken transport security on its own,
+	// so the deployment has to opt in first.
+	allowInsecureHostKeys bool
 }
 
 func newSSHClientConnector() *sshClientConnector {
 	return &sshClientConnector{dialTimeout: 10 * time.Second}
+}
+
+// newSSHClientConnectorWithPolicy builds a connector bound to the deployment's
+// host key policy.
+func newSSHClientConnectorWithPolicy(allowInsecureHostKeys bool) *sshClientConnector {
+	return &sshClientConnector{
+		dialTimeout:           10 * time.Second,
+		allowInsecureHostKeys: allowInsecureHostKeys,
+	}
 }
 
 func (c *sshClientConnector) Connect(ctx context.Context, target sshTargetConfig) (*ssh.Client, func(), error) {
@@ -49,6 +63,10 @@ func (c *sshClientConnector) Connect(ctx context.Context, target sshTargetConfig
 	target.Port = normalizeSSHPort(target.Port)
 	if strings.TrimSpace(target.Host) == "" {
 		return nil, func() {}, fmt.Errorf("ssh host is required")
+	}
+	if target.InsecureSkipHostKeyVerify && !c.allowInsecureHostKeys {
+		return nil, func() {}, fmt.Errorf(
+			"insecure_skip_host_key_verify is refused: set ssh_allow_insecure_host_keys to permit unverified upstream host keys")
 	}
 	callback, err := sshHostKeyCallback(target)
 	if err != nil {

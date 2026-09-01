@@ -15,6 +15,10 @@ import (
 
 var errConfigVersionNotFound = errors.New("config version not found")
 
+// sqlStorageSchemaVersion is the latest migration version for the sql_storage
+// component. Bump it alongside every new entry in the migration list.
+const sqlStorageSchemaVersion = 2
+
 type configVersionSnapshot struct {
 	Version   string          `json:"version"`
 	CreatedAt time.Time       `json:"created_at"`
@@ -137,6 +141,14 @@ func (s *sqlStorage) init() error {
 				`CREATE INDEX IF NOT EXISTS idx_cp_users_enabled ON cp_users(enabled);`,
 			},
 		},
+		{
+			// MFA enrolment must prove possession of the secret before it is
+			// treated as a second factor, so a pending state is tracked.
+			Version: 2,
+			Statements: []string{
+				`ALTER TABLE cp_users ADD COLUMN mfa_pending BOOLEAN NOT NULL DEFAULT FALSE;`,
+			},
+		},
 	})
 }
 
@@ -159,6 +171,23 @@ func (s *sqlStorage) bind(index int) string {
 		return fmt.Sprintf("$%d", index)
 	}
 	return "?"
+}
+
+// binds returns "$1, $2, …" (Postgres) or "?, ?, …" (SQLite) for n parameters.
+func (s *sqlStorage) binds(n int) string {
+	dialect := sqlDialectSQLite
+	if s != nil {
+		dialect = s.dialect
+	}
+	return bindsForDialect(dialect, n)
+}
+
+func bindsForDialect(dialect sqlDialect, n int) string {
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = bindForDialect(dialect, i+1)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (s *sqlStorage) LoadCurrentConfig() (*ConfigStoreEntry, error) {
@@ -417,7 +446,7 @@ func (s *sqlStorage) ListUsers() ([]models.User, error) {
 		return []models.User{}, nil
 	}
 	rows, err := s.cluster.readQuery(`
-		SELECT username, display_name, email, role, pass_hash, mfa_secret, mfa_enabled,
+		SELECT username, display_name, email, role, pass_hash, mfa_secret, mfa_enabled, mfa_pending,
 		       enabled, allowed_ips, created_at, updated_at, last_login
 		FROM cp_users
 		ORDER BY username ASC
@@ -443,7 +472,7 @@ func (s *sqlStorage) GetUser(username string) (models.User, bool, error) {
 		return models.User{}, false, nil
 	}
 	query := fmt.Sprintf(`
-		SELECT username, display_name, email, role, pass_hash, mfa_secret, mfa_enabled,
+		SELECT username, display_name, email, role, pass_hash, mfa_secret, mfa_enabled, mfa_pending,
 		       enabled, allowed_ips, created_at, updated_at, last_login
 		FROM cp_users
 		WHERE username = %s
@@ -471,10 +500,10 @@ func (s *sqlStorage) CreateUser(user models.User) error {
 	query := fmt.Sprintf(`
 		INSERT INTO cp_users (
 			username, display_name, email, role, pass_hash, mfa_secret,
-			mfa_enabled, enabled, allowed_ips, created_at, updated_at, last_login
-		) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+			mfa_enabled, mfa_pending, enabled, allowed_ips, created_at, updated_at, last_login
+		) VALUES (%s)
 		ON CONFLICT(username) DO NOTHING
-	`, s.bind(1), s.bind(2), s.bind(3), s.bind(4), s.bind(5), s.bind(6), s.bind(7), s.bind(8), s.bind(9), s.bind(10), s.bind(11), s.bind(12))
+	`, s.binds(13))
 	result, err := s.cluster.writeExec(
 		query,
 		user.Username,
@@ -484,6 +513,7 @@ func (s *sqlStorage) CreateUser(user models.User) error {
 		user.PassHash,
 		user.MFASecret,
 		user.MFAEnabled,
+		user.MFAPending,
 		user.Enabled,
 		allowedIPs,
 		unixTimestamp(user.CreatedAt),
@@ -519,13 +549,14 @@ func (s *sqlStorage) UpdateUser(user models.User) error {
 			pass_hash = %s,
 			mfa_secret = %s,
 			mfa_enabled = %s,
+			mfa_pending = %s,
 			enabled = %s,
 			allowed_ips = %s,
 			created_at = %s,
 			updated_at = %s,
 			last_login = %s
 		WHERE username = %s
-	`, s.bind(1), s.bind(2), s.bind(3), s.bind(4), s.bind(5), s.bind(6), s.bind(7), s.bind(8), s.bind(9), s.bind(10), s.bind(11), s.bind(12))
+	`, s.bind(1), s.bind(2), s.bind(3), s.bind(4), s.bind(5), s.bind(6), s.bind(7), s.bind(8), s.bind(9), s.bind(10), s.bind(11), s.bind(12), s.bind(13))
 	result, err := s.cluster.writeExec(
 		query,
 		user.DisplayName,
@@ -534,6 +565,7 @@ func (s *sqlStorage) UpdateUser(user models.User) error {
 		user.PassHash,
 		user.MFASecret,
 		user.MFAEnabled,
+		user.MFAPending,
 		user.Enabled,
 		allowedIPs,
 		unixTimestamp(user.CreatedAt),
@@ -592,9 +624,9 @@ func (s *sqlStorage) ReplaceUsers(users []models.User) error {
 	insert := fmt.Sprintf(`
 		INSERT INTO cp_users (
 			username, display_name, email, role, pass_hash, mfa_secret,
-			mfa_enabled, enabled, allowed_ips, created_at, updated_at, last_login
-		) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-	`, bindForDialect(s.dialect, 1), bindForDialect(s.dialect, 2), bindForDialect(s.dialect, 3), bindForDialect(s.dialect, 4), bindForDialect(s.dialect, 5), bindForDialect(s.dialect, 6), bindForDialect(s.dialect, 7), bindForDialect(s.dialect, 8), bindForDialect(s.dialect, 9), bindForDialect(s.dialect, 10), bindForDialect(s.dialect, 11), bindForDialect(s.dialect, 12))
+			mfa_enabled, mfa_pending, enabled, allowed_ips, created_at, updated_at, last_login
+		) VALUES (%s)
+	`, bindsForDialect(s.dialect, 13))
 	for _, user := range users {
 		allowedIPs, err := encodeUserAllowedIPs(user.AllowedIPs)
 		if err != nil {
@@ -609,6 +641,7 @@ func (s *sqlStorage) ReplaceUsers(users []models.User) error {
 			user.PassHash,
 			user.MFASecret,
 			user.MFAEnabled,
+			user.MFAPending,
 			user.Enabled,
 			allowedIPs,
 			unixTimestamp(user.CreatedAt),
@@ -640,6 +673,7 @@ func scanStoredUser(scanner userScanner) (models.User, error) {
 		&user.PassHash,
 		&user.MFASecret,
 		&user.MFAEnabled,
+		&user.MFAPending,
 		&user.Enabled,
 		&allowedIPs,
 		&createdAtUnix,

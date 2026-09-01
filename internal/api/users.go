@@ -1,10 +1,6 @@
 package api
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha1"
-	"encoding/base32"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/authn"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
 )
 
@@ -31,9 +28,12 @@ type UserRecord struct {
 }
 
 var (
-	errUserExists   = errors.New("user already exists")
-	errUserNotFound = errors.New("user not found")
-	errMFAGenerate  = errors.New("generate mfa secret")
+	errUserExists     = errors.New("user already exists")
+	errUserNotFound   = errors.New("user not found")
+	errMFAGenerate    = errors.New("generate mfa secret")
+	errMFANotPending  = errors.New("no pending mfa enrolment")
+	errMFACodeInvalid = errors.New("invalid mfa code")
+	errUnknownRole    = errors.New("unknown role")
 )
 
 func newUserStore(path string, sqlStore *sqlStorage, usePostgres bool) (*userStore, error) {
@@ -264,6 +264,64 @@ func (us *userStore) delete(username string) error {
 	return us.save()
 }
 
+// LookupUser resolves a stored user record. It is used by the login handler to
+// authenticate against real accounts and to read their configured role, rather
+// than assuming one.
+func (a *API) LookupUser(username string) (models.User, bool, error) {
+	if a == nil || a.users == nil {
+		return models.User{}, false, nil
+	}
+	return a.users.get(username)
+}
+
+// UpgradeUserPasswordHash re-hashes a verified password under the current
+// scheme. Callers must only invoke it after the password has been checked.
+func (a *API) UpgradeUserPasswordHash(username, password string) error {
+	if a == nil || a.users == nil {
+		return nil
+	}
+	hash, err := hashPassword(password)
+	if err != nil {
+		return err
+	}
+	_, err = a.users.update(username, func(u models.User) (models.User, error) {
+		u.PassHash = hash
+		u.UpdatedAt = time.Now().UTC()
+		return u, nil
+	})
+	return err
+}
+
+// CreateUser inserts a user record directly. PassHash must already be hashed by
+// the caller; it is used by provisioning and import paths that hold credentials
+// in their stored form rather than in plaintext.
+func (a *API) CreateUser(user models.User) error {
+	if a == nil || a.users == nil {
+		return nil
+	}
+	if !isKnownRole(user.Role) {
+		return errUnknownRole
+	}
+	now := time.Now().UTC()
+	if user.CreatedAt.IsZero() {
+		user.CreatedAt = now
+	}
+	user.UpdatedAt = now
+	return a.users.create(user)
+}
+
+// RecordUserLogin stamps a successful authentication on the account.
+func (a *API) RecordUserLogin(username string) error {
+	if a == nil || a.users == nil {
+		return nil
+	}
+	_, err := a.users.update(username, func(u models.User) (models.User, error) {
+		u.LastLogin = time.Now().UTC()
+		return u, nil
+	})
+	return err
+}
+
 // handleListUsers returns all users.
 func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := a.users.list()
@@ -309,6 +367,22 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		req.Role = "viewer"
 	}
 
+	if !isKnownRole(req.Role) {
+		writeError(w, http.StatusBadRequest, "role must be one of: admin, operator, viewer")
+		return
+	}
+
+	if err := validatePasswordStrength(req.Password); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	passHash, err := hashPassword(req.Password)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to hash password")
+		return
+	}
+
 	now := time.Now().UTC()
 	u := models.User{
 		Username:    req.Username,
@@ -316,7 +390,7 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		Email:       req.Email,
 		Role:        req.Role,
 		Enabled:     true,
-		PassHash:    hashPassword(req.Password),
+		PassHash:    passHash,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		AllowedIPs:  req.AllowedIPs,
@@ -388,6 +462,9 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			u.Email = *req.Email
 		}
 		if req.Role != nil {
+			if !isKnownRole(*req.Role) {
+				return models.User{}, errUnknownRole
+			}
 			u.Role = *req.Role
 		}
 		if req.Enabled != nil {
@@ -402,6 +479,10 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, errUserNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, errUnknownRole) {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to save user: "+err.Error())
@@ -458,13 +539,19 @@ func (a *API) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.NewPassword) < 8 {
-		writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+	if err := validatePasswordStrength(req.NewPassword); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	passHash, err := hashPassword(req.NewPassword)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to hash password")
 		return
 	}
 
 	if _, err := a.users.update(username, func(u models.User) (models.User, error) {
-		u.PassHash = hashPassword(req.NewPassword)
+		u.PassHash = passHash
 		u.UpdatedAt = time.Now().UTC()
 		return u, nil
 	}); err != nil {
@@ -482,7 +569,13 @@ func (a *API) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleConfigureMFA enables or configures MFA for a user.
+// handleConfigureMFA starts or cancels TOTP enrolment for a user.
+//
+// Enabling issues a secret and puts the account in the pending state; the
+// secret only becomes a second factor once handleVerifyMFA proves the user can
+// generate codes from it. This is also the only moment the secret is readable
+// through the API — afterwards it is write-only, so a stolen admin session
+// cannot lift an existing user's TOTP seed.
 func (a *API) handleConfigureMFA(w http.ResponseWriter, r *http.Request) {
 	username := r.PathValue("username")
 	if username == "" {
@@ -498,17 +591,21 @@ func (a *API) handleConfigureMFA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var issuedSecret string
 	u, err := a.users.update(username, func(u models.User) (models.User, error) {
-		u.MFAEnabled = req.Enabled
-		if req.Enabled && u.MFASecret == "" {
+		if req.Enabled {
 			secret, err := generateTOTPSecret()
 			if err != nil {
 				return models.User{}, fmt.Errorf("%w: %v", errMFAGenerate, err)
 			}
+			issuedSecret = secret
 			u.MFASecret = secret
-		}
-		if !req.Enabled {
+			u.MFAPending = true
+			u.MFAEnabled = false
+		} else {
 			u.MFASecret = ""
+			u.MFAPending = false
+			u.MFAEnabled = false
 		}
 		u.UpdatedAt = time.Now().UTC()
 		return u, nil
@@ -528,10 +625,12 @@ func (a *API) handleConfigureMFA(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]interface{}{
 		"mfa_enabled": u.MFAEnabled,
+		"mfa_pending": u.MFAPending,
 	}
-	if u.MFAEnabled {
-		resp["secret"] = u.MFASecret
-		resp["otpauth_uri"] = fmt.Sprintf("otpauth://totp/SSHProxy:%s?secret=%s&issuer=SSHProxy", username, u.MFASecret)
+	if issuedSecret != "" {
+		resp["secret"] = issuedSecret
+		resp["otpauth_uri"] = totpProvisioningURI(username, issuedSecret)
+		resp["message"] = "scan the secret, then POST a current code to /mfa/verify to activate"
 	}
 
 	writeJSON(w, http.StatusOK, APIResponse{
@@ -540,7 +639,63 @@ func (a *API) handleConfigureMFA(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleMFAQRCode returns the MFA secret and otpauth URI for QR code generation.
+// handleVerifyMFA completes enrolment by checking a code from the pending secret.
+func (a *API) handleVerifyMFA(w http.ResponseWriter, r *http.Request) {
+	username := r.PathValue("username")
+	if username == "" {
+		writeError(w, http.StatusBadRequest, "missing username")
+		return
+	}
+
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Code) == "" {
+		writeError(w, http.StatusBadRequest, "code is required")
+		return
+	}
+
+	u, err := a.users.update(username, func(u models.User) (models.User, error) {
+		if !u.MFAPending || u.MFASecret == "" {
+			return models.User{}, errMFANotPending
+		}
+		if !authn.ValidateTOTP(u.MFASecret, req.Code, totpConfig()) {
+			return models.User{}, errMFACodeInvalid
+		}
+		u.MFAPending = false
+		u.MFAEnabled = true
+		u.UpdatedAt = time.Now().UTC()
+		return u, nil
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, errUserNotFound):
+			writeError(w, http.StatusNotFound, "user not found")
+		case errors.Is(err, errMFANotPending):
+			writeError(w, http.StatusBadRequest, "no pending MFA enrolment for this user")
+		case errors.Is(err, errMFACodeInvalid):
+			writeError(w, http.StatusUnauthorized, "invalid MFA code")
+		default:
+			writeError(w, http.StatusInternalServerError, "failed to save user: "+err.Error())
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"mfa_enabled": u.MFAEnabled,
+			"mfa_pending": u.MFAPending,
+		},
+	})
+}
+
+// handleMFAQRCode returns the enrolment secret while it is still pending.
+// Once the enrolment is confirmed the secret is never disclosed again.
 func (a *API) handleMFAQRCode(w http.ResponseWriter, r *http.Request) {
 	username := r.PathValue("username")
 	if username == "" {
@@ -558,40 +713,59 @@ func (a *API) handleMFAQRCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !u.MFAEnabled || u.MFASecret == "" {
-		writeError(w, http.StatusBadRequest, "MFA is not enabled for this user")
+	if !u.MFAPending || u.MFASecret == "" {
+		writeError(w, http.StatusConflict, "no pending MFA enrolment; restart enrolment to obtain a new secret")
 		return
 	}
-
-	otpauthURI := fmt.Sprintf("otpauth://totp/SSHProxy:%s?secret=%s&issuer=SSHProxy", username, u.MFASecret)
 
 	writeJSON(w, http.StatusOK, APIResponse{
 		Success: true,
 		Data: map[string]string{
 			"secret":      u.MFASecret,
-			"otpauth_uri": otpauthURI,
+			"otpauth_uri": totpProvisioningURI(username, u.MFASecret),
 		},
 	})
 }
 
+// knownRoles is the closed set of control-plane roles. Rejecting anything else
+// stops a typo from creating an account that no authorization rule matches.
+var knownRoles = map[string]bool{"admin": true, "operator": true, "viewer": true}
+
+func isKnownRole(role string) bool {
+	return knownRoles[strings.ToLower(strings.TrimSpace(role))]
+}
+
+// minPasswordLength follows the NIST 800-63B recommendation for user-chosen
+// secrets protected by a memory-hard hash.
+const minPasswordLength = 12
+
+func validatePasswordStrength(password string) error {
+	if len([]rune(password)) < minPasswordLength {
+		return fmt.Errorf("password must be at least %d characters", minPasswordLength)
+	}
+	return nil
+}
+
 // generateTOTPSecret creates a random base32-encoded TOTP secret.
 func generateTOTPSecret() (string, error) {
-	secret := make([]byte, 20)
-	if _, err := rand.Read(secret); err != nil {
-		return "", err
-	}
-	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(secret), nil
+	return authn.GenerateTOTPSecret()
 }
 
-// hashPassword creates a simple HMAC-SHA1 hash for the password.
-// In production, use bcrypt — but we avoid external dependencies here.
-func hashPassword(password string) string {
-	mac := hmac.New(sha1.New, []byte("ssh-proxy-salt"))
-	mac.Write([]byte(password))
-	return fmt.Sprintf("%x", mac.Sum(nil))
+// hashPassword derives an argon2id hash in PHC string format.
+func hashPassword(password string) (string, error) {
+	return authn.HashPassword(password)
 }
 
-// checkPassword verifies a password against its hash.
+// checkPassword verifies a password against its stored hash. Hashes written by
+// earlier releases are still accepted so that upgrades do not lock anyone out;
+// authn.NeedsRehash flags them for transparent upgrade on next login.
 func checkPassword(password, hash string) bool {
-	return strings.EqualFold(hashPassword(password), hash)
+	return authn.VerifyPassword(password, hash)
+}
+
+// totpConfig is the TOTP scheme advertised to authenticator apps.
+func totpConfig() authn.TOTPConfig { return authn.DefaultTOTPConfig() }
+
+func totpProvisioningURI(username, secret string) string {
+	return authn.TOTPProvisioningURI("SSHProxy", username, secret, totpConfig())
 }

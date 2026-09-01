@@ -30,6 +30,31 @@
             </div>
             {{end}}
 
+            {{if .MFARequired}}
+            <form class="login-form" id="mfa-form" method="POST" action="/login">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+
+                <p class="login-hint">
+                    Enter the 6-digit code from your authenticator app for
+                    <strong>{{.Username}}</strong>.
+                </p>
+
+                <div class="form-group">
+                    <label class="form-label" for="totp_code">Authentication code</label>
+                    <input type="text" class="form-control" id="totp_code" name="totp_code"
+                           inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code"
+                           maxlength="8" placeholder="123456" required autofocus>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-lg" id="mfa-btn">
+                    Verify
+                </button>
+            </form>
+
+            <div class="login-footer">
+                <a href="/login">Start over</a>
+            </div>
+            {{else}}
             <form class="login-form" id="login-form" method="POST" action="/login">
                 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 
@@ -57,6 +82,7 @@
                     Sign In
                 </button>
             </form>
+            {{end}}
 
             {{if or .OIDCEnabled .SAMLEnabled}}
             <div class="login-divider"><span>or continue with SSO</span></div>
@@ -83,6 +109,19 @@
         var btn = document.getElementById('login-btn');
         var errorBox = document.getElementById('login-error');
         var errorMsg = document.getElementById('login-error-msg');
+
+        if (!form) {
+            // MFA step: only the code field is present.
+            var mfaForm = document.getElementById('mfa-form');
+            var mfaBtn = document.getElementById('mfa-btn');
+            if (mfaForm && mfaBtn) {
+                mfaForm.addEventListener('submit', function() {
+                    mfaBtn.disabled = true;
+                    mfaBtn.innerHTML = '<span class="spinner"></span> Verifying…';
+                });
+            }
+            return;
+        }
 
         form.addEventListener('submit', function(e) {
             var user = document.getElementById('username').value.trim();

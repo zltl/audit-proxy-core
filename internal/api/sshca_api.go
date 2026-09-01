@@ -59,6 +59,11 @@ func clientAddr(remoteAddr string) string {
 	return remoteAddr
 }
 
+// maxSelfServiceCertTTL bounds certificates a non-admin issues for themselves.
+// Short lifetimes are the point of a CA-based bastion: revocation is achieved by
+// expiry, so a self-service cert must not outlive a working day.
+const maxSelfServiceCertTTL = 12 * time.Hour
+
 func (a *API) handleSignUserCert(w http.ResponseWriter, r *http.Request) {
 	if a.ca == nil {
 		writeError(w, http.StatusServiceUnavailable, "certificate authority not configured")
@@ -80,6 +85,25 @@ func (a *API) handleSignUserCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Signing for an arbitrary principal is equivalent to granting access as
+	// that principal, so only an administrator may do it. Everyone else gets a
+	// certificate bound to their own identity.
+	isAdmin := callerIsAdmin(r)
+	if !isAdmin {
+		caller := callerUsername(r)
+		if caller == "" {
+			writeError(w, http.StatusUnauthorized, "unauthenticated")
+			return
+		}
+		for _, principal := range req.Principals {
+			if principal != caller {
+				writeError(w, http.StatusForbidden,
+					"only an admin may sign a certificate for principal "+principal)
+				return
+			}
+		}
+	}
+
 	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(req.PublicKey))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid public key: "+err.Error())
@@ -94,6 +118,15 @@ func (a *API) handleSignUserCert(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ttl = parsed
+	}
+	if ttl <= 0 {
+		writeError(w, http.StatusBadRequest, "ttl must be positive")
+		return
+	}
+	if !isAdmin && ttl > maxSelfServiceCertTTL {
+		writeError(w, http.StatusForbidden,
+			"ttl exceeds the self-service maximum of "+maxSelfServiceCertTTL.String())
+		return
 	}
 
 	var opts []sshca.CertOption

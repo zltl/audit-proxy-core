@@ -142,6 +142,9 @@ func New(cfg *config.Config) (*Server, error) {
 		middleware.Compression,
 		middleware.CSRF(cfg.SessionSecret),
 		middleware.Auth(cfg.SessionSecret),
+		// Authorize must sit inside Auth: it reads the role that Auth derives
+		// from the verified session cookie.
+		middleware.Authorize(middleware.DefaultAuthzConfig()),
 	)
 
 	s.srv = &http.Server{
@@ -409,6 +412,8 @@ func (s *Server) routes() error {
 		DatabaseReadAfterWriteWindow:       s.config.DatabaseReadAfterWriteWindow,
 		DLPClipboardAuditEnabled:           s.config.DLPClipboardAuditEnabled,
 		JITChatOpsSlackSigningSecret:       s.config.JITChatOpsSlackSigningSecret,
+		ExperimentalFeatures:               s.config.ExperimentalFeatures,
+		SSHAllowInsecureHostKeys:           s.config.SSHAllowInsecureHostKeys,
 	}
 	apiHandler, err := api.New(s.dp, apiCfg)
 	if err != nil {

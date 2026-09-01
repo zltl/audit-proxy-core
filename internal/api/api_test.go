@@ -16,8 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/authn"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cmdctrl"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/discovery"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
 	"golang.org/x/crypto/ssh"
@@ -127,6 +129,9 @@ func setupTestAPI(t *testing.T) (*API, *http.ServeMux, *mockDP) {
 		DataDir:       dir,
 		ConfigFile:    filepath.Join(dir, "config.ini"),
 		ConfigVerDir:  filepath.Join(dir, "config_versions"),
+		// Subsystem tests need their subsystem reachable. The gate's default-off
+		// behaviour is covered separately by TestExperimentalSubsystemsAreGated.
+		ExperimentalFeatures: "all",
 	}
 
 	// Create audit log directory with sample events
@@ -152,6 +157,13 @@ func setupTestAPI(t *testing.T) (*API, *http.ServeMux, *mockDP) {
 }
 
 func doRequest(mux *http.ServeMux, method, path string, body interface{}) *httptest.ResponseRecorder {
+	return doRequestAs(mux, method, path, body, "admin", middleware.RoleAdmin)
+}
+
+// doRequestAs issues a request carrying the principal headers that the Auth
+// middleware would normally set, so handler-level authorization can be tested
+// without standing up the whole middleware chain.
+func doRequestAs(mux *http.ServeMux, method, path string, body interface{}, username, role string) *httptest.ResponseRecorder {
 	var bodyReader io.Reader
 	if body != nil {
 		data, _ := json.Marshal(body)
@@ -160,6 +172,14 @@ func doRequest(mux *http.ServeMux, method, path string, body interface{}) *httpt
 	req := httptest.NewRequest(method, path, bodyReader)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if username != "" {
+		req.Header.Set("X-Auth-User", username)
+		req.Header.Set("X-User", username)
+	}
+	if role != "" {
+		req.Header.Set("X-Auth-Role", role)
+		req.Header.Set("X-Role", role)
 	}
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
@@ -649,14 +669,72 @@ func TestConfigureMFA(t *testing.T) {
 	}
 	resp := parseResponse(t, rr)
 	data := resp.Data.(map[string]interface{})
-	if data["mfa_enabled"] != true {
-		t.Error("expected mfa_enabled true")
+	// Enrolment issues a secret but does not yet count as a second factor.
+	if data["mfa_pending"] != true {
+		t.Error("expected mfa_pending true right after enrolment")
 	}
-	if data["secret"] == nil || data["secret"] == "" {
-		t.Error("expected secret")
+	if data["mfa_enabled"] != false {
+		t.Error("MFA must not be active before the code is verified")
+	}
+	secret, _ := data["secret"].(string)
+	if secret == "" {
+		t.Fatal("expected an enrolment secret")
 	}
 	if data["otpauth_uri"] == nil {
 		t.Error("expected otpauth_uri")
+	}
+}
+
+func TestVerifyMFAActivatesEnrolment(t *testing.T) {
+	api, mux, _ := setupTestAPI(t)
+
+	doRequest(mux, "POST", "/api/v2/users", map[string]interface{}{
+		"username": "mfaverify",
+		"password": "securepassword123",
+	})
+	rr := doRequest(mux, "PUT", "/api/v2/users/mfaverify/mfa", map[string]interface{}{
+		"enabled": true,
+	})
+	secret := parseResponse(t, rr).Data.(map[string]interface{})["secret"].(string)
+
+	// A wrong code must not activate the factor.
+	rr = doRequest(mux, "POST", "/api/v2/users/mfaverify/mfa/verify", map[string]interface{}{
+		"code": "000000",
+	})
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for a wrong code, got %d: %s", rr.Code, rr.Body.String())
+	}
+	user, _, err := api.LookupUser("mfaverify")
+	if err != nil {
+		t.Fatalf("LookupUser: %v", err)
+	}
+	if user.MFAEnabled {
+		t.Fatal("MFA activated despite a failed verification")
+	}
+
+	code, err := authn.TOTPCode(secret, time.Now(), authn.DefaultTOTPConfig())
+	if err != nil {
+		t.Fatalf("TOTPCode: %v", err)
+	}
+	rr = doRequest(mux, "POST", "/api/v2/users/mfaverify/mfa/verify", map[string]interface{}{
+		"code": code,
+	})
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	user, _, err = api.LookupUser("mfaverify")
+	if err != nil {
+		t.Fatalf("LookupUser: %v", err)
+	}
+	if !user.MFAEnabled || user.MFAPending {
+		t.Fatalf("expected an active, non-pending enrolment: %+v", user)
+	}
+
+	// The secret must not be readable once enrolment is confirmed.
+	rr = doRequest(mux, "GET", "/api/v2/users/mfaverify/mfa/qrcode", nil)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409 once enrolled, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -691,8 +769,77 @@ func TestMFAQRCodeNotEnabled(t *testing.T) {
 	})
 
 	rr := doRequest(mux, "GET", "/api/v2/users/nomfa/mfa/qrcode", nil)
-	if rr.Code != 400 {
-		t.Fatalf("expected 400, got %d", rr.Code)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rr.Code)
+	}
+}
+
+func TestCreateUserRejectsWeakPasswordAndUnknownRole(t *testing.T) {
+	_, mux, _ := setupTestAPI(t)
+
+	rr := doRequest(mux, "POST", "/api/v2/users", map[string]interface{}{
+		"username": "shortpw", "password": "short",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a short password, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doRequest(mux, "POST", "/api/v2/users", map[string]interface{}{
+		"username": "badrole", "password": "securepassword123", "role": "superuser",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an unknown role, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSignUserCertBindsPrincipalToCaller(t *testing.T) {
+	api, mux, _ := setupTestAPI(t)
+	ca, err := sshca.New(&sshca.CAConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api.SetCA(ca)
+
+	signer, err := sshca.GenerateED25519Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey := string(ssh.MarshalAuthorizedKey(signer.PublicKey()))
+
+	// A non-admin may not mint a certificate for somebody else.
+	rr := doRequestAs(mux, "POST", "/api/v2/ca/sign-user", map[string]interface{}{
+		"public_key": publicKey,
+		"principals": []string{"root"},
+	}, "carol", middleware.RoleOperator)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 when signing for another principal, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Signing for themselves is allowed.
+	rr = doRequestAs(mux, "POST", "/api/v2/ca/sign-user", map[string]interface{}{
+		"public_key": publicKey,
+		"principals": []string{"carol"},
+	}, "carol", middleware.RoleOperator)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for a self-signed principal, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// The self-service TTL ceiling applies to non-admins only.
+	rr = doRequestAs(mux, "POST", "/api/v2/ca/sign-user", map[string]interface{}{
+		"public_key": publicKey,
+		"principals": []string{"carol"},
+		"ttl":        "72h",
+	}, "carol", middleware.RoleOperator)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for an over-long self-service TTL, got %d: %s", rr.Code, rr.Body.String())
+	}
+	rr = doRequestAs(mux, "POST", "/api/v2/ca/sign-user", map[string]interface{}{
+		"public_key": publicKey,
+		"principals": []string{"root", "deploy"},
+		"ttl":        "72h",
+	}, "admin", middleware.RoleAdmin)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("admin should be able to sign arbitrary principals, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -920,10 +1067,10 @@ func TestListUsers(t *testing.T) {
 	_, mux, _ := setupTestAPI(t)
 
 	doRequest(mux, "POST", "/api/v2/users", map[string]interface{}{
-		"username": "u1", "password": "password123",
+		"username": "u1", "password": "password-12345",
 	})
 	doRequest(mux, "POST", "/api/v2/users", map[string]interface{}{
-		"username": "u2", "password": "password123",
+		"username": "u2", "password": "password-12345",
 	})
 
 	rr := doRequest(mux, "GET", "/api/v2/users", nil)
@@ -1178,7 +1325,13 @@ func TestConfigVersionEndpointsSanitizeSnapshotAndDiff(t *testing.T) {
 }
 
 func TestHashAndCheckPassword(t *testing.T) {
-	hash := hashPassword("mypassword")
+	hash, err := hashPassword("mypassword")
+	if err != nil {
+		t.Fatalf("hashPassword: %v", err)
+	}
+	if !strings.HasPrefix(hash, "$argon2id$") {
+		t.Fatalf("expected an argon2id hash, got %q", hash)
+	}
 	if !checkPassword("mypassword", hash) {
 		t.Error("password check failed for correct password")
 	}
