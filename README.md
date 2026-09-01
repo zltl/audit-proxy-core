@@ -1,6 +1,17 @@
 # SSH Proxy Core
 
-高性能、可扩展的 SSH 协议代理平台。C 数据面 (libssh, ~14,700 行) + Go 控制面 (REST API / Web UI / 自动化 / 网关 / 洞察)。
+数据库为准的 SSH 审计代理。Go 数据面（协议终结、录像、传输审计）+ Go 控制面
+（访问决策、管理 API、Web UI、审计汇）。
+
+> **新架构文档：[docs/architecture.md](docs/architecture.md)**
+>
+> 身份、目标、上游凭据与授权规则现在都以数据库为唯一事实源，`config.ini` 降级为可选的
+> 引导来源（`sshproxy migrate ini2db` 导入）。数据面自身不做任何授权判断，而是在每次
+> 需要时向控制面的决策点提问，因此撤销在下一次决策时生效而不是下一次重载。
+>
+> 旧的 C 数据面（`src/`，本文档其余部分描述的对象）仍可构建，但存在三个协议层缺陷：
+> 每连接只服务第一个 session channel、拒绝所有端口转发、不校验上游 host key。
+> 新部署请使用 `cmd/dataplane`。
 
 <!-- badges -->
 <!-- ![Build](https://img.shields.io/github/actions/workflow/status/your-org/ssh-proxy-core/ci.yml?branch=main) -->
