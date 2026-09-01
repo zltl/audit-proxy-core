@@ -90,6 +90,9 @@ func VerifyPassword(password, encoded string) bool {
 		return verifyArgon2id(password, encoded)
 	case strings.HasPrefix(encoded, "$2a$"), strings.HasPrefix(encoded, "$2b$"), strings.HasPrefix(encoded, "$2y$"):
 		return bcrypt.CompareHashAndPassword([]byte(encoded), []byte(password)) == nil
+	case isSHACryptHash(encoded):
+		// crypt(3) hashes carried over from the file-based configuration.
+		return verifySHACrypt(password, encoded)
 	default:
 		return verifyLegacyHMACSHA1(password, encoded)
 	}

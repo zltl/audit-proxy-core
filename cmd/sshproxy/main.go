@@ -83,6 +83,8 @@ func main() {
 		runThreat(args)
 	case "compliance":
 		runCompliance(args)
+	case "migrate":
+		runMigrate(args)
 	case "version":
 		runVersion(args)
 	case "help", "--help", "-h":
@@ -115,6 +117,7 @@ Commands:
   jit         Manage JIT access requests
   threat      View threat alerts
   compliance  Generate compliance reports
+  migrate     Import config.ini into the database
   version     Show version information
 
 Global flags:
