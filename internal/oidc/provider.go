@@ -14,7 +14,7 @@ import (
 
 // OIDCConfig holds the configuration needed to connect to an OIDC provider.
 type OIDCConfig struct {
-	Issuer       string   // OIDC Issuer URL (e.g., https://accounts.google.com)
+	Issuer       string // OIDC Issuer URL (e.g., https://accounts.google.com)
 	ClientID     string
 	ClientSecret string
 	RedirectURL  string   // e.g., https://proxy.example.com/auth/callback
@@ -31,11 +31,11 @@ type Provider struct {
 	JwksURI               string
 	EndSessionEndpoint    string
 
-	config     *OIDCConfig
-	keys       []JSONWebKey
-	keysMu     sync.RWMutex
-	keysExpiry time.Time
-	httpClient *http.Client
+	config      *OIDCConfig
+	keys        []JSONWebKey
+	keysMu      sync.RWMutex
+	keysExpiry  time.Time
+	httpClient  *http.Client
 	stopRefresh chan struct{}
 }
 

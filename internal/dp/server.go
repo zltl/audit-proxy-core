@@ -9,11 +9,13 @@ package dp
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,6 +75,7 @@ func New(cfg Config, pdp *pdpclient.Client) (*Server, error) {
 		Dir:            cfg.AuditSpoolDir,
 		SyncEveryWrite: cfg.AuditSpoolSync,
 		MaxTotalBytes:  cfg.AuditSpoolMaxBytes,
+		ChainKey:       auditChainKeyBytes(cfg.AuditChainKey),
 	}, pdp)
 	if err != nil {
 		return nil, err
@@ -91,6 +94,20 @@ func New(cfg Config, pdp *pdpclient.Client) (*Server, error) {
 }
 
 // loadHostKeys reads the private keys the proxy presents to clients.
+// auditChainKeyBytes decodes the configured chain key, accepting hex or a
+// passphrase so an operator gets what they intended rather than a silent
+// fallback to no shared key.
+func auditChainKeyBytes(raw string) []byte {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	if decoded, err := hex.DecodeString(raw); err == nil && len(decoded) >= 16 {
+		return decoded
+	}
+	return []byte(raw)
+}
+
 func loadHostKeys(paths []string) ([]ssh.Signer, error) {
 	signers := make([]ssh.Signer, 0, len(paths))
 	for _, path := range paths {

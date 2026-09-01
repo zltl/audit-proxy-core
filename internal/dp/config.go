@@ -72,6 +72,12 @@ type Config struct {
 
 	// AuditFlushInterval is how often spooled events are shipped.
 	AuditFlushInterval time.Duration
+
+	// AuditChainKey is the key the tamper-evidence chain is computed under. It
+	// must match the control plane's, or the records this node produces cannot
+	// be verified there. Left empty, a per-process key is generated: the chain
+	// still links records, but only this process can attest to it.
+	AuditChainKey string
 }
 
 // DefaultConfig returns the shipped defaults.

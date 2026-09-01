@@ -2,9 +2,7 @@ package dp
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"log"
 	"sync"
@@ -14,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/auditchain"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/auditspool"
 )
 
@@ -139,21 +138,28 @@ func (e *auditEmitter) Emit(event *sshproxyv1.AuditEvent) {
 }
 
 // link computes this event's place in the integrity chain.
+//
+// The computation is shared with the verifier so the two cannot drift: a chain
+// written one way and checked another would report tampering that never
+// happened, and people would learn to ignore the alarm.
 func (e *auditEmitter) link(event *sshproxyv1.AuditEvent) {
 	e.chainMu.Lock()
 	defer e.chainMu.Unlock()
 
-	mac := hmac.New(sha256.New, e.chainKey)
-	mac.Write([]byte(e.prevHash))
-	mac.Write([]byte(event.GetId()))
-	mac.Write([]byte(event.GetEventType()))
-	mac.Write([]byte(event.GetSessionId()))
-	mac.Write([]byte(event.GetUsername()))
-	mac.Write([]byte(event.GetCommand()))
+	timestamp := ""
 	if ts := event.GetTimestamp(); ts != nil {
-		mac.Write([]byte(ts.AsTime().UTC().Format(time.RFC3339Nano)))
+		timestamp = ts.AsTime().UTC().Format(time.RFC3339Nano)
 	}
-	digest := hex.EncodeToString(mac.Sum(nil))
+	entry := auditchain.Entry{
+		ID:        event.GetId(),
+		EventType: event.GetEventType(),
+		SessionID: event.GetSessionId(),
+		Username:  event.GetUsername(),
+		Command:   event.GetCommand(),
+		Timestamp: timestamp,
+		PrevHash:  e.prevHash,
+	}
+	digest := auditchain.Compute(e.chainKey, e.prevHash, entry)
 
 	event.PrevHash = e.prevHash
 	event.IntegrityHash = digest

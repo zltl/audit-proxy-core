@@ -48,6 +48,12 @@ func main() {
 
 		drainTimeout = flag.Duration("drain-timeout", 30*time.Second,
 			"how long a shutdown waits for sessions to finish before closing them")
+		auditSpoolDir = flag.String("audit-spool-dir", "/var/lib/ssh-proxy/audit-spool",
+			"where audit events are buffered before delivery")
+		auditSpoolSync = flag.Bool("audit-spool-sync", false,
+			"force each audit event to durable storage before the session continues")
+		auditChainKey = flag.String("audit-chain-key", "",
+			"key for the tamper-evidence chain; must match the control plane's audit_chain_key")
 	)
 	flag.Parse()
 
@@ -89,6 +95,9 @@ func main() {
 	cfg.CaptureKeystrokes = *captureKeys
 	cfg.MaxSessions = *maxSessions
 	cfg.DrainTimeout = *drainTimeout
+	cfg.AuditSpoolDir = *auditSpoolDir
+	cfg.AuditSpoolSync = *auditSpoolSync
+	cfg.AuditChainKey = *auditChainKey
 
 	server, err := dp.New(cfg, client)
 	if err != nil {

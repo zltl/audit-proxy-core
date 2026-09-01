@@ -481,6 +481,13 @@ type Config struct {
 	// storing plaintext, so vaulted upstream credentials cannot be used.
 	SecretsEncryptionKey string `json:"secrets_encryption_key"`
 
+	// AuditChainKey is the key the tamper-evidence chain over audit records is
+	// computed under. The same value must be given to every data-plane node, or
+	// their records cannot be verified. Without it a verification can still
+	// detect deletions and reordering, but not an alteration by somebody able
+	// to recompute the digests.
+	AuditChainKey string `json:"audit_chain_key"`
+
 	// AuditRetentionDays bounds how long indexed audit events are kept. It is
 	// applied as a table TTL where the backend supports one, so retention holds
 	// without depending on a deletion job that might not be running. Zero keeps

@@ -425,6 +425,7 @@ func (s *Server) routes() error {
 		JITChatOpsSlackSigningSecret:       s.config.JITChatOpsSlackSigningSecret,
 		ExperimentalFeatures:               s.config.ExperimentalFeatures,
 		AuditRetentionDays:                 s.config.AuditRetentionDays,
+		AuditChainKey:                      s.config.AuditChainKey,
 		SSHAllowInsecureHostKeys:           s.config.SSHAllowInsecureHostKeys,
 	}
 	apiHandler, err := api.New(s.dp, apiCfg)

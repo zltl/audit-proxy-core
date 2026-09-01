@@ -74,6 +74,7 @@ type Config struct {
 	JITChatOpsSlackSigningSecret       string
 	ExperimentalFeatures               string
 	AuditRetentionDays                 int
+	AuditChainKey                      string
 	SSHAllowInsecureHostKeys           bool
 }
 
@@ -424,6 +425,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v2/system/info", a.handleSystemInfo)
 	mux.HandleFunc("GET /api/v2/system/metrics", a.handleSystemMetrics)
 	mux.HandleFunc("GET /api/v2/system/features", a.handleListFeatures)
+	mux.HandleFunc("GET /api/v2/audit/verify", a.handleVerifyAuditChain)
 	mux.HandleFunc("GET /api/v2/system/upgrade", a.handleSystemUpgradeStatus)
 	mux.HandleFunc("PUT /api/v2/system/upgrade", a.handleSystemUpgrade)
 
