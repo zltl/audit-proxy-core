@@ -28,8 +28,10 @@ import (
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/oidc"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/pdp"
 	samlprovider "github.com/ssh-proxy-core/ssh-proxy-core/internal/saml"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/threat"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/ws"
 	"github.com/ssh-proxy-core/ssh-proxy-core/web"
@@ -53,6 +55,11 @@ type Server struct {
 	grpcBridge     *grpcapi.BridgeServer
 	grpcServer     *grpc.Server
 	grpcListener   net.Listener
+	pdpServer      *grpc.Server
+	pdpListener    net.Listener
+	decisionPoint  *pdp.Server
+	pdpEventSink   *pdp.FileEventSink
+	dataPlaneStore *store.Store
 	backgroundCtx  context.Context
 	stopBackground context.CancelFunc
 }
@@ -167,6 +174,9 @@ func (s *Server) Start() error {
 	if err := s.startGRPC(); err != nil {
 		return err
 	}
+	if err := s.startAccessDecisionPoint(); err != nil {
+		return err
+	}
 	if s.srv.TLSConfig != nil &&
 		(len(s.srv.TLSConfig.Certificates) > 0 || s.srv.TLSConfig.GetCertificate != nil) {
 		log.Printf("control-plane listening on %s (runtime TLS)", s.config.ListenAddr)
@@ -200,6 +210,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.grpcListener != nil {
 		_ = s.grpcListener.Close()
 	}
+	s.stopAccessDecisionPoint()
 	return s.srv.Shutdown(ctx)
 }
 

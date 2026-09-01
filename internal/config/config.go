@@ -465,6 +465,22 @@ type Config struct {
 	// endpoint by verifying Slack request signatures with this secret.
 	JITChatOpsSlackSigningSecret string `json:"jit_chatops_slack_signing_secret"`
 
+	// PDPListenAddr enables the access decision point that the SSH data plane
+	// consults. It listens separately from the admin API, and defaults to a
+	// unix socket, because anything able to call it can obtain credentials for
+	// upstream hosts and should not be reachable from wherever the console is.
+	PDPListenAddr string `json:"pdp_listen_addr"`
+
+	// PDPTrustOnFirstUse records an unknown upstream host key and lets the
+	// connection proceed. Off by default: accepting an unverified host key
+	// means the session being recorded may not be with the intended host.
+	PDPTrustOnFirstUse bool `json:"pdp_trust_on_first_use"`
+
+	// SecretsEncryptionKey is the 32-byte hex key, or "file:<path>", used to
+	// seal stored credentials. Without it the secret APIs refuse rather than
+	// storing plaintext, so vaulted upstream credentials cannot be used.
+	SecretsEncryptionKey string `json:"secrets_encryption_key"`
+
 	// AuditRetentionDays bounds how long indexed audit events are kept. It is
 	// applied as a table TTL where the backend supports one, so retention holds
 	// without depending on a deletion job that might not be running. Zero keeps

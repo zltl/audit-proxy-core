@@ -17,6 +17,15 @@ func (a *API) SetCA(ca *sshca.CA) {
 	a.ca = ca
 }
 
+// CertificateAuthority exposes the attached CA, so other subsystems can sign
+// without reaching through the HTTP layer.
+func (a *API) CertificateAuthority() *sshca.CA {
+	if a == nil {
+		return nil
+	}
+	return a.ca
+}
+
 // RegisterCARoutes registers all SSH CA API routes on the given mux.
 func (a *API) RegisterCARoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v2/ca/sign-user", a.handleSignUserCert)
