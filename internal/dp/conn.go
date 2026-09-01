@@ -37,6 +37,13 @@ type connection struct {
 	bytesIn  atomic.Int64
 	bytesOut atomic.Int64
 
+	// transfers and operations accumulate what the transfer inspectors saw, so
+	// the close report can describe which files moved rather than only how many
+	// bytes crossed the channel.
+	transfersMu sync.Mutex
+	transfers   []FileTransfer
+	operations  []FileOperation
+
 	// channels tracks open channels so a revocation closes all of them, not
 	// just whichever one happens to notice first.
 	channelsMu sync.Mutex

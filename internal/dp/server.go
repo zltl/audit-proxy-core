@@ -294,3 +294,19 @@ func (s *Server) recordingFor(sessionID string) string {
 	delete(s.recordings, sessionID)
 	return path
 }
+
+// transfersForTest exposes the file transfers recorded across live sessions.
+func (s *Server) transfersForTest() []FileTransfer {
+	s.connectionsMu.Lock()
+	conns := make([]*connection, 0, len(s.connections))
+	for c := range s.connections {
+		conns = append(conns, c)
+	}
+	s.connectionsMu.Unlock()
+
+	var all []FileTransfer
+	for _, c := range conns {
+		all = append(all, c.Transfers()...)
+	}
+	return all
+}

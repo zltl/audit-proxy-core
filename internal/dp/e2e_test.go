@@ -1,10 +1,12 @@
 package dp
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -954,4 +956,190 @@ func TestExitStatusReachesTheClient(t *testing.T) {
 		}
 		_ = session.Close()
 	}
+}
+
+// sftpClient drives an SFTP conversation over a proxied channel.
+type sftpClient struct {
+	t       *testing.T
+	channel ssh.Channel
+	buf     []byte
+	nextID  uint32
+}
+
+func newSFTPClient(t *testing.T, client *ssh.Client) *sftpClient {
+	t.Helper()
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	// The session wrapper does not expose the channel, so the subsystem is
+	// requested on a channel opened directly.
+	_ = session.Close()
+
+	channel, requests, err := client.OpenChannel("session", nil)
+	if err != nil {
+		t.Fatalf("OpenChannel: %v", err)
+	}
+	go ssh.DiscardRequests(requests)
+
+	ok, err := channel.SendRequest("subsystem", true, ssh.Marshal(struct{ Command string }{"sftp"}))
+	if err != nil || !ok {
+		t.Fatalf("subsystem request: ok=%v err=%v", ok, err)
+	}
+	t.Cleanup(func() { _ = channel.Close() })
+	return &sftpClient{t: t, channel: channel}
+}
+
+func (c *sftpClient) send(packetType byte, payload []byte) uint32 {
+	c.t.Helper()
+	c.nextID++
+	body := append([]byte{packetType}, payload...)
+	header := make([]byte, 4)
+	binary.BigEndian.PutUint32(header, uint32(len(body)))
+	if _, err := c.channel.Write(append(header, body...)); err != nil {
+		c.t.Fatalf("write sftp packet: %v", err)
+	}
+	return c.nextID
+}
+
+// receive reads one packet, so the test advances in lockstep with the target.
+func (c *sftpClient) receive() (byte, []byte) {
+	c.t.Helper()
+	chunk := make([]byte, 32*1024)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if len(c.buf) >= 4 {
+			length := binary.BigEndian.Uint32(c.buf[:4])
+			if uint32(len(c.buf)) >= 4+length && length > 0 {
+				packet := c.buf[4 : 4+length]
+				c.buf = c.buf[4+length:]
+				return packet[0], packet[1:]
+			}
+		}
+		if time.Now().After(deadline) {
+			c.t.Fatal("timed out waiting for an sftp reply")
+		}
+		n, err := c.channel.Read(chunk)
+		if n > 0 {
+			c.buf = append(c.buf, chunk[:n]...)
+			continue
+		}
+		if err != nil {
+			c.t.Fatalf("read sftp reply: %v", err)
+		}
+	}
+}
+
+func sftpString(dst []byte, s string) []byte {
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], uint32(len(s)))
+	dst = append(dst, b[:]...)
+	return append(dst, s...)
+}
+
+func sftpUint32(dst []byte, v uint32) []byte {
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], v)
+	return append(dst, b[:]...)
+}
+
+func TestSFTPTransferIsAuditedEndToEnd(t *testing.T) {
+	h := newHarness(t, func(_ *Config, pdp *scriptedPDP) {
+		pdp.sessionFeatures = []string{"shell", "exec", "sftp", "upload", "download", "subsystem"}
+	})
+	client := h.mustConnect("alice@web-1")
+	sftp := newSFTPClient(t, client)
+
+	// A real open/write/close exchange through the proxy.
+	openPayload := sftpUint32(nil, 1)
+	openPayload = sftpString(openPayload, "/srv/app/release.tar.gz")
+	openPayload = sftpUint32(openPayload, 0x00000002|0x00000008) // write|creat
+	openPayload = sftpUint32(openPayload, 0)
+	sftp.send(3, openPayload)
+
+	packetType, body := sftp.receive()
+	if packetType != 102 {
+		t.Fatalf("expected a handle reply, got type %d", packetType)
+	}
+	handleLen := binary.BigEndian.Uint32(body[4:8])
+	handle := string(body[8 : 8+handleLen])
+
+	content := bytes.Repeat([]byte("payload"), 100)
+	writePayload := sftpUint32(nil, 2)
+	writePayload = sftpString(writePayload, handle)
+	var offset [8]byte
+	writePayload = append(writePayload, offset[:]...)
+	writePayload = sftpUint32(writePayload, uint32(len(content)))
+	writePayload = append(writePayload, content...)
+	sftp.send(6, writePayload)
+	if packetType, _ := sftp.receive(); packetType != 101 {
+		t.Fatalf("expected a status reply for the write, got type %d", packetType)
+	}
+
+	closePayload := sftpUint32(nil, 3)
+	closePayload = sftpString(closePayload, handle)
+	sftp.send(4, closePayload)
+	if packetType, _ := sftp.receive(); packetType != 101 {
+		t.Fatalf("expected a status reply for the close, got type %d", packetType)
+	}
+
+	// The audit record must name the file and the direction, which is the whole
+	// point of parsing the subsystem rather than counting bytes.
+	transfer := waitForTransfer(t, h, "/srv/app/release.tar.gz")
+	if transfer.Direction != TransferUpload {
+		t.Errorf("direction = %q, want upload", transfer.Direction)
+	}
+	if transfer.Bytes != int64(len(content)) {
+		t.Errorf("bytes = %d, want %d", transfer.Bytes, len(content))
+	}
+	if transfer.Protocol != "sftp" {
+		t.Errorf("protocol = %q", transfer.Protocol)
+	}
+}
+
+func TestSFTPUploadRefusedWhenPolicyOmitsUpload(t *testing.T) {
+	h := newHarness(t, func(_ *Config, pdp *scriptedPDP) {
+		// The session may use sftp and download, but not upload.
+		pdp.sessionFeatures = []string{"shell", "exec", "sftp", "download", "subsystem"}
+	})
+	client := h.mustConnect("alice@web-1")
+	sftp := newSFTPClient(t, client)
+
+	openPayload := sftpUint32(nil, 1)
+	openPayload = sftpString(openPayload, "/srv/app/payload.sh")
+	openPayload = sftpUint32(openPayload, 0x00000002|0x00000008)
+	openPayload = sftpUint32(openPayload, 0)
+	sftp.send(3, openPayload)
+
+	// The proxy answers on the target's behalf, so the client sees a permission
+	// failure rather than the file being opened.
+	packetType, body := sftp.receive()
+	if packetType != 101 {
+		t.Fatalf("expected a status reply refusing the open, got type %d", packetType)
+	}
+	code := binary.BigEndian.Uint32(body[4:8])
+	if code != 3 {
+		t.Errorf("status code = %d, want 3 (permission denied)", code)
+	}
+
+	transfer := waitForTransfer(t, h, "/srv/app/payload.sh")
+	if transfer.Allowed {
+		t.Fatal("the refused upload was recorded as allowed")
+	}
+}
+
+// waitForTransfer polls the node's active session for a recorded transfer.
+func waitForTransfer(t *testing.T, h *harness, path string) FileTransfer {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, transfer := range h.proxy.transfersForTest() {
+			if transfer.Path == path {
+				return transfer
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("no transfer was recorded for %s", path)
+	return FileTransfer{}
 }

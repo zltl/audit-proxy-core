@@ -187,6 +187,11 @@ func (u *fakeUpstream) handleSession(newChannel ssh.NewChannel) {
 			if req.WantReply {
 				_ = req.Reply(true, nil)
 			}
+			if payload.Command == "sftp" {
+				u.serveSFTP(channel)
+				u.sendExit(channel, 0)
+				return
+			}
 			_, _ = fmt.Fprintf(channel, "subsystem: %s\n", payload.Command)
 			u.sendExit(channel, 0)
 			return
@@ -228,4 +233,125 @@ func (u *fakeUpstream) handleDirect(newChannel ssh.NewChannel) {
 
 	// Echo, so a test can prove bytes cross the tunnel in both directions.
 	_, _ = io.Copy(channel, channel)
+}
+
+// serveSFTP answers just enough of the SFTP protocol for the proxy's inspector
+// to have something real to parse: opens return a handle, writes and reads are
+// acknowledged, and closes report success.
+func (u *fakeUpstream) serveSFTP(channel ssh.Channel) {
+	var (
+		buf     []byte
+		handles = map[string]string{}
+		next    = 0
+	)
+	chunk := make([]byte, 32*1024)
+
+	for {
+		n, err := channel.Read(chunk)
+		if n > 0 {
+			buf = append(buf, chunk[:n]...)
+			for {
+				if len(buf) < 4 {
+					break
+				}
+				length := binary.BigEndian.Uint32(buf[:4])
+				if uint32(len(buf)) < 4+length || length == 0 {
+					break
+				}
+				packet := buf[4 : 4+length]
+				buf = buf[4+length:]
+				u.answerSFTP(channel, packet, handles, &next)
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (u *fakeUpstream) answerSFTP(channel ssh.Channel, packet []byte, handles map[string]string, next *int) {
+	if len(packet) < 1 {
+		return
+	}
+	body := packet[1:]
+
+	write := func(packetType byte, payload []byte) {
+		full := append([]byte{packetType}, payload...)
+		header := make([]byte, 4)
+		binary.BigEndian.PutUint32(header, uint32(len(full)))
+		_, _ = channel.Write(append(header, full...))
+	}
+	putUint32 := func(dst []byte, v uint32) []byte {
+		var b [4]byte
+		binary.BigEndian.PutUint32(b[:], v)
+		return append(dst, b[:]...)
+	}
+	putString := func(dst []byte, s string) []byte {
+		dst = putUint32(dst, uint32(len(s)))
+		return append(dst, s...)
+	}
+	readUint32 := func(b []byte) (uint32, []byte, bool) {
+		if len(b) < 4 {
+			return 0, b, false
+		}
+		return binary.BigEndian.Uint32(b), b[4:], true
+	}
+	readString := func(b []byte) (string, []byte, bool) {
+		length, rest, ok := readUint32(b)
+		if !ok || uint32(len(rest)) < length {
+			return "", b, false
+		}
+		return string(rest[:length]), rest[length:], true
+	}
+
+	switch packet[0] {
+	case 1: // INIT
+		write(2, putUint32(nil, 3))
+
+	case 3: // OPEN
+		id, rest, ok := readUint32(body)
+		if !ok {
+			return
+		}
+		filename, _, ok := readString(rest)
+		if !ok {
+			return
+		}
+		*next++
+		handle := fmt.Sprintf("h%d", *next)
+		handles[handle] = filename
+		write(102, putString(putUint32(nil, id), handle))
+
+	case 5: // READ
+		id, rest, ok := readUint32(body)
+		if !ok {
+			return
+		}
+		if _, _, ok := readString(rest); !ok {
+			return
+		}
+		payload := putUint32(nil, id)
+		payload = putString(payload, "downloaded-content")
+		write(103, payload)
+
+	case 4, 6, 13, 14, 18: // CLOSE, WRITE, REMOVE, MKDIR, RENAME
+		id, _, ok := readUint32(body)
+		if !ok {
+			return
+		}
+		payload := putUint32(nil, id)
+		payload = putUint32(payload, 0) // OK
+		payload = putString(payload, "")
+		payload = putString(payload, "")
+		write(101, payload)
+
+	default:
+		if id, _, ok := readUint32(body); ok {
+			payload := putUint32(nil, id)
+			payload = putUint32(payload, 8) // OP_UNSUPPORTED
+			payload = putString(payload, "unsupported")
+			payload = putString(payload, "")
+			write(101, payload)
+		}
+	}
 }

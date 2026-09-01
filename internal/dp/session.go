@@ -134,6 +134,15 @@ type sessionChannel struct {
 	commandLine []byte
 	started     time.Time
 	finished    bool
+
+	// sftp and scp are set when the channel carries a file transfer, which is
+	// the only way to record what was moved rather than how much. The filters
+	// wrap the data path and are consulted on every write, because the request
+	// that reveals a transfer arrives after copying has already started.
+	sftp           *sftpInspector
+	scp            *scpInspector
+	requestFilter  io.Writer
+	responseFilter io.Writer
 }
 
 // relayClientRequests forwards channel requests, gating each against policy.
@@ -217,6 +226,9 @@ func (s *sessionChannel) screenRequest(ctx context.Context, req *ssh.Request) (a
 		if decision.rewritten != "" && decision.rewritten != payload.Command {
 			req.Payload = ssh.Marshal(execRequest{Command: decision.rewritten})
 		}
+		// scp runs as an ordinary exec, so a transfer is only distinguishable
+		// from a command by recognising the invocation.
+		s.enableSCPInspection(payload.Command)
 		s.startRecording("exec: " + payload.Command)
 		return true, false
 
@@ -226,6 +238,7 @@ func (s *sessionChannel) screenRequest(ctx context.Context, req *ssh.Request) (a
 		if !s.authorize(ctx, sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_SUBSYSTEM, payload.Command, req) {
 			return false, false
 		}
+		s.enableSFTPInspection(payload.Command)
 		s.startRecording("subsystem: " + payload.Command)
 		return true, false
 
@@ -339,15 +352,62 @@ func (s *sessionChannel) relayUpstreamRequests(requests <-chan *ssh.Request) {
 	}
 }
 
+// enableSFTPInspection turns on packet-level parsing for an sftp subsystem.
+//
+// Without it, a file transfer is just bytes on a channel: the audit trail would
+// record that somebody moved four megabytes and be unable to say which file, in
+// which direction, or whether it should have been allowed.
+func (s *sessionChannel) enableSFTPInspection(subsystem string) {
+	if !strings.EqualFold(strings.TrimSpace(subsystem), "sftp") {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	inspector := newSFTPInspector(s.conn.transferPolicy(), s.conn)
+	s.sftp = inspector
+	s.requestFilter = newSFTPRequestFilter(inspector, writerFunc(s.rawToUpstream), s.client, nil)
+	// Replies are parsed too: sftp returns an opaque handle for an open, and
+	// only correlating the two attributes transferred bytes to a filename.
+	s.responseFilter = newSFTPResponseFilter(inspector, writerFunc(s.rawToClient), nil)
+}
+
+// enableSCPInspection turns on control-stream parsing for an scp invocation.
+func (s *sessionChannel) enableSCPInspection(command string) {
+	mode, remotePath, ok := parseSCPCommand(command)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	inspector := newSCPInspector(mode, remotePath, s.conn.transferPolicy(), s.conn)
+	s.scp = inspector
+	// Only the side carrying control lines is parsed: for an upload that is the
+	// client's stream, for a download the target's. The other side is file
+	// content and acknowledgements.
+	if mode == scpModeSink {
+		s.requestFilter = newSCPFilter(inspector, writerFunc(s.rawToUpstream), nil)
+	} else {
+		s.responseFilter = newSCPFilter(inspector, writerFunc(s.rawToClient), nil)
+	}
+}
+
 // pump copies data in both directions until either side finishes.
+//
+// The transfer inspectors are resolved on each write rather than captured here,
+// because a session channel starts before the client says what it is for: the
+// subsystem or exec request that reveals a file transfer arrives after the
+// copies are already running.
 func (s *sessionChannel) pump() {
+	defer s.flushInspectors()
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// Client to upstream: what the user typed.
+	// Client to upstream: what the user typed, or the requests and file content
+	// of a transfer.
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(&clientToUpstream{session: s}, s.client)
+		_, _ = io.Copy(writerFunc(s.writeToUpstream), s.client)
 		_ = s.upstream.CloseWrite()
 	}()
 
@@ -365,7 +425,7 @@ func (s *sessionChannel) pump() {
 		streams.Add(2)
 		go func() {
 			defer streams.Done()
-			_, _ = io.Copy(&upstreamToClient{session: s}, s.upstream)
+			_, _ = io.Copy(writerFunc(s.writeToClient), s.upstream)
 		}()
 		go func() {
 			defer streams.Done()
@@ -379,34 +439,76 @@ func (s *sessionChannel) pump() {
 	wg.Wait()
 }
 
-// clientToUpstream records and accounts for data on its way to the target.
-type clientToUpstream struct{ session *sessionChannel }
+// writerFunc adapts a method to io.Writer.
+type writerFunc func([]byte) (int, error)
 
-func (w *clientToUpstream) Write(p []byte) (int, error) {
-	n, err := w.session.upstream.Write(p)
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+// writeToUpstream sends client data onward, through the transfer inspector when
+// one is active.
+func (s *sessionChannel) writeToUpstream(p []byte) (int, error) {
+	s.mu.Lock()
+	filter := s.requestFilter
+	s.mu.Unlock()
+	if filter != nil {
+		// The filter forwards to the accounting writer itself, and may withhold
+		// a packet that policy refuses.
+		return filter.Write(p)
+	}
+	return s.rawToUpstream(p)
+}
+
+// rawToUpstream records and accounts for data on its way to the target.
+func (s *sessionChannel) rawToUpstream(p []byte) (int, error) {
+	n, err := s.upstream.Write(p)
 	if n > 0 {
-		w.session.conn.bytesIn.Add(int64(n))
-		w.session.mu.Lock()
-		recorder := w.session.recorder
-		w.session.mu.Unlock()
+		s.conn.bytesIn.Add(int64(n))
+		s.mu.Lock()
+		recorder := s.recorder
+		s.mu.Unlock()
 		recorder.Input(p[:n])
 	}
 	return n, err
 }
 
-// upstreamToClient records and accounts for data on its way back.
-type upstreamToClient struct{ session *sessionChannel }
+// writeToClient sends target data back, through the transfer inspector when one
+// is active.
+func (s *sessionChannel) writeToClient(p []byte) (int, error) {
+	s.mu.Lock()
+	filter := s.responseFilter
+	s.mu.Unlock()
+	if filter != nil {
+		return filter.Write(p)
+	}
+	return s.rawToClient(p)
+}
 
-func (w *upstreamToClient) Write(p []byte) (int, error) {
-	n, err := w.session.client.Write(p)
+// rawToClient records and accounts for data on its way back.
+func (s *sessionChannel) rawToClient(p []byte) (int, error) {
+	n, err := s.client.Write(p)
 	if n > 0 {
-		w.session.conn.bytesOut.Add(int64(n))
-		w.session.mu.Lock()
-		recorder := w.session.recorder
-		w.session.mu.Unlock()
+		s.conn.bytesOut.Add(int64(n))
+		s.mu.Lock()
+		recorder := s.recorder
+		s.mu.Unlock()
 		recorder.Output(p[:n])
 	}
 	return n, err
+}
+
+// flushInspectors records anything still in flight when the session ends, so an
+// interrupted transfer leaves a trace rather than none.
+func (s *sessionChannel) flushInspectors() {
+	s.mu.Lock()
+	sftpInspect, scpInspect := s.sftp, s.scp
+	s.mu.Unlock()
+
+	if sftpInspect != nil {
+		sftpInspect.Flush()
+	}
+	if scpInspect != nil {
+		scpInspect.Flush()
+	}
 }
 
 // startRecording begins capturing this channel, unless policy says not to.
