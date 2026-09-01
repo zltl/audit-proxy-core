@@ -45,6 +45,10 @@ type scriptedPDP struct {
 	upstreamLogin   string
 	commandPolicyID string
 	recordPolicy    sshproxyv1.RecordPolicy
+	// idleTimeoutSeconds and maxSessionSeconds are the limits the decision
+	// point hands back with an authorization.
+	idleTimeoutSeconds int64
+	maxSessionSeconds  int64
 
 	// channelDenied names request payloads or channel types to refuse.
 	channelDenied map[string]string
@@ -107,15 +111,17 @@ func (p *scriptedPDP) AuthorizeSession(_ context.Context, _ *sshproxyv1.Authoriz
 		return &sshproxyv1.AuthorizeSessionResponse{Allowed: false, Reason: p.sessionReason}, nil
 	}
 	return &sshproxyv1.AuthorizeSessionResponse{
-		Allowed:         true,
-		TargetId:        "tgt-1",
-		TargetHost:      p.targetHost,
-		TargetPort:      int32(p.targetPort),
-		UpstreamLogin:   p.upstreamLogin,
-		Features:        p.sessionFeatures,
-		RecordPolicy:    p.recordPolicy,
-		CommandPolicyId: p.commandPolicyID,
-		RuleId:          "rule-1",
+		Allowed:            true,
+		TargetId:           "tgt-1",
+		TargetHost:         p.targetHost,
+		TargetPort:         int32(p.targetPort),
+		UpstreamLogin:      p.upstreamLogin,
+		Features:           p.sessionFeatures,
+		RecordPolicy:       p.recordPolicy,
+		CommandPolicyId:    p.commandPolicyID,
+		IdleTimeoutSeconds: p.idleTimeoutSeconds,
+		MaxSessionSeconds:  p.maxSessionSeconds,
+		RuleId:             "rule-1",
 	}, nil
 }
 
@@ -1381,4 +1387,83 @@ func TestFileTransferProducesAnAuditEvent(t *testing.T) {
 		}
 		return
 	}
+}
+
+func TestIdleSessionIsDisconnected(t *testing.T) {
+	h := newHarness(t, func(cfg *Config, pdp *scriptedPDP) {
+		cfg.HeartbeatInterval = 50 * time.Millisecond
+		pdp.idleTimeoutSeconds = 1
+	})
+	client := h.mustConnect("alice@web-1")
+
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	if err := session.Shell(); err != nil {
+		t.Fatalf("Shell: %v", err)
+	}
+	buf := make([]byte, len("upstream-shell-ready\n"))
+	if _, err := io.ReadFull(stdout, buf); err != nil {
+		t.Fatalf("read banner: %v", err)
+	}
+
+	// Nothing more is typed, so the session should be closed for being idle.
+	closed := make(chan struct{})
+	go func() {
+		_ = client.Wait()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(15 * time.Second):
+		t.Fatal("an idle session was never disconnected")
+	}
+}
+
+func TestActiveSessionIsNotConsideredIdle(t *testing.T) {
+	h := newHarness(t, func(cfg *Config, pdp *scriptedPDP) {
+		cfg.HeartbeatInterval = 50 * time.Millisecond
+		pdp.idleTimeoutSeconds = 1
+	})
+	client := h.mustConnect("alice@web-1")
+
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe: %v", err)
+	}
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	if err := session.Shell(); err != nil {
+		t.Fatalf("Shell: %v", err)
+	}
+	banner := make([]byte, len("upstream-shell-ready\n"))
+	if _, err := io.ReadFull(stdout, banner); err != nil {
+		t.Fatalf("read banner: %v", err)
+	}
+
+	// Idle means silent, not old. Somebody working continuously must not be
+	// disconnected just because time has passed.
+	deadline := time.Now().Add(2500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if _, err := stdin.Write([]byte("x\n")); err != nil {
+			t.Fatalf("an active session was disconnected: %v", err)
+		}
+		echo := make([]byte, 2)
+		if _, err := io.ReadFull(stdout, echo); err != nil {
+			t.Fatalf("an active session stopped responding: %v", err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	_ = stdin.Close()
 }

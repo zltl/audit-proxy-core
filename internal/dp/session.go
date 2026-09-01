@@ -315,9 +315,11 @@ func (s *sessionChannel) screenCommand(ctx context.Context, command string) comm
 		}
 	})
 	if err != nil {
+		s.conn.proxy.metrics.PolicyUnavailable.Add(1)
 		log.Printf("dp: session %s: command screening failed: %v", s.conn.sessionID, err)
 		return commandDecision{blocked: true, message: "command policy could not be consulted"}
 	}
+	s.conn.proxy.metrics.CommandsScreened.Add(1)
 
 	s.mu.Lock()
 	recorder := s.recorder
@@ -326,6 +328,7 @@ func (s *sessionChannel) screenCommand(ctx context.Context, command string) comm
 	switch resp.GetDecision() {
 	case sshproxyv1.CommandDecision_COMMAND_DECISION_DENY:
 		recorder.Marker("blocked: " + command)
+		s.conn.proxy.metrics.CommandsBlocked.Add(1)
 		s.conn.emitCommand(command, "deny", resp.GetRuleId())
 		return commandDecision{blocked: true, message: resp.GetReason()}
 	case sshproxyv1.CommandDecision_COMMAND_DECISION_REWRITE:
@@ -467,6 +470,7 @@ func (s *sessionChannel) rawToUpstream(p []byte) (int, error) {
 	n, err := s.upstream.Write(p)
 	if n > 0 {
 		s.conn.bytesIn.Add(int64(n))
+		s.conn.noteActivity()
 		s.mu.Lock()
 		recorder := s.recorder
 		s.mu.Unlock()
@@ -492,6 +496,7 @@ func (s *sessionChannel) rawToClient(p []byte) (int, error) {
 	n, err := s.client.Write(p)
 	if n > 0 {
 		s.conn.bytesOut.Add(int64(n))
+		s.conn.noteActivity()
 		s.mu.Lock()
 		recorder := s.recorder
 		s.mu.Unlock()
@@ -552,9 +557,11 @@ func (s *sessionChannel) startRecording(title string) {
 		// A session that cannot be recorded is a policy problem, not a
 		// technical one, so it is reported loudly rather than silently
 		// continuing unrecorded.
+		s.conn.proxy.metrics.RecordingsFailed.Add(1)
 		log.Printf("dp: session %s: recording could not be started: %v", s.conn.sessionID, err)
 		return
 	}
+	s.conn.proxy.metrics.RecordingsStarted.Add(1)
 	s.recorder = recorder
 	s.conn.noteRecording(path)
 }

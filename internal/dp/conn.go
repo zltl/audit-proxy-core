@@ -36,6 +36,15 @@ type connection struct {
 
 	bytesIn  atomic.Int64
 	bytesOut atomic.Int64
+	// lastActivity is when data last moved in either direction. An idle
+	// timeout has to measure silence, not age: a session that has been open
+	// for hours while somebody works is not idle, and one that connected a
+	// minute ago and went quiet is.
+	lastActivity atomic.Int64
+
+	// maxSessionTTL and idleTimeout are the limits this session was granted.
+	maxSessionTTL time.Duration
+	idleTimeout   time.Duration
 
 	// transfers and operations accumulate what the transfer inspectors saw, so
 	// the close report can describe which files moved rather than only how many
@@ -49,6 +58,7 @@ type connection struct {
 	channelsMu sync.Mutex
 	channels   map[*ssh.Channel]struct{}
 
+	startedAt time.Time
 	closeOnce sync.Once
 	closed    chan struct{}
 	// terminated records why the session ended, for the audit trail.
@@ -75,18 +85,20 @@ func (s *Server) handle(ctx context.Context, rawConn net.Conn) {
 	_ = rawConn.SetDeadline(time.Time{})
 
 	conn := &connection{
-		proxy:    s,
-		client:   serverConn,
-		channels: make(map[*ssh.Channel]struct{}),
-		closed:   make(chan struct{}),
-		username: serverConn.Permissions.Extensions["username"],
-		roles:    splitRoles(serverConn.Permissions.Extensions["roles"]),
+		proxy:     s,
+		client:    serverConn,
+		startedAt: time.Now(),
+		channels:  make(map[*ssh.Channel]struct{}),
+		closed:    make(chan struct{}),
+		username:  serverConn.Permissions.Extensions["username"],
+		roles:     splitRoles(serverConn.Permissions.Extensions["roles"]),
 	}
 	if conn.username == "" {
 		conn.username = serverConn.User()
 	}
 
 	if err := conn.authorizeAndConnect(ctx); err != nil {
+		s.metrics.SessionsRejected.Add(1)
 		conn.emitSessionDenied(err.Error())
 		conn.rejectAllChannels(chans, err)
 		_ = serverConn.Close()
@@ -119,6 +131,7 @@ func (c *connection) authorizeAndConnect(ctx context.Context) error {
 		UpstreamLogin: spec.Login,
 	})
 	if err != nil {
+		c.proxy.metrics.PolicyUnavailable.Add(1)
 		return fmt.Errorf("authorization failed: %w", err)
 	}
 	if !decision.GetAllowed() {
@@ -137,6 +150,8 @@ func (c *connection) authorizeAndConnect(ctx context.Context) error {
 	c.upstreamLogin = decision.GetUpstreamLogin()
 	c.commandPolicy = decision.GetCommandPolicyId()
 	c.recordPolicy = decision.GetRecordPolicy()
+	c.maxSessionTTL = time.Duration(decision.GetMaxSessionSeconds()) * time.Second
+	c.idleTimeout = time.Duration(decision.GetIdleTimeoutSeconds()) * time.Second
 	c.features = make(map[string]bool, len(decision.GetFeatures()))
 	for _, feature := range decision.GetFeatures() {
 		c.features[feature] = true
@@ -177,6 +192,7 @@ func (c *connection) authorizeAndConnect(ctx context.Context) error {
 	log.Printf("dp: session %s: %s connected to %s@%s:%d",
 		c.sessionID, c.username, c.upstreamLogin, c.targetHost, c.targetPort)
 	c.emitSessionStart(decision.GetRuleId())
+	c.proxy.metrics.SessionsStarted.Add(1)
 	return nil
 }
 
@@ -287,9 +303,11 @@ func (c *connection) authorizeChannel(ctx context.Context, req *sshproxyv1.Autho
 		return fmt.Errorf("policy could not be consulted: %w", err)
 	}
 	if !resp.GetAllowed() {
+		c.proxy.metrics.ChannelsRefused.Add(1)
 		c.emitChannelDenied(req.GetChannelType().String(), resp.GetReason())
 		return errors.New(resp.GetReason())
 	}
+	c.proxy.metrics.ChannelsOpened.Add(1)
 	return nil
 }
 
@@ -305,6 +323,13 @@ func (c *connection) heartbeat(ctx context.Context) {
 		case <-c.closed:
 			return
 		case <-ticker.C:
+			// Idle is enforced here rather than centrally because only this
+			// node can see whether bytes are moving; the control plane sees
+			// heartbeats either way.
+			if reason, expired := c.expired(); expired {
+				c.terminate(reason)
+				return
+			}
 			revoked, reason, err := c.proxy.pdp.HeartbeatSession(ctx, c.sessionID,
 				c.bytesIn.Load(), c.bytesOut.Load())
 			if err != nil {
@@ -319,6 +344,30 @@ func (c *connection) heartbeat(ctx context.Context) {
 	}
 }
 
+// noteActivity records that data moved, which is what keeps a session from
+// being considered idle.
+func (c *connection) noteActivity() {
+	c.lastActivity.Store(time.Now().UnixNano())
+}
+
+// expired reports whether the session has outlived one of its granted limits.
+func (c *connection) expired() (string, bool) {
+	now := time.Now()
+	if c.maxSessionTTL > 0 && !c.startedAt.IsZero() && now.After(c.startedAt.Add(c.maxSessionTTL)) {
+		return "the maximum session duration of " + c.maxSessionTTL.String() + " was reached", true
+	}
+	if c.idleTimeout > 0 {
+		last := c.lastActivity.Load()
+		if last == 0 {
+			last = c.startedAt.UnixNano()
+		}
+		if now.Sub(time.Unix(0, last)) > c.idleTimeout {
+			return "the session was idle for longer than " + c.idleTimeout.String(), true
+		}
+	}
+	return "", false
+}
+
 // terminate closes the session, telling the user why before the connection goes
 // away so a disconnection does not look like a network fault.
 func (c *connection) terminate(reason string) {
@@ -326,6 +375,7 @@ func (c *connection) terminate(reason string) {
 		reason = "session terminated by policy"
 	}
 	c.setTerminated(reason)
+	c.proxy.metrics.SessionsTerminated.Add(1)
 	log.Printf("dp: session %s terminated: %s", c.sessionID, reason)
 
 	c.channelsMu.Lock()

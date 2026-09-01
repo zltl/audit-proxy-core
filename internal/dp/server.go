@@ -34,6 +34,7 @@ type Server struct {
 
 	authState *authStateTable
 	audit     *auditEmitter
+	metrics   *Metrics
 
 	listenerMu sync.Mutex
 	listener   net.Listener
@@ -81,16 +82,23 @@ func New(cfg Config, pdp *pdpclient.Client) (*Server, error) {
 		return nil, err
 	}
 
-	return &Server{
+	server := &Server{
 		config:      cfg,
 		pdp:         pdp,
 		hostSigners: signers,
 		authState:   newAuthStateTable(),
 		audit:       emitter,
+		metrics:     NewMetrics(),
 		connections: make(map[*connection]struct{}),
 		recordings:  make(map[string]string),
 		shutdown:    make(chan struct{}),
-	}, nil
+	}
+	// The emitter reports through the same registry, so audit backlog and
+	// delivery show up alongside everything else rather than needing a
+	// separate place to look.
+	emitter.metrics = server.metrics
+	server.registerGauges()
+	return server, nil
 }
 
 // loadHostKeys reads the private keys the proxy presents to clients.

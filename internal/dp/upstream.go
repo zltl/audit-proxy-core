@@ -119,6 +119,7 @@ func (d *upstreamDialer) hostKeyCallback(ctx context.Context, target upstreamTar
 			return fmt.Errorf("dp: host key could not be verified: %w", err)
 		}
 		if !resp.GetProceed() {
+			d.proxy.metrics.HostKeysRefused.Add(1)
 			return fmt.Errorf("dp: refusing %s: %s", target.address(), resp.GetReason())
 		}
 		return nil

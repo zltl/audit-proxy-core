@@ -56,6 +56,7 @@ func (c *connection) handleDirectTCPIP(ctx context.Context, newChannel ssh.NewCh
 	}); err != nil {
 		log.Printf("dp: session %s: refusing forward to %s:%d: %v",
 			c.sessionID, payload.DestHost, payload.DestPort, err)
+		c.proxy.metrics.ForwardsRefused.Add(1)
 		c.emitPortForward("local", payload.DestHost, int(payload.DestPort), false, err.Error())
 		_ = newChannel.Reject(ssh.Prohibited, err.Error())
 		return
@@ -79,6 +80,7 @@ func (c *connection) handleDirectTCPIP(ctx context.Context, newChannel ssh.NewCh
 	defer c.untrackChannel(clientChannel)
 
 	log.Printf("dp: session %s: forwarding to %s:%d", c.sessionID, payload.DestHost, payload.DestPort)
+	c.proxy.metrics.ForwardsOpened.Add(1)
 	c.emitPortForward("local", payload.DestHost, int(payload.DestPort), true, "")
 	c.pipeTunnel(clientChannel, upstreamChannel)
 }
@@ -203,17 +205,33 @@ func (c *connection) pipeTunnel(clientChannel, upstreamChannel ssh.Channel) {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
+	// Bytes are counted as they move rather than at the end, so a tunnel that
+	// is carrying traffic keeps the session from being considered idle.
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(upstreamChannel, clientChannel)
-		c.bytesIn.Add(n)
+		_, _ = io.Copy(tunnelCounter{dst: upstreamChannel, add: c.bytesIn.Add, active: c.noteActivity}, clientChannel)
 		_ = upstreamChannel.CloseWrite()
 	}()
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(clientChannel, upstreamChannel)
-		c.bytesOut.Add(n)
+		_, _ = io.Copy(tunnelCounter{dst: clientChannel, add: c.bytesOut.Add, active: c.noteActivity}, upstreamChannel)
 		_ = clientChannel.CloseWrite()
 	}()
 	wg.Wait()
+}
+
+// tunnelCounter accounts for forwarded bytes as they pass.
+type tunnelCounter struct {
+	dst    io.Writer
+	add    func(int64) int64
+	active func()
+}
+
+func (c tunnelCounter) Write(p []byte) (int, error) {
+	n, err := c.dst.Write(p)
+	if n > 0 {
+		c.add(int64(n))
+		c.active()
+	}
+	return n, err
 }

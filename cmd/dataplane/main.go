@@ -54,6 +54,8 @@ func main() {
 			"force each audit event to durable storage before the session continues")
 		auditChainKey = flag.String("audit-chain-key", "",
 			"key for the tamper-evidence chain; must match the control plane's audit_chain_key")
+		metricsAddr = flag.String("metrics-addr", "127.0.0.1:9100",
+			"address for /metrics, /healthz, and /readyz; empty disables it")
 	)
 	flag.Parse()
 
@@ -115,6 +117,18 @@ func main() {
 			server.Drain()
 		}
 	}()
+
+	// Metrics listen separately from the SSH port so that scraping does not
+	// require reaching the data path, and so the endpoint can be bound to an
+	// interface the monitoring system sees and clients do not.
+	stopMetrics, err := server.ServeMetrics(*metricsAddr)
+	if err != nil {
+		fatal(err.Error())
+	}
+	defer func() { _ = stopMetrics() }()
+	if *metricsAddr != "" {
+		log.Printf("dataplane: metrics on %s", *metricsAddr)
+	}
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(ctx) }()

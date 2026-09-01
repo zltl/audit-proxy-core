@@ -107,6 +107,12 @@ func (s *Server) bannerCallback(ssh.ConnMetadata) string {
 }
 
 func (s *Server) authLogCallback(conn ssh.ConnMetadata, method string, err error) {
+	if method != "none" {
+		s.metrics.AuthAttempts.Add(1)
+		if err != nil {
+			s.metrics.AuthFailures.Add(1)
+		}
+	}
 	if err == nil {
 		log.Printf("dp: %s authenticated via %s from %s", conn.User(), method, conn.RemoteAddr())
 		return

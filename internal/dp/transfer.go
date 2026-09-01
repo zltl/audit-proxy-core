@@ -72,6 +72,10 @@ func (c *connection) FileTransferred(transfer FileTransfer) {
 		c.sessionID, verdict, transfer.Protocol, transfer.Direction, transfer.Path,
 		transfer.Bytes, reason)
 
+	c.proxy.metrics.TransfersRecorded.Add(1)
+	if !transfer.Allowed {
+		c.proxy.metrics.TransfersRefused.Add(1)
+	}
 	c.recordTransfer(transfer)
 }
 

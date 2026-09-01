@@ -51,6 +51,7 @@ type auditEmitter struct {
 	prevHash  string
 	chainKey  []byte
 	batchSize int
+	metrics   *Metrics
 }
 
 // auditReporter is the transport that carries batches to the control plane.
@@ -129,6 +130,9 @@ func (e *auditEmitter) Emit(event *sshproxyv1.AuditEvent) {
 	if err != nil {
 		log.Printf("dp: encode audit event: %v", err)
 		return
+	}
+	if e.metrics != nil {
+		e.metrics.AuditEventsEmitted.Add(1)
 	}
 	if err := e.spool.Append(payload); err != nil {
 		// The event cannot be persisted. Reporting it here at least leaves it
@@ -223,6 +227,10 @@ func (e *auditEmitter) ship(ctx context.Context) {
 		if err := e.spool.Commit(batch); err != nil {
 			log.Printf("dp: commit audit spool: %v", err)
 			return
+		}
+		if e.metrics != nil {
+			e.metrics.AuditEventsDelivered.Add(int64(len(events)))
+			e.metrics.AuditEventsDropped.Store(e.spool.Dropped())
 		}
 	}
 }
