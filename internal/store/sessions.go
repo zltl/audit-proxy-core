@@ -10,7 +10,8 @@ import (
 
 const sessionColumns = `id, node_id, username, source_ip, client_version, target_id,
 	target_host, target_port, upstream_login, status, started_at, last_seen_at, closed_at,
-	bytes_in, bytes_out, recording_ref, revoke_requested, revoke_reason, termination_info`
+	bytes_in, bytes_out, recording_ref, revoke_requested, revoke_reason, termination_info,
+	features, command_policy_id, record_policy, rule_id, max_session_seconds, idle_timeout_seconds`
 
 // SessionFilter narrows a session listing.
 type SessionFilter struct {
@@ -36,13 +37,18 @@ func (s *Store) CreateSession(sess Session) (Session, error) {
 	}
 	sess.LastSeenAt = now
 
-	query := fmt.Sprintf(`INSERT INTO dp_sessions (%s) VALUES (%s)`, sessionColumns, s.binds(19))
+	if sess.RecordPolicy == "" {
+		sess.RecordPolicy = RecordFull
+	}
+	query := fmt.Sprintf(`INSERT INTO dp_sessions (%s) VALUES (%s)`, sessionColumns, s.binds(25))
 	if _, err := s.db.Exec(query,
 		sess.ID, sess.NodeID, sess.Username, sess.SourceIP, sess.ClientVersion, sess.TargetID,
 		sess.TargetHost, sess.TargetPort, sess.UpstreamLogin, string(sess.Status),
 		s.unix(sess.StartedAt), s.unix(sess.LastSeenAt), s.unix(sess.ClosedAt),
 		sess.BytesIn, sess.BytesOut, sess.RecordingRef, sess.RevokeRequested,
-		sess.RevokeReason, sess.TerminationInfo); err != nil {
+		sess.RevokeReason, sess.TerminationInfo,
+		int64(sess.Features), sess.CommandPolicyID, string(sess.RecordPolicy), sess.RuleID,
+		int64(sess.MaxSessionTTL/time.Second), int64(sess.IdleTimeout/time.Second)); err != nil {
 		return Session{}, err
 	}
 	return sess, nil
@@ -258,18 +264,26 @@ func (s *Store) DeleteSessionsBefore(cutoff time.Time) (int64, error) {
 func scanSession(row rowScanner) (Session, error) {
 	var (
 		sess                            Session
-		status                          string
+		status, recordPolicy            string
 		startedAt, lastSeenAt, closedAt int64
+		features                        int64
+		maxSession, idleTimeout         int64
 	)
 	if err := row.Scan(&sess.ID, &sess.NodeID, &sess.Username, &sess.SourceIP, &sess.ClientVersion,
 		&sess.TargetID, &sess.TargetHost, &sess.TargetPort, &sess.UpstreamLogin, &status,
 		&startedAt, &lastSeenAt, &closedAt, &sess.BytesIn, &sess.BytesOut, &sess.RecordingRef,
-		&sess.RevokeRequested, &sess.RevokeReason, &sess.TerminationInfo); err != nil {
+		&sess.RevokeRequested, &sess.RevokeReason, &sess.TerminationInfo,
+		&features, &sess.CommandPolicyID, &recordPolicy, &sess.RuleID,
+		&maxSession, &idleTimeout); err != nil {
 		return Session{}, err
 	}
 	sess.Status = SessionStatus(status)
 	sess.StartedAt = fromUnix(startedAt)
 	sess.LastSeenAt = fromUnix(lastSeenAt)
 	sess.ClosedAt = fromUnix(closedAt)
+	sess.Features = FeatureSet(features)
+	sess.RecordPolicy = RecordPolicy(recordPolicy)
+	sess.MaxSessionTTL = time.Duration(maxSession) * time.Second
+	sess.IdleTimeout = time.Duration(idleTimeout) * time.Second
 	return sess, nil
 }

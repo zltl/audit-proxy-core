@@ -384,6 +384,34 @@ type Session struct {
 	RevokeRequested bool
 	RevokeReason    string
 	TerminationInfo string
+
+	// The constraints this session was granted, recorded at authorization time.
+	// Keeping them on the row means a later question about the session is
+	// answered from what it was actually allowed, not from rules that may have
+	// changed since — and any node can answer it, not just the one that decided.
+	Features        FeatureSet
+	CommandPolicyID string
+	RecordPolicy    RecordPolicy
+	RuleID          string
+	MaxSessionTTL   time.Duration
+	IdleTimeout     time.Duration
+}
+
+// ExceededMaxDuration reports whether the session has outlived its absolute
+// time limit.
+func (s Session) ExceededMaxDuration(now time.Time) bool {
+	if s.MaxSessionTTL <= 0 || s.StartedAt.IsZero() {
+		return false
+	}
+	return now.After(s.StartedAt.Add(s.MaxSessionTTL))
+}
+
+// Idle reports whether the session has been silent past its idle timeout.
+func (s Session) Idle(now time.Time) bool {
+	if s.IdleTimeout <= 0 || s.LastSeenAt.IsZero() {
+		return false
+	}
+	return now.After(s.LastSeenAt.Add(s.IdleTimeout))
 }
 
 // Duration returns how long the session ran, or has been running.

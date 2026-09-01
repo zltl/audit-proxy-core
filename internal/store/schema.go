@@ -8,7 +8,7 @@ const component = "dataplane_store"
 
 // SchemaVersion is the latest migration in this package. Bump it with every
 // appended migration.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // migrations is forward-only. Never edit an applied migration: append a new one.
 //
@@ -234,6 +234,23 @@ var migrations = []dbx.Migration{
 			`CREATE INDEX IF NOT EXISTS idx_dp_sessions_user ON dp_sessions(username);`,
 			`CREATE INDEX IF NOT EXISTS idx_dp_sessions_node ON dp_sessions(node_id, status);`,
 			`CREATE INDEX IF NOT EXISTS idx_dp_sessions_revoke ON dp_sessions(revoke_requested, status);`,
+		},
+	},
+	{
+		// Sessions carry the constraints they were granted. Storing the decision
+		// alongside the session means a later question about the same session —
+		// may it open this channel, run this command, has it been open too long —
+		// can be answered from the row, without the deciding node having to keep
+		// state in memory or the policy being re-evaluated against rules that may
+		// since have changed under it.
+		Version: 2,
+		Statements: []string{
+			`ALTER TABLE dp_sessions ADD COLUMN features BIGINT NOT NULL DEFAULT 0;`,
+			`ALTER TABLE dp_sessions ADD COLUMN command_policy_id TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE dp_sessions ADD COLUMN record_policy TEXT NOT NULL DEFAULT 'full';`,
+			`ALTER TABLE dp_sessions ADD COLUMN rule_id TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE dp_sessions ADD COLUMN max_session_seconds BIGINT NOT NULL DEFAULT 0;`,
+			`ALTER TABLE dp_sessions ADD COLUMN idle_timeout_seconds BIGINT NOT NULL DEFAULT 0;`,
 		},
 	},
 }
