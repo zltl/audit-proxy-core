@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
 )
 
 // FailMode decides what happens when the decision point cannot be reached.
@@ -74,6 +75,11 @@ type Config struct {
 	// CacheTTL is how long an authorization decision may be reused. Short by
 	// design: it absorbs bursts without letting a revoked grant linger.
 	CacheTTL time.Duration
+
+	// FallbackConfigPath is an optional config.ini read when the decision point
+	// is unreachable and fail_mode is open. Emergency-only; the database remains
+	// the source of truth when the control plane is healthy.
+	FallbackConfigPath string
 }
 
 func (c Config) withDefaults() Config {
@@ -131,6 +137,8 @@ type Client struct {
 	healthyMu sync.RWMutex
 	healthy   bool
 	lastError error
+
+	iniFallback *iniFallback
 }
 
 // Dial connects to the decision point.
@@ -147,7 +155,7 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 
 	target := cfg.Address
 	var dialOpts []grpc.DialOption
-	dialOpts = append(dialOpts, grpc.WithTransportCredentials(transport))
+	dialOpts = append(dialOpts, grpc.WithTransportCredentials(transport), telemetry.GRPCDialOption())
 	if path, ok := strings.CutPrefix(cfg.Address, "unix:"); ok {
 		target = "unix:" + path
 		dialOpts = append(dialOpts, grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
@@ -164,11 +172,12 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	}
 
 	return &Client{
-		config:  cfg,
-		conn:    conn,
-		api:     sshproxyv1.NewAccessDecisionServiceClient(conn),
-		cache:   newDecisionCache(cfg.CacheTTL),
-		healthy: true,
+		config:      cfg,
+		conn:        conn,
+		api:         sshproxyv1.NewAccessDecisionServiceClient(conn),
+		cache:       newDecisionCache(cfg.CacheTTL),
+		healthy:     true,
+		iniFallback: newINIFallback(cfg.FallbackConfigPath),
 	}, nil
 }
 
@@ -177,11 +186,12 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 func NewWithConn(conn *grpc.ClientConn, cfg Config) *Client {
 	cfg = cfg.withDefaults()
 	return &Client{
-		config:  cfg,
-		conn:    conn,
-		api:     sshproxyv1.NewAccessDecisionServiceClient(conn),
-		cache:   newDecisionCache(cfg.CacheTTL),
-		healthy: true,
+		config:      cfg,
+		conn:        conn,
+		api:         sshproxyv1.NewAccessDecisionServiceClient(conn),
+		cache:       newDecisionCache(cfg.CacheTTL),
+		healthy:     true,
+		iniFallback: newINIFallback(cfg.FallbackConfigPath),
 	}
 }
 

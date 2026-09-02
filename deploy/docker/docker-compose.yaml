@@ -1,11 +1,18 @@
 version: "3.8"
 
+# DEPRECATED: this file previously built the C data plane from the root Dockerfile.
+# Prefer the Go stack:
+#   docker compose -f deploy/docker/docker-compose.test.yaml up --build
+# Legacy C image (optional):
+#   docker build -f legacy/c-dataplane/Dockerfile -t ssh-proxy-core:legacy .
+
 services:
   data-plane:
     build:
       context: ../../
-      dockerfile: Dockerfile
+      dockerfile: legacy/c-dataplane/Dockerfile
     container_name: ssh-proxy-data-plane
+    profiles: ["legacy-c"]
     ports:
       - "2222:2222"
       - "9090:9090"
@@ -28,6 +35,7 @@ services:
       context: ../../
       dockerfile: deploy/docker/Dockerfile.control-plane
     container_name: ssh-proxy-control-plane
+    profiles: ["legacy-c"]
     ports:
       - "8443:8443"
     environment:

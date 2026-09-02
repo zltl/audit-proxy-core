@@ -273,9 +273,10 @@
             var actions = '<button class="btn btn-ghost btn-sm" onclick="viewSession(\'' + App.escapeHtml(s.id) + '\')" title="Details">👁</button>';
             if (s.status === 'active') {
                 actions += ' <button class="btn btn-ghost btn-sm" onclick="killSession(\'' + App.escapeHtml(s.id) + '\')" title="Kill" style="color:var(--color-danger);">⏹</button>';
+                actions += ' <button class="btn btn-ghost btn-sm" onclick="takeoverSession(\'' + App.escapeHtml(s.id) + '\')" title="Take over">🎛</button>';
             }
             if (s.status === 'active' && s.recording_file) {
-                actions += ' <button class="btn btn-ghost btn-sm" onclick="viewSession(\'' + App.escapeHtml(s.id) + '\')" title="Live View">📺</button>';
+                actions += ' <button class="btn btn-ghost btn-sm" onclick="viewSession(\'' + App.escapeHtml(s.id) + '\')" title="Live Follow">📺</button>';
             }
             if (s.recording_file) {
                 actions += ' <button class="btn btn-ghost btn-sm" onclick="viewSession(\'' + App.escapeHtml(s.id) + '\')" title="Recording playback">🎞</button>';
@@ -467,6 +468,22 @@
         try {
             await App.api('DELETE', '/api/v2/sessions/' + encodeURIComponent(id));
             App.notify('Session killed', 'success');
+            loadSessions();
+        } catch(e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    window.takeoverSession = async function(id) {
+        var ok = await App.confirm('Take over session ' + id.substring(0, 8) + '…? This disconnects the current user so you can reconnect.');
+        if (!ok) return;
+        try {
+            var result = await App.apiData('POST', '/api/v2/sessions/' + encodeURIComponent(id) + '/takeover');
+            App.notify('Session taken over', 'success');
+            if (result && result.terminal_url) {
+                window.location.href = result.terminal_url;
+                return;
+            }
             loadSessions();
         } catch(e) {
             App.notify('Failed: ' + e.message, 'error');

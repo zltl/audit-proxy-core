@@ -10,6 +10,7 @@ import (
 
 	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
 )
 
 // OpenSession records a session and applies the limits that can only be checked
@@ -18,7 +19,7 @@ import (
 // Concurrency is one of those: policy can say "at most three at once", but only
 // a count of what is currently open can enforce it, and that count has to be
 // taken in the shared database or every node would enforce its own limit.
-func (s *Server) OpenSession(_ context.Context, req *sshproxyv1.OpenSessionRequest) (*sshproxyv1.OpenSessionResponse, error) {
+func (s *Server) OpenSession(ctx context.Context, req *sshproxyv1.OpenSessionRequest) (*sshproxyv1.OpenSessionResponse, error) {
 	rule, err := s.loadRule(req.GetRuleId())
 	if err != nil {
 		return nil, status(err, "load access rule")
@@ -58,6 +59,7 @@ func (s *Server) OpenSession(_ context.Context, req *sshproxyv1.OpenSessionReque
 	if err != nil {
 		return nil, status(err, "create session")
 	}
+	telemetry.SetSessionID(ctx, session.ID)
 	return &sshproxyv1.OpenSessionResponse{SessionId: session.ID, Allowed: true}, nil
 }
 
@@ -82,7 +84,9 @@ func (s *Server) loadRule(ruleID string) (store.AccessRule, error) {
 }
 
 // HeartbeatSession refreshes a live session and reports whether it must end.
-func (s *Server) HeartbeatSession(_ context.Context, req *sshproxyv1.HeartbeatSessionRequest) (*sshproxyv1.HeartbeatSessionResponse, error) {
+func (s *Server) HeartbeatSession(ctx context.Context, req *sshproxyv1.HeartbeatSessionRequest) (*sshproxyv1.HeartbeatSessionResponse, error) {
+	telemetry.SetSessionID(ctx, req.GetSessionId())
+
 	revoked, reason, err := s.store.TouchSession(req.GetSessionId(), req.GetBytesIn(), req.GetBytesOut())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -116,7 +120,9 @@ func (s *Server) HeartbeatSession(_ context.Context, req *sshproxyv1.HeartbeatSe
 }
 
 // CloseSession records the end of a session.
-func (s *Server) CloseSession(_ context.Context, req *sshproxyv1.CloseSessionRequest) (*sshproxyv1.CloseSessionResponse, error) {
+func (s *Server) CloseSession(ctx context.Context, req *sshproxyv1.CloseSessionRequest) (*sshproxyv1.CloseSessionResponse, error) {
+	telemetry.SetSessionID(ctx, req.GetSessionId())
+
 	sessionStatus := store.SessionClosed
 	if strings.EqualFold(req.GetStatus(), string(store.SessionTerminated)) {
 		sessionStatus = store.SessionTerminated

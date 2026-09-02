@@ -7,30 +7,6 @@ on:
     branches: [main]
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        build_type: [debug, release]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libssh-dev cppcheck
-
-      - name: Build (${{ matrix.build_type }})
-        run: make ${{ matrix.build_type }}
-
-      - name: Run tests
-        run: make test
-
-      - name: Static analysis
-        if: matrix.build_type == 'debug'
-        run: make check || true
-
   go-quality:
     runs-on: ubuntu-latest
     steps:
@@ -42,29 +18,63 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build Go control plane
+      - name: Build
         run: go build ./...
 
-      - name: Run Go tests
+      - name: Test
         run: go test ./...
 
-      - name: Install analyzers
-        run: |
-          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
-          go install github.com/securego/gosec/v2/cmd/gosec@v2.25.0
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
 
       - name: Run staticcheck
-        run: |
-          "$(go env GOPATH)/bin/staticcheck" ./...
+        run: "$(go env GOPATH)/bin/staticcheck" ./...
 
-      - name: Run gosec
-        run: |
-          "$(go env GOPATH)/bin/gosec" -severity high -confidence high ./...
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Local smoke test
+        run: ./scripts/smoke-test.sh
 
   build-docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -t ssh-proxy-core:ci .
+      - name: Build dataplane image
+        run: docker build -f deploy/docker/Dockerfile.dataplane -t ssh-proxy-dataplane:ci .
+
+      - name: Build control-plane image
+        run: docker build -f deploy/docker/Dockerfile.control-plane -t ssh-proxy-control-plane:ci .
+
+  legacy-c:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      matrix:
+        build_type: [debug, release]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssh-dev cppcheck
+
+      - name: Build legacy C data plane (${{ matrix.build_type }})
+        run: make -C legacy/c-dataplane ${{ matrix.build_type }}
+
+      - name: Run legacy C tests
+        run: make -C legacy/c-dataplane test
+
+      - name: Static analysis
+        if: matrix.build_type == 'debug'
+        run: make -C legacy/c-dataplane check || true

@@ -32,7 +32,10 @@ func (a *API) discoverSessionRecordingPath(id string) string {
 		return ""
 	}
 
-	prefix := "session_" + id + "_"
+	// Accept both legacy C names (session_<id>_*.cast) and Go dataplane /
+	// web-terminal names (<id>-<timestamp>.cast[.gz][.enc]).
+	legacyPrefix := "session_" + id + "_"
+	modernPrefix := id + "-"
 	var newestPath string
 	var newestMod time.Time
 	for _, entry := range entries {
@@ -40,7 +43,10 @@ func (a *API) discoverSessionRecordingPath(id string) string {
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".cast") {
+		if !strings.Contains(name, ".cast") {
+			continue
+		}
+		if !strings.HasPrefix(name, legacyPrefix) && !strings.HasPrefix(name, modernPrefix) {
 			continue
 		}
 		info, err := entry.Info()
@@ -113,6 +119,12 @@ func (a *API) syncRecordingArchive(ctx context.Context) error {
 		}
 		if err := a.recordingStore.uploadSessionRecording(ctx, session.ID, recordingPath); err != nil {
 			log.Printf("api: archive session recording %s: %v", session.ID, err)
+			continue
+		}
+		if a.config.RecordingDeleteLocalAfterUpload {
+			if err := os.Remove(recordingPath); err != nil && !os.IsNotExist(err) {
+				log.Printf("api: purge local recording %s: %v", recordingPath, err)
+			}
 		}
 	}
 

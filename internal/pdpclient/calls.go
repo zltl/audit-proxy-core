@@ -50,7 +50,7 @@ func (c *Client) AuthorizeSession(ctx context.Context, req *sshproxyv1.Authorize
 			return nil, err
 		}
 		c.markUnhealthy(err)
-		return c.sessionFallback(err)
+		return c.sessionFallback(err, req)
 	}
 	c.markHealthy()
 	// Only positive decisions are cached. Caching a refusal would keep somebody
@@ -63,7 +63,12 @@ func (c *Client) AuthorizeSession(ctx context.Context, req *sshproxyv1.Authorize
 }
 
 // sessionFallback applies the fail mode when the decision point is unreachable.
-func (c *Client) sessionFallback(cause error) (*sshproxyv1.AuthorizeSessionResponse, error) {
+func (c *Client) sessionFallback(cause error, req *sshproxyv1.AuthorizeSessionRequest) (*sshproxyv1.AuthorizeSessionResponse, error) {
+	if c.iniFallback != nil {
+		if resp, ok := c.iniFallback.evaluate(req); ok {
+			return resp, nil
+		}
+	}
 	if c.config.FailMode == FailOpen {
 		log.Printf("pdpclient: decision point unreachable (%v); admitting the session because fail_mode is open", cause)
 		return &sshproxyv1.AuthorizeSessionResponse{

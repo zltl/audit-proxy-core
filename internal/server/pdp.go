@@ -19,6 +19,7 @@ import (
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/secrets"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
 )
 
 // startAccessDecisionPoint brings up the service the data plane asks before it
@@ -28,6 +29,9 @@ import (
 // because anything that can call it can obtain credentials for upstream hosts:
 // that surface should not be reachable from wherever the web console is.
 func (s *Server) startAccessDecisionPoint() error {
+	if s.pdpServer != nil || s.decisionPoint != nil {
+		return nil
+	}
 	address := strings.TrimSpace(s.config.PDPListenAddr)
 	if address == "" {
 		return nil
@@ -56,6 +60,13 @@ func (s *Server) startAccessDecisionPoint() error {
 	s.pdpEventSink = sink
 	decisionPoint.SetEventSink(sink)
 
+	if s.jitStore != nil {
+		decisionPoint.SetGrantChecker(pdp.JITGrantChecker{Store: s.jitStore})
+	}
+	if s.approvalMgr != nil {
+		decisionPoint.SetCommandApprover(pdp.CmdCtrlApprover{Manager: s.approvalMgr})
+	}
+
 	if s.apiHandler != nil {
 		if ca := s.apiHandler.CertificateAuthority(); ca != nil {
 			decisionPoint.SetCertificateSigner(upstreamCertificateSigner{ca: ca})
@@ -71,7 +82,7 @@ func (s *Server) startAccessDecisionPoint() error {
 		return err
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(telemetry.GRPCServerOption())
 	sshproxyv1.RegisterAccessDecisionServiceServer(grpcServer, decisionPoint)
 
 	s.pdpServer = grpcServer
@@ -128,7 +139,7 @@ func (s *Server) openDataPlaneStore() (*store.Store, error) {
 	}
 
 	if spec := strings.TrimSpace(s.config.SecretsEncryptionKey); spec != "" {
-		provider, err := secrets.LoadStaticProvider(spec)
+		provider, err := secrets.LoadProvider(spec)
 		if err != nil {
 			_ = st.Close()
 			return nil, fmt.Errorf("server: load secrets key: %w", err)

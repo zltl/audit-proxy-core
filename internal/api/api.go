@@ -25,6 +25,7 @@ type Config struct {
 	SessionSecret                      string
 	AuditLogDir                        string
 	RecordingDir                       string
+	RecordingEncryptionKey             string
 	RecordingObjectStorageEnabled      bool
 	RecordingObjectStorageEndpoint     string
 	RecordingObjectStorageBucket       string
@@ -75,6 +76,9 @@ type Config struct {
 	ExperimentalFeatures               string
 	AuditRetentionDays                 int
 	AuditChainKey                      string
+	AuditAnchorEnabled                 bool
+	AuditAnchorRetentionDays           int
+	RecordingDeleteLocalAfterUpload    bool
 	SSHAllowInsecureHostKeys           bool
 }
 
@@ -367,6 +371,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v2/sessions", a.handleListSessions)
 	mux.HandleFunc("GET /api/v2/sessions/{id}", a.handleGetSession)
 	mux.HandleFunc("DELETE /api/v2/sessions/{id}", a.handleKillSession)
+	mux.HandleFunc("POST /api/v2/sessions/{id}/takeover", a.handleTakeoverSession)
 	mux.HandleFunc("POST /api/v2/sessions/bulk-kill", a.handleBulkKillSessions)
 	mux.HandleFunc("GET /api/v2/sessions/{id}/recording", a.handleGetRecording)
 	mux.HandleFunc("GET /api/v2/sessions/{id}/recording/download", a.handleDownloadRecording)

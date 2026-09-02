@@ -1,0 +1,1180 @@
+{{template "base" .}}
+
+{{define "title"}}Data Plane{{end}}
+
+{{define "page-title"}}Data Plane{{end}}
+
+{{define "content"}}
+<div id="dp-unavailable-banner" class="alert alert-warning hidden">
+    <span class="alert-icon">⚠</span>
+    <div class="alert-content">
+        <div class="alert-title">Data plane unavailable</div>
+        <div id="dp-unavailable-message">The data-plane store is not configured.</div>
+    </div>
+</div>
+
+<div class="tabs">
+    <button class="tab-item active" data-tab="tab-identities">Identities</button>
+    <button class="tab-item" data-tab="tab-targets">Targets</button>
+    <button class="tab-item" data-tab="tab-credentials">Credentials</button>
+    <button class="tab-item" data-tab="tab-policy">Policy</button>
+    <button class="tab-item" data-tab="tab-sessions">Sessions</button>
+    <button class="tab-item" data-tab="tab-hostkeys">Host Keys</button>
+</div>
+
+<!-- Identities -->
+<div class="tab-content active" id="tab-identities">
+    <div class="toolbar">
+        <div class="toolbar-left">
+            <div class="search-input">
+                <input type="text" id="dp-user-search" placeholder="Search identities…" oninput="filterDpUsers()">
+            </div>
+        </div>
+        <div class="toolbar-right">
+            <button class="btn btn-secondary btn-sm" onclick="loadDpUsers()">↻ Refresh</button>
+            <button class="btn btn-primary btn-sm" onclick="showDpUserModal()">+ Add Identity</button>
+        </div>
+    </div>
+    <div class="card">
+        <div class="table-wrapper">
+            <table id="dp-users-table">
+                <thead>
+                    <tr>
+                        <th class="sortable">Username</th>
+                        <th>Display Name</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Roles</th>
+                        <th>Last Login</th>
+                        <th class="col-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="dp-users-body">
+                    <tr><td colspan="7" class="table-empty"><div class="skeleton skeleton-row"></div></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Targets -->
+<div class="tab-content" id="tab-targets">
+    <div class="toolbar">
+        <div class="toolbar-left">
+            <div class="search-input">
+                <input type="text" id="dp-target-search" placeholder="Search targets…" oninput="filterDpTargets()">
+            </div>
+        </div>
+        <div class="toolbar-right">
+            <button class="btn btn-secondary btn-sm" onclick="loadDpTargets()">↻ Refresh</button>
+            <button class="btn btn-primary btn-sm" onclick="showDpTargetModal()">+ Add Target</button>
+        </div>
+    </div>
+    <div class="card">
+        <div class="table-wrapper">
+            <table id="dp-targets-table">
+                <thead>
+                    <tr>
+                        <th class="sortable">Name</th>
+                        <th>Host</th>
+                        <th>Port</th>
+                        <th>Group</th>
+                        <th>Enabled</th>
+                        <th>Maintenance</th>
+                        <th class="col-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="dp-targets-body">
+                    <tr><td colspan="7" class="table-empty"><div class="skeleton skeleton-row"></div></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Credentials -->
+<div class="tab-content" id="tab-credentials">
+    <div class="toolbar">
+        <div class="toolbar-right" style="margin-left:auto;">
+            <button class="btn btn-secondary btn-sm" onclick="loadDpCredentials()">↻ Refresh</button>
+            <button class="btn btn-primary btn-sm" onclick="showDpCredentialModal()">+ Add Credential</button>
+        </div>
+    </div>
+    <div class="card">
+        <div class="table-wrapper">
+            <table id="dp-credentials-table">
+                <thead>
+                    <tr>
+                        <th>Login</th>
+                        <th>Kind</th>
+                        <th>Target</th>
+                        <th>Has Secret</th>
+                        <th>Created</th>
+                        <th class="col-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="dp-credentials-body">
+                    <tr><td colspan="6" class="table-empty"><div class="skeleton skeleton-row"></div></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Policy -->
+<div class="tab-content" id="tab-policy">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Access Rules</h3>
+            <button class="btn btn-primary btn-sm" onclick="showDpRuleModal()">+ Add Rule</button>
+        </div>
+        <div class="table-wrapper">
+            <table id="dp-rules-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Priority</th>
+                        <th>Subject</th>
+                        <th>Target</th>
+                        <th>Features</th>
+                        <th>Enabled</th>
+                        <th class="col-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="dp-rules-body">
+                    <tr><td colspan="8" class="table-empty">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card mt-lg">
+        <div class="card-header">
+            <h3 class="card-title">IP Rules</h3>
+            <button class="btn btn-primary btn-sm" onclick="showDpIPRuleModal()">+ Add IP Rule</button>
+        </div>
+        <div class="table-wrapper">
+            <table id="dp-ip-rules-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>CIDR</th>
+                        <th>Action</th>
+                        <th>Priority</th>
+                        <th>Comment</th>
+                        <th class="col-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="dp-ip-rules-body">
+                    <tr><td colspan="6" class="table-empty">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card mt-lg">
+        <div class="card-header"><h3 class="card-title">Known Features</h3></div>
+        <div class="card-body">
+            <code id="dp-features-list">Loading…</code>
+        </div>
+    </div>
+</div>
+
+<!-- Sessions -->
+<div class="tab-content" id="tab-sessions">
+    <div class="toolbar">
+        <div class="toolbar-left">
+            <select class="form-control" id="dp-session-status" style="width:140px;" onchange="loadDpSessions()">
+                <option value="">All Status</option>
+                <option value="active">Active</option>
+                <option value="pending">Pending</option>
+                <option value="closed">Closed</option>
+                <option value="terminated">Terminated</option>
+            </select>
+        </div>
+        <div class="toolbar-right">
+            <button class="btn btn-secondary btn-sm" onclick="loadDpSessions()">↻ Refresh</button>
+        </div>
+    </div>
+    <div class="card">
+        <div class="table-wrapper">
+            <table id="dp-sessions-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>User</th>
+                        <th>Source IP</th>
+                        <th>Target</th>
+                        <th>Upstream Login</th>
+                        <th>Status</th>
+                        <th>Started</th>
+                        <th class="col-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="dp-sessions-body">
+                    <tr><td colspan="8" class="table-empty"><div class="skeleton skeleton-row"></div></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Host Keys -->
+<div class="tab-content" id="tab-hostkeys">
+    <div class="toolbar">
+        <div class="toolbar-right" style="margin-left:auto;">
+            <button class="btn btn-secondary btn-sm" onclick="loadDpHostKeys()">↻ Refresh</button>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-header"><h3 class="card-title">Pending Host Keys</h3></div>
+        <div class="table-wrapper">
+            <table id="dp-hostkeys-table">
+                <thead>
+                    <tr>
+                        <th>Target</th>
+                        <th>Algorithm</th>
+                        <th>Fingerprint</th>
+                        <th>Source</th>
+                        <th>First Seen</th>
+                        <th class="col-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="dp-hostkeys-body">
+                    <tr><td colspan="6" class="table-empty"><div class="skeleton skeleton-row"></div></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Identity Modal -->
+<div class="modal-overlay" id="dp-user-modal-overlay">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title" id="dp-user-modal-title">Add Identity</h3>
+            <button class="modal-close" onclick="closeDpUserModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <form id="dp-user-form">
+                <input type="hidden" id="dp-user-edit-name">
+                <div class="form-group">
+                    <label class="form-label">Username <span class="required">*</span></label>
+                    <input type="text" class="form-control" id="dp-user-username" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Display Name</label>
+                        <input type="text" class="form-control" id="dp-user-display-name">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Email</label>
+                        <input type="email" class="form-control" id="dp-user-email">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Password</label>
+                        <input type="password" class="form-control" id="dp-user-password" placeholder="Required for new users">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Status</label>
+                        <select class="form-control" id="dp-user-status">
+                            <option value="active">Active</option>
+                            <option value="disabled">Disabled</option>
+                            <option value="locked">Locked</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Roles (comma-separated)</label>
+                    <input type="text" class="form-control" id="dp-user-roles" placeholder="operator, auditor">
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-danger hidden" id="dp-user-delete-btn" onclick="deleteDpUserFromModal()">Delete</button>
+            <button class="btn btn-secondary" onclick="closeDpUserModal()">Cancel</button>
+            <button class="btn btn-primary" id="dp-user-save-btn" onclick="saveDpUser()">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Target Modal -->
+<div class="modal-overlay" id="dp-target-modal-overlay">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title" id="dp-target-modal-title">Add Target</h3>
+            <button class="modal-close" onclick="closeDpTargetModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <form id="dp-target-form">
+                <input type="hidden" id="dp-target-edit-name">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Name <span class="required">*</span></label>
+                        <input type="text" class="form-control" id="dp-target-name" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Group</label>
+                        <input type="text" class="form-control" id="dp-target-group">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Host <span class="required">*</span></label>
+                        <input type="text" class="form-control" id="dp-target-host" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Port</label>
+                        <input type="number" class="form-control" id="dp-target-port" value="22" min="1" max="65535">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-check">
+                            <input type="checkbox" id="dp-target-enabled" checked>
+                            <span>Enabled</span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-check">
+                            <input type="checkbox" id="dp-target-maintenance">
+                            <span>Maintenance</span>
+                        </label>
+                    </div>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-danger hidden" id="dp-target-delete-btn" onclick="deleteDpTargetFromModal()">Delete</button>
+            <button class="btn btn-secondary" onclick="closeDpTargetModal()">Cancel</button>
+            <button class="btn btn-primary" id="dp-target-save-btn" onclick="saveDpTarget()">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Credential Modal -->
+<div class="modal-overlay" id="dp-credential-modal-overlay">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">Add Credential</h3>
+            <button class="modal-close" onclick="closeDpCredentialModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <form id="dp-credential-form">
+                <div class="form-group">
+                    <label class="form-label">Target Name</label>
+                    <input type="text" class="form-control" id="dp-credential-target" placeholder="web-1">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Login <span class="required">*</span></label>
+                        <input type="text" class="form-control" id="dp-credential-login" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Kind</label>
+                        <select class="form-control" id="dp-credential-kind">
+                            <option value="password">Password</option>
+                            <option value="private_key">Private Key</option>
+                            <option value="ca_cert">CA Cert</option>
+                            <option value="agent">Agent</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Secret</label>
+                    <textarea class="form-control" id="dp-credential-secret" rows="4" placeholder="Write-only; never returned by the API"></textarea>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeDpCredentialModal()">Cancel</button>
+            <button class="btn btn-primary" id="dp-credential-save-btn" onclick="saveDpCredential()">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Rule Modal -->
+<div class="modal-overlay" id="dp-rule-modal-overlay">
+    <div class="modal modal-lg">
+        <div class="modal-header">
+            <h3 class="modal-title">Add Access Rule</h3>
+            <button class="modal-close" onclick="closeDpRuleModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <form id="dp-rule-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">ID <span class="required">*</span></label>
+                        <input type="text" class="form-control" id="dp-rule-id" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Name</label>
+                        <input type="text" class="form-control" id="dp-rule-name">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Priority</label>
+                        <input type="number" class="form-control" id="dp-rule-priority" value="10">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Subject Kind</label>
+                        <select class="form-control" id="dp-rule-subject-kind">
+                            <option value="user">User</option>
+                            <option value="role">Role</option>
+                            <option value="group">Group</option>
+                            <option value="any">Any</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Subject</label>
+                        <input type="text" class="form-control" id="dp-rule-subject" placeholder="alice">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Target Selector</label>
+                        <input type="text" class="form-control" id="dp-rule-target" placeholder="web-1">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Upstream Logins</label>
+                        <input type="text" class="form-control" id="dp-rule-logins" placeholder="deploy, root">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Features</label>
+                        <input type="text" class="form-control" id="dp-rule-features" placeholder="shell, exec, pty">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Record Policy</label>
+                        <select class="form-control" id="dp-rule-record">
+                            <option value="full">Full</option>
+                            <option value="commands">Commands</option>
+                            <option value="none">None</option>
+                        </select>
+                    </div>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeDpRuleModal()">Cancel</button>
+            <button class="btn btn-primary" id="dp-rule-save-btn" onclick="saveDpRule()">Save Rule</button>
+        </div>
+    </div>
+</div>
+
+<!-- IP Rule Modal -->
+<div class="modal-overlay" id="dp-ip-rule-modal-overlay">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">Add IP Rule</h3>
+            <button class="modal-close" onclick="closeDpIPRuleModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <form id="dp-ip-rule-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">ID <span class="required">*</span></label>
+                        <input type="text" class="form-control" id="dp-ip-rule-id" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">CIDR <span class="required">*</span></label>
+                        <input type="text" class="form-control" id="dp-ip-rule-cidr" required placeholder="10.0.0.0/8">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Action</label>
+                        <select class="form-control" id="dp-ip-rule-action">
+                            <option value="allow">Allow</option>
+                            <option value="deny">Deny</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Priority</label>
+                        <input type="number" class="form-control" id="dp-ip-rule-priority" value="100">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Comment</label>
+                    <input type="text" class="form-control" id="dp-ip-rule-comment">
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeDpIPRuleModal()">Cancel</button>
+            <button class="btn btn-primary" id="dp-ip-rule-save-btn" onclick="saveDpIPRule()">Save</button>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+(function() {
+    var dpUsers = [];
+    var dpTargets = [];
+    var dpTargetById = {};
+    var dpPendingKeys = [];
+
+    function f(obj, key) {
+        if (!obj) return undefined;
+        if (obj[key] !== undefined && obj[key] !== null) return obj[key];
+        var cap = key.charAt(0).toUpperCase() + key.slice(1);
+        return obj[cap];
+    }
+
+    function splitList(value) {
+        if (!value) return [];
+        return value.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    }
+
+    function joinList(value) {
+        if (!value) return '—';
+        if (Array.isArray(value)) return value.join(', ') || '—';
+        return String(value);
+    }
+
+    function showDpUnavailable(message) {
+        document.getElementById('dp-unavailable-banner').classList.remove('hidden');
+        document.getElementById('dp-unavailable-message').textContent =
+            message || 'The data-plane store is not configured; set pdp_listen_addr to enable it.';
+    }
+
+    function wrapDp(promise) {
+        return promise.catch(function(e) {
+            if (e && e.status === 503) {
+                showDpUnavailable(e.message);
+            }
+            throw e;
+        });
+    }
+
+    function dpApiPage(method, url, body) {
+        return wrapDp(App.apiPage(method, url, body));
+    }
+
+    function dpApi(method, url, body) {
+        return wrapDp(App.api(method, url, body));
+    }
+
+    function dpApiData(method, url, body) {
+        return wrapDp(App.apiData(method, url, body));
+    }
+
+    function failRow(tbodyId, cols, message) {
+        document.getElementById(tbodyId).innerHTML =
+            '<tr><td colspan="' + cols + '" class="table-empty">' + App.escapeHtml(message) + '</td></tr>';
+    }
+
+    function activeTabId() {
+        var active = document.querySelector('.tab-content.active');
+        return active ? active.id : 'tab-identities';
+    }
+
+    function loadActiveTab() {
+        switch (activeTabId()) {
+            case 'tab-identities': loadDpUsers(); break;
+            case 'tab-targets': loadDpTargets(); break;
+            case 'tab-credentials': loadDpCredentials(); break;
+            case 'tab-policy': loadDpPolicy(); break;
+            case 'tab-sessions': loadDpSessions(); break;
+            case 'tab-hostkeys': loadDpHostKeys(); break;
+        }
+    }
+
+    document.querySelector('.tabs').addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-tab]');
+        if (!btn) return;
+        setTimeout(loadActiveTab, 0);
+    });
+
+    // ── Identities ──────────────────────────────────────────
+    window.loadDpUsers = function() {
+        dpApiPage('GET', '/api/v2/dp/users?per_page=200').then(function(page) {
+            dpUsers = page.items || [];
+            renderDpUsers(dpUsers);
+            App.table('#dp-users-table');
+        }).catch(function(e) {
+            failRow('dp-users-body', 7, 'Failed to load: ' + e.message);
+        });
+    };
+
+    function renderDpUsers(users) {
+        var tbody = document.getElementById('dp-users-body');
+        if (!users.length) {
+            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No identities found</td></tr>';
+            return;
+        }
+        tbody.innerHTML = users.map(function(u) {
+            var username = f(u, 'username') || '—';
+            var status = f(u, 'status') || 'active';
+            var statusCls = status === 'active' ? 'badge-success' : 'badge-neutral';
+            return '<tr>' +
+                '<td><strong>' + App.escapeHtml(username) + '</strong></td>' +
+                '<td>' + App.escapeHtml(f(u, 'display_name') || '—') + '</td>' +
+                '<td>' + App.escapeHtml(f(u, 'email') || '—') + '</td>' +
+                '<td><span class="badge ' + statusCls + '">' + App.escapeHtml(status) + '</span></td>' +
+                '<td>' + App.escapeHtml(joinList(f(u, 'roles'))) + '</td>' +
+                '<td>' + App.formatTime(f(u, 'last_login_at')) + '</td>' +
+                '<td class="col-actions">' +
+                    '<button class="btn btn-ghost btn-sm" onclick="editDpUser(\'' + App.escapeHtml(username) + '\')" title="Edit">✏️</button> ' +
+                    '<button class="btn btn-ghost btn-sm text-danger" onclick="deleteDpUser(\'' + App.escapeHtml(username) + '\')" title="Delete">🗑️</button>' +
+                '</td></tr>';
+        }).join('');
+    }
+
+    window.filterDpUsers = function() {
+        var q = document.getElementById('dp-user-search').value.toLowerCase();
+        renderDpUsers(dpUsers.filter(function(u) {
+            return (f(u, 'username') || '').toLowerCase().includes(q) ||
+                   (f(u, 'display_name') || '').toLowerCase().includes(q) ||
+                   (f(u, 'email') || '').toLowerCase().includes(q);
+        }));
+    };
+
+    window.showDpUserModal = function(user) {
+        document.getElementById('dp-user-modal-title').textContent = user ? 'Edit Identity' : 'Add Identity';
+        document.getElementById('dp-user-edit-name').value = user ? f(user, 'username') : '';
+        document.getElementById('dp-user-username').value = user ? f(user, 'username') : '';
+        document.getElementById('dp-user-username').disabled = !!user;
+        document.getElementById('dp-user-display-name').value = user ? (f(user, 'display_name') || '') : '';
+        document.getElementById('dp-user-email').value = user ? (f(user, 'email') || '') : '';
+        document.getElementById('dp-user-password').value = '';
+        document.getElementById('dp-user-status').value = user ? (f(user, 'status') || 'active') : 'active';
+        document.getElementById('dp-user-roles').value = user ? (joinList(f(user, 'roles')) === '—' ? '' : joinList(f(user, 'roles'))) : '';
+        document.getElementById('dp-user-delete-btn').classList.toggle('hidden', !user);
+        document.getElementById('dp-user-modal-overlay').classList.add('show');
+    };
+
+    window.closeDpUserModal = function() {
+        document.getElementById('dp-user-modal-overlay').classList.remove('show');
+    };
+
+    window.editDpUser = function(username) {
+        var user = dpUsers.find(function(u) { return f(u, 'username') === username; });
+        if (user) showDpUserModal(user);
+    };
+
+    window.saveDpUser = async function() {
+        var form = document.getElementById('dp-user-form');
+        if (!form.checkValidity()) { form.reportValidity(); return; }
+
+        var editName = document.getElementById('dp-user-edit-name').value;
+        var username = document.getElementById('dp-user-username').value.trim();
+        var password = document.getElementById('dp-user-password').value;
+        App.btnLoading('#dp-user-save-btn', true);
+        try {
+            if (editName) {
+                var patch = {
+                    display_name: document.getElementById('dp-user-display-name').value,
+                    email: document.getElementById('dp-user-email').value,
+                    status: document.getElementById('dp-user-status').value,
+                };
+                if (password) patch.password = password;
+                await dpApi('PATCH', '/api/v2/dp/users/' + encodeURIComponent(editName), patch);
+            } else {
+                var payload = {
+                    username: username,
+                    display_name: document.getElementById('dp-user-display-name').value,
+                    email: document.getElementById('dp-user-email').value,
+                    password: password,
+                    roles: splitList(document.getElementById('dp-user-roles').value),
+                };
+                if (!payload.password) {
+                    App.notify('Password is required for new identities', 'warning');
+                    return;
+                }
+                await dpApi('POST', '/api/v2/dp/users', payload);
+            }
+            App.notify('Identity saved', 'success');
+            closeDpUserModal();
+            loadDpUsers();
+        } catch (e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+        App.btnLoading('#dp-user-save-btn', false);
+    };
+
+    window.deleteDpUser = async function(username) {
+        if (!username) return;
+        var ok = await App.confirm('Delete identity "' + username + '"?');
+        if (!ok) return;
+        try {
+            await dpApi('DELETE', '/api/v2/dp/users/' + encodeURIComponent(username));
+            App.notify('Identity deleted', 'success');
+            closeDpUserModal();
+            loadDpUsers();
+        } catch (e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    window.deleteDpUserFromModal = function() {
+        return deleteDpUser(document.getElementById('dp-user-edit-name').value);
+    };
+
+    // ── Targets ─────────────────────────────────────────────
+    window.loadDpTargets = function() {
+        return dpApiPage('GET', '/api/v2/dp/targets?per_page=200').then(function(page) {
+            dpTargets = page.items || [];
+            dpTargetById = {};
+            dpTargets.forEach(function(t) {
+                dpTargetById[f(t, 'id')] = t;
+            });
+            renderDpTargets(dpTargets);
+            App.table('#dp-targets-table');
+        }).catch(function(e) {
+            failRow('dp-targets-body', 7, 'Failed to load: ' + e.message);
+        });
+    };
+
+    function renderDpTargets(targets) {
+        var tbody = document.getElementById('dp-targets-body');
+        if (!targets.length) {
+            tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No targets found</td></tr>';
+            return;
+        }
+        tbody.innerHTML = targets.map(function(t) {
+            var name = f(t, 'name') || '—';
+            return '<tr>' +
+                '<td><strong>' + App.escapeHtml(name) + '</strong></td>' +
+                '<td>' + App.escapeHtml(f(t, 'host') || '—') + '</td>' +
+                '<td>' + (f(t, 'port') || 22) + '</td>' +
+                '<td>' + App.escapeHtml(f(t, 'group') || '—') + '</td>' +
+                '<td>' + (f(t, 'enabled') !== false ? 'Yes' : 'No') + '</td>' +
+                '<td>' + (f(t, 'maintenance') ? 'Yes' : 'No') + '</td>' +
+                '<td class="col-actions">' +
+                    '<button class="btn btn-ghost btn-sm" onclick="editDpTarget(\'' + App.escapeHtml(name) + '\')" title="Edit">✏️</button> ' +
+                    '<button class="btn btn-ghost btn-sm text-danger" onclick="deleteDpTarget(\'' + App.escapeHtml(name) + '\')" title="Delete">🗑️</button>' +
+                '</td></tr>';
+        }).join('');
+    }
+
+    window.filterDpTargets = function() {
+        var q = document.getElementById('dp-target-search').value.toLowerCase();
+        renderDpTargets(dpTargets.filter(function(t) {
+            return (f(t, 'name') || '').toLowerCase().includes(q) ||
+                   (f(t, 'host') || '').toLowerCase().includes(q) ||
+                   (f(t, 'group') || '').toLowerCase().includes(q);
+        }));
+    };
+
+    window.showDpTargetModal = function(target) {
+        document.getElementById('dp-target-modal-title').textContent = target ? 'Edit Target' : 'Add Target';
+        document.getElementById('dp-target-edit-name').value = target ? f(target, 'name') : '';
+        document.getElementById('dp-target-name').value = target ? f(target, 'name') : '';
+        document.getElementById('dp-target-name').disabled = !!target;
+        document.getElementById('dp-target-host').value = target ? (f(target, 'host') || '') : '';
+        document.getElementById('dp-target-port').value = target ? (f(target, 'port') || 22) : 22;
+        document.getElementById('dp-target-group').value = target ? (f(target, 'group') || '') : '';
+        document.getElementById('dp-target-enabled').checked = target ? f(target, 'enabled') !== false : true;
+        document.getElementById('dp-target-maintenance').checked = target ? !!f(target, 'maintenance') : false;
+        document.getElementById('dp-target-delete-btn').classList.toggle('hidden', !target);
+        document.getElementById('dp-target-modal-overlay').classList.add('show');
+    };
+
+    window.closeDpTargetModal = function() {
+        document.getElementById('dp-target-modal-overlay').classList.remove('show');
+    };
+
+    window.editDpTarget = function(name) {
+        var target = dpTargets.find(function(t) { return f(t, 'name') === name; });
+        if (target) showDpTargetModal(target);
+    };
+
+    window.saveDpTarget = async function() {
+        var form = document.getElementById('dp-target-form');
+        if (!form.checkValidity()) { form.reportValidity(); return; }
+
+        var editName = document.getElementById('dp-target-edit-name').value;
+        var payload = {
+            host: document.getElementById('dp-target-host').value,
+            port: parseInt(document.getElementById('dp-target-port').value, 10) || 22,
+            group: document.getElementById('dp-target-group').value,
+            enabled: document.getElementById('dp-target-enabled').checked,
+            maintenance: document.getElementById('dp-target-maintenance').checked,
+        };
+        App.btnLoading('#dp-target-save-btn', true);
+        try {
+            if (editName) {
+                await dpApi('PATCH', '/api/v2/dp/targets/' + encodeURIComponent(editName), payload);
+            } else {
+                payload.name = document.getElementById('dp-target-name').value.trim();
+                await dpApi('POST', '/api/v2/dp/targets', payload);
+            }
+            App.notify('Target saved', 'success');
+            closeDpTargetModal();
+            loadDpTargets();
+        } catch (e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+        App.btnLoading('#dp-target-save-btn', false);
+    };
+
+    window.deleteDpTarget = async function(name) {
+        if (!name) return;
+        var ok = await App.confirm('Delete target "' + name + '"?');
+        if (!ok) return;
+        try {
+            await dpApi('DELETE', '/api/v2/dp/targets/' + encodeURIComponent(name));
+            App.notify('Target deleted', 'success');
+            closeDpTargetModal();
+            loadDpTargets();
+        } catch (e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    window.deleteDpTargetFromModal = function() {
+        return deleteDpTarget(document.getElementById('dp-target-edit-name').value);
+    };
+
+    // ── Credentials ─────────────────────────────────────────
+    window.loadDpCredentials = function() {
+        dpApiPage('GET', '/api/v2/dp/credentials').then(function(page) {
+            var items = page.items || [];
+            var tbody = document.getElementById('dp-credentials-body');
+            if (!items.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No credentials found</td></tr>';
+                return;
+            }
+            tbody.innerHTML = items.map(function(c) {
+                var id = f(c, 'id');
+                return '<tr>' +
+                    '<td>' + App.escapeHtml(f(c, 'login') || '—') + '</td>' +
+                    '<td>' + App.escapeHtml(f(c, 'kind') || '—') + '</td>' +
+                    '<td>' + App.escapeHtml(f(c, 'target_selector') || f(c, 'target_id') || '—') + '</td>' +
+                    '<td>' + (f(c, 'has_secret') ? 'Yes' : 'No') + '</td>' +
+                    '<td>' + App.formatTime(f(c, 'created_at')) + '</td>' +
+                    '<td class="col-actions">' +
+                        '<button class="btn btn-ghost btn-sm text-danger" onclick="deleteDpCredential(\'' + App.escapeHtml(id) + '\')" title="Delete">🗑️</button>' +
+                    '</td></tr>';
+            }).join('');
+            App.table('#dp-credentials-table');
+        }).catch(function(e) {
+            failRow('dp-credentials-body', 6, 'Failed to load: ' + e.message);
+        });
+    };
+
+    window.showDpCredentialModal = function() {
+        document.getElementById('dp-credential-form').reset();
+        document.getElementById('dp-credential-modal-overlay').classList.add('show');
+    };
+
+    window.closeDpCredentialModal = function() {
+        document.getElementById('dp-credential-modal-overlay').classList.remove('show');
+    };
+
+    window.saveDpCredential = async function() {
+        var form = document.getElementById('dp-credential-form');
+        if (!form.checkValidity()) { form.reportValidity(); return; }
+        var payload = {
+            target_name: document.getElementById('dp-credential-target').value.trim(),
+            login: document.getElementById('dp-credential-login').value.trim(),
+            kind: document.getElementById('dp-credential-kind').value,
+            secret: document.getElementById('dp-credential-secret').value,
+        };
+        App.btnLoading('#dp-credential-save-btn', true);
+        try {
+            await dpApi('POST', '/api/v2/dp/credentials', payload);
+            App.notify('Credential saved', 'success');
+            closeDpCredentialModal();
+            loadDpCredentials();
+        } catch (e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+        App.btnLoading('#dp-credential-save-btn', false);
+    };
+
+    window.deleteDpCredential = async function(id) {
+        if (!id) return;
+        var ok = await App.confirm('Delete this credential?');
+        if (!ok) return;
+        try {
+            await dpApi('DELETE', '/api/v2/dp/credentials/' + encodeURIComponent(id));
+            App.notify('Credential deleted', 'success');
+            loadDpCredentials();
+        } catch (e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    // ── Policy ──────────────────────────────────────────────
+    window.loadDpPolicy = function() {
+        Promise.all([
+            dpApiPage('GET', '/api/v2/dp/rules'),
+            dpApiPage('GET', '/api/v2/dp/ip-rules'),
+            dpApiData('GET', '/api/v2/dp/features'),
+        ]).then(function(results) {
+            renderDpRules(results[0].items || []);
+            renderDpIPRules(results[1].items || []);
+            var features = (results[2] && results[2].features) || [];
+            document.getElementById('dp-features-list').textContent = features.join(', ') || 'None';
+        }).catch(function(e) {
+            failRow('dp-rules-body', 8, 'Failed to load: ' + e.message);
+            failRow('dp-ip-rules-body', 6, 'Failed to load: ' + e.message);
+            document.getElementById('dp-features-list').textContent = 'Failed to load';
+        });
+    };
+
+    function renderDpRules(rules) {
+        var tbody = document.getElementById('dp-rules-body');
+        if (!rules.length) {
+            tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No access rules configured</td></tr>';
+            return;
+        }
+        tbody.innerHTML = rules.map(function(r) {
+            var id = f(r, 'id');
+            var subject = (f(r, 'subject_kind') || 'user') + ':' + (f(r, 'subject') || '*');
+            return '<tr>' +
+                '<td><code>' + App.escapeHtml(id) + '</code></td>' +
+                '<td>' + App.escapeHtml(f(r, 'name') || '—') + '</td>' +
+                '<td>' + (f(r, 'priority') || 0) + '</td>' +
+                '<td>' + App.escapeHtml(subject) + '</td>' +
+                '<td>' + App.escapeHtml(f(r, 'target_selector') || '—') + '</td>' +
+                '<td>' + App.escapeHtml(joinList(f(r, 'features'))) + '</td>' +
+                '<td>' + (f(r, 'enabled') !== false ? 'Yes' : 'No') + '</td>' +
+                '<td class="col-actions">' +
+                    '<button class="btn btn-ghost btn-sm text-danger" onclick="deleteDpRule(\'' + App.escapeHtml(id) + '\')" title="Delete">🗑️</button>' +
+                '</td></tr>';
+        }).join('');
+        App.table('#dp-rules-table');
+    }
+
+    function renderDpIPRules(rules) {
+        var tbody = document.getElementById('dp-ip-rules-body');
+        if (!rules.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No IP rules configured</td></tr>';
+            return;
+        }
+        tbody.innerHTML = rules.map(function(r) {
+            var id = f(r, 'id');
+            return '<tr>' +
+                '<td><code>' + App.escapeHtml(id) + '</code></td>' +
+                '<td>' + App.escapeHtml(f(r, 'cidr') || '—') + '</td>' +
+                '<td>' + App.escapeHtml(f(r, 'action') || '—') + '</td>' +
+                '<td>' + (f(r, 'priority') || 0) + '</td>' +
+                '<td>' + App.escapeHtml(f(r, 'comment') || '—') + '</td>' +
+                '<td class="col-actions">' +
+                    '<button class="btn btn-ghost btn-sm text-danger" onclick="deleteDpIPRule(\'' + App.escapeHtml(id) + '\')" title="Delete">🗑️</button>' +
+                '</td></tr>';
+        }).join('');
+        App.table('#dp-ip-rules-table');
+    }
+
+    window.showDpRuleModal = function() {
+        document.getElementById('dp-rule-form').reset();
+        document.getElementById('dp-rule-priority').value = 10;
+        document.getElementById('dp-rule-modal-overlay').classList.add('show');
+    };
+
+    window.closeDpRuleModal = function() {
+        document.getElementById('dp-rule-modal-overlay').classList.remove('show');
+    };
+
+    window.saveDpRule = async function() {
+        var form = document.getElementById('dp-rule-form');
+        if (!form.checkValidity()) { form.reportValidity(); return; }
+        var payload = {
+            id: document.getElementById('dp-rule-id').value.trim(),
+            name: document.getElementById('dp-rule-name').value.trim(),
+            priority: parseInt(document.getElementById('dp-rule-priority').value, 10) || 0,
+            subject_kind: document.getElementById('dp-rule-subject-kind').value,
+            subject: document.getElementById('dp-rule-subject').value.trim(),
+            target_selector: document.getElementById('dp-rule-target').value.trim(),
+            upstream_logins: splitList(document.getElementById('dp-rule-logins').value),
+            features: splitList(document.getElementById('dp-rule-features').value),
+            record_policy: document.getElementById('dp-rule-record').value,
+            enabled: true,
+        };
+        App.btnLoading('#dp-rule-save-btn', true);
+        try {
+            await dpApi('POST', '/api/v2/dp/rules', payload);
+            App.notify('Access rule saved', 'success');
+            closeDpRuleModal();
+            loadDpPolicy();
+        } catch (e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+        App.btnLoading('#dp-rule-save-btn', false);
+    };
+
+    window.deleteDpRule = async function(id) {
+        if (!id) return;
+        var ok = await App.confirm('Delete access rule "' + id + '"?');
+        if (!ok) return;
+        try {
+            await dpApi('DELETE', '/api/v2/dp/rules/' + encodeURIComponent(id));
+            App.notify('Access rule deleted', 'success');
+            loadDpPolicy();
+        } catch (e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    window.showDpIPRuleModal = function() {
+        document.getElementById('dp-ip-rule-form').reset();
+        document.getElementById('dp-ip-rule-priority').value = 100;
+        document.getElementById('dp-ip-rule-modal-overlay').classList.add('show');
+    };
+
+    window.closeDpIPRuleModal = function() {
+        document.getElementById('dp-ip-rule-modal-overlay').classList.remove('show');
+    };
+
+    window.saveDpIPRule = async function() {
+        var form = document.getElementById('dp-ip-rule-form');
+        if (!form.checkValidity()) { form.reportValidity(); return; }
+        var payload = {
+            id: document.getElementById('dp-ip-rule-id').value.trim(),
+            cidr: document.getElementById('dp-ip-rule-cidr').value.trim(),
+            action: document.getElementById('dp-ip-rule-action').value,
+            priority: parseInt(document.getElementById('dp-ip-rule-priority').value, 10) || 0,
+            comment: document.getElementById('dp-ip-rule-comment').value.trim(),
+        };
+        App.btnLoading('#dp-ip-rule-save-btn', true);
+        try {
+            await dpApi('POST', '/api/v2/dp/ip-rules', payload);
+            App.notify('IP rule saved', 'success');
+            closeDpIPRuleModal();
+            loadDpPolicy();
+        } catch (e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+        App.btnLoading('#dp-ip-rule-save-btn', false);
+    };
+
+    window.deleteDpIPRule = async function(id) {
+        if (!id) return;
+        var ok = await App.confirm('Delete IP rule "' + id + '"?');
+        if (!ok) return;
+        try {
+            await dpApi('DELETE', '/api/v2/dp/ip-rules/' + encodeURIComponent(id));
+            App.notify('IP rule deleted', 'success');
+            loadDpPolicy();
+        } catch (e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    // ── Sessions ────────────────────────────────────────────
+    window.loadDpSessions = function() {
+        var status = document.getElementById('dp-session-status').value;
+        var url = '/api/v2/dp/sessions?limit=200';
+        if (status) url += '&status=' + encodeURIComponent(status);
+        dpApiPage('GET', url).then(function(page) {
+            var items = page.items || [];
+            var tbody = document.getElementById('dp-sessions-body');
+            if (!items.length) {
+                tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No sessions found</td></tr>';
+                return;
+            }
+            tbody.innerHTML = items.map(function(s) {
+                var id = f(s, 'id');
+                var statusVal = f(s, 'status') || '—';
+                var target = (f(s, 'target_host') || '—') + ':' + (f(s, 'target_port') || 22);
+                var canTerminate = statusVal === 'active' || statusVal === 'pending';
+                return '<tr>' +
+                    '<td><code class="text-sm">' + App.escapeHtml(id) + '</code></td>' +
+                    '<td>' + App.escapeHtml(f(s, 'username') || '—') + '</td>' +
+                    '<td>' + App.escapeHtml(f(s, 'source_ip') || '—') + '</td>' +
+                    '<td>' + App.escapeHtml(target) + '</td>' +
+                    '<td>' + App.escapeHtml(f(s, 'upstream_login') || '—') + '</td>' +
+                    '<td><span class="badge badge-neutral">' + App.escapeHtml(statusVal) + '</span></td>' +
+                    '<td>' + App.formatTime(f(s, 'started_at')) + '</td>' +
+                    '<td class="col-actions">' +
+                        (canTerminate
+                            ? '<button class="btn btn-ghost btn-sm text-danger" onclick="terminateDpSession(\'' + App.escapeHtml(id) + '\')" title="Terminate">⏹</button>'
+                            : '—') +
+                    '</td></tr>';
+            }).join('');
+            App.table('#dp-sessions-table');
+        }).catch(function(e) {
+            failRow('dp-sessions-body', 8, 'Failed to load: ' + e.message);
+        });
+    };
+
+    window.terminateDpSession = async function(id) {
+        if (!id) return;
+        var ok = await App.confirm('Request termination for session ' + id + '?');
+        if (!ok) return;
+        try {
+            await dpApi('POST', '/api/v2/dp/sessions/' + encodeURIComponent(id) + '/terminate', {
+                reason: 'terminated from data plane admin UI',
+            });
+            App.notify('Termination requested', 'success');
+            loadDpSessions();
+        } catch (e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    // ── Host Keys ───────────────────────────────────────────
+    window.loadDpHostKeys = function() {
+        Promise.all([
+            dpApiPage('GET', '/api/v2/dp/host-keys/pending'),
+            loadDpTargets(),
+        ]).then(function(results) {
+            renderDpHostKeys(results[0].items || []);
+        }).catch(function(e) {
+            failRow('dp-hostkeys-body', 6, 'Failed to load: ' + e.message);
+        });
+    };
+
+    function targetNameForKey(key) {
+        var target = dpTargetById[f(key, 'target_id')];
+        return target ? f(target, 'name') : (f(key, 'target_id') || '—');
+    }
+
+    function renderDpHostKeys(keys) {
+        dpPendingKeys = keys;
+        var tbody = document.getElementById('dp-hostkeys-body');
+        if (!keys.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No pending host keys</td></tr>';
+            return;
+        }
+        tbody.innerHTML = keys.map(function(k, idx) {
+            var targetName = targetNameForKey(k);
+            var fingerprint = f(k, 'fingerprint') || '';
+            return '<tr>' +
+                '<td>' + App.escapeHtml(targetName) + '</td>' +
+                '<td>' + App.escapeHtml(f(k, 'algorithm') || '—') + '</td>' +
+                '<td><code class="text-sm">' + App.escapeHtml(fingerprint) + '</code></td>' +
+                '<td>' + App.escapeHtml(f(k, 'source') || '—') + '</td>' +
+                '<td>' + App.formatTime(f(k, 'first_seen_at')) + '</td>' +
+                '<td class="col-actions">' +
+                    '<button class="btn btn-ghost btn-sm" onclick="setDpHostKeyStatus(' + idx + ', \'trusted\')" title="Trust">✅</button> ' +
+                    '<button class="btn btn-ghost btn-sm text-danger" onclick="setDpHostKeyStatus(' + idx + ', \'revoked\')" title="Revoke">🚫</button>' +
+                '</td></tr>';
+        }).join('');
+        App.table('#dp-hostkeys-table');
+    }
+
+    window.setDpHostKeyStatus = async function(idx, status) {
+        var key = dpPendingKeys[idx];
+        if (!key) return;
+        var targetName = targetNameForKey(key);
+        var fingerprint = f(key, 'fingerprint');
+        if (!targetName || !fingerprint) return;
+        var label = status === 'trusted' ? 'trust' : 'revoke';
+        var ok = await App.confirm('Mark this host key as ' + label + '?');
+        if (!ok) return;
+        try {
+            await dpApi('PUT',
+                '/api/v2/dp/targets/' + encodeURIComponent(targetName) +
+                '/host-keys/' + encodeURIComponent(fingerprint),
+                { status: status });
+            App.notify('Host key updated', 'success');
+            loadDpHostKeys();
+        } catch (e) {
+            App.notify('Failed: ' + e.message, 'error');
+        }
+    };
+
+    loadDpUsers();
+})();
+</script>
+{{end}}

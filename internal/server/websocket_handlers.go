@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dp"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/ws"
 )
 
@@ -86,31 +87,42 @@ func (s *Server) handleSessionLiveStream() http.Handler {
 		}
 
 		done := consumeWebSocketControlFrames(conn)
+		key := s.apiHandler.RecordingDecryptionKey()
+		emitted := 0
 
-		offset, remainder, chunks, err := readRecordingTail(recordingPath, sessionLiveTailBytes)
-		if err != nil {
-			_ = writeWebsocketMessage(conn, websocketMessage{Type: "error", Error: "failed to read live recording: " + err.Error()})
-			return
-		}
-		for _, chunk := range chunks {
-			if err := writeWebsocketMessage(conn, websocketMessage{
-				Type: "session.live.chunk",
-				Data: map[string]string{
-					"session_id": sessionID,
-					"chunk":      chunk,
-				},
-			}); err != nil {
-				return
+		sendNew := func() (int, error) {
+			chunks, err := readDecodedRecordingChunks(recordingPath, key)
+			if err != nil {
+				return emitted, err
 			}
+			if emitted > len(chunks) {
+				emitted = 0
+			}
+			for _, chunk := range chunks[emitted:] {
+				if err := writeWebsocketMessage(conn, websocketMessage{
+					Type: "session.live.chunk",
+					Data: map[string]string{
+						"session_id": sessionID,
+						"chunk":      chunk,
+					},
+				}); err != nil {
+					return emitted, err
+				}
+			}
+			return len(chunks), nil
+		}
+
+		var sendErr error
+		emitted, sendErr = sendNew()
+		if sendErr != nil {
+			_ = writeWebsocketMessage(conn, websocketMessage{Type: "error", Error: "failed to read live recording: " + sendErr.Error()})
+			return
 		}
 
 		if !s.sessionIsActive(sessionID) {
 			_ = writeWebsocketMessage(conn, websocketMessage{
 				Type: "session.live.status",
-				Data: map[string]string{
-					"session_id": sessionID,
-					"state":      "ended",
-				},
+				Data: map[string]string{"session_id": sessionID, "state": "ended"},
 			})
 			return
 		}
@@ -123,29 +135,15 @@ func (s *Server) handleSessionLiveStream() http.Handler {
 			case <-done:
 				return
 			case <-ticker.C:
-				offset, remainder, chunks, err = readRecordingUpdates(recordingPath, offset, remainder)
-				if err != nil {
-					_ = writeWebsocketMessage(conn, websocketMessage{Type: "error", Error: "failed to tail live recording: " + err.Error()})
+				emitted, sendErr = sendNew()
+				if sendErr != nil {
+					_ = writeWebsocketMessage(conn, websocketMessage{Type: "error", Error: "failed to tail live recording: " + sendErr.Error()})
 					return
 				}
-				for _, chunk := range chunks {
-					if err := writeWebsocketMessage(conn, websocketMessage{
-						Type: "session.live.chunk",
-						Data: map[string]string{
-							"session_id": sessionID,
-							"chunk":      chunk,
-						},
-					}); err != nil {
-						return
-					}
-				}
-				if !s.sessionIsActive(sessionID) && len(chunks) == 0 {
+				if !s.sessionIsActive(sessionID) {
 					_ = writeWebsocketMessage(conn, websocketMessage{
 						Type: "session.live.status",
-						Data: map[string]string{
-							"session_id": sessionID,
-							"state":      "ended",
-						},
+						Data: map[string]string{"session_id": sessionID, "state": "ended"},
 					})
 					return
 				}
@@ -228,6 +226,31 @@ func writeWebsocketMessage(conn *ws.Conn, message websocketMessage) error {
 		return err
 	}
 	return conn.WriteText(payload)
+}
+
+func readDecodedRecordingChunks(path string, key []byte) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	reader, err := dp.OpenRecording(f, key)
+	if err != nil {
+		return nil, err
+	}
+	if closer, ok := reader.(io.Closer); ok {
+		defer closer.Close()
+	}
+	raw, err := io.ReadAll(io.LimitReader(reader, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	chunks, _ := extractAsciicastChunks(raw, "")
+	if len(chunks) > 500 {
+		chunks = chunks[len(chunks)-500:]
+	}
+	return chunks, nil
 }
 
 func readRecordingTail(path string, maxBytes int64) (int64, string, []string, error) {

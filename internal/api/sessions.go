@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
 )
@@ -74,12 +73,9 @@ func (a *API) handleKillSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.dp.KillSession(id); err != nil {
+	if err := a.terminateSession(id, "terminated by an administrator"); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to kill session: "+err.Error())
 		return
-	}
-	if a.sessionMetadata != nil {
-		_ = a.sessionMetadata.MarkTerminated(id, time.Now().UTC())
 	}
 
 	writeJSON(w, http.StatusOK, APIResponse{
@@ -105,12 +101,9 @@ func (a *API) handleBulkKillSessions(w http.ResponseWriter, r *http.Request) {
 
 	results := make(map[string]string, len(req.IDs))
 	for _, id := range req.IDs {
-		if err := a.dp.KillSession(id); err != nil {
+		if err := a.terminateSession(id, "bulk terminated by an administrator"); err != nil {
 			results[id] = "error: " + err.Error()
 		} else {
-			if a.sessionMetadata != nil {
-				_ = a.sessionMetadata.MarkTerminated(id, time.Now().UTC())
-			}
 			results[id] = "terminated"
 		}
 	}
@@ -118,6 +111,47 @@ func (a *API) handleBulkKillSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, APIResponse{
 		Success: true,
 		Data:    results,
+	})
+}
+
+// handleTakeoverSession terminates an active session so an operator can reconnect
+// to the same target through the web terminal (force takeover).
+func (a *API) handleTakeoverSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing session id")
+		return
+	}
+	session, err := a.getSessionByID(id)
+	if err != nil {
+		if errors.Is(err, errSessionNotFound) {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if session.Status != "active" {
+		writeError(w, http.StatusConflict, "session is not active")
+		return
+	}
+	if err := a.terminateSession(id, "taken over by an administrator"); err != nil {
+		writeError(w, http.StatusBadGateway, "failed to take over session: "+err.Error())
+		return
+	}
+	target := session.TargetHost
+	if session.TargetPort > 0 {
+		target = fmt.Sprintf("%s:%d", session.TargetHost, session.TargetPort)
+	}
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data: map[string]string{
+			"message":     "session terminated; reconnect via the web terminal",
+			"session_id":  id,
+			"target_host": target,
+			"username":    session.Username,
+			"terminal_url": "/terminal?host=" + target,
+		},
 	})
 }
 
@@ -153,6 +187,13 @@ func (a *API) getSessionByID(id string) (*models.Session, error) {
 	if strings.TrimSpace(id) == "" {
 		return nil, errSessionNotFound
 	}
+	if a.dpStore != nil {
+		if session, err := a.getDataPlaneSession(id); err == nil {
+			return session, nil
+		} else if !errors.Is(err, errSessionNotFound) {
+			return nil, err
+		}
+	}
 	if a.sessionMetadata != nil {
 		var syncErr error
 		if !a.sessionSyncBg.Load() {
@@ -166,8 +207,6 @@ func (a *API) getSessionByID(id string) (*models.Session, error) {
 			return nil, storeErr
 		case syncErr != nil:
 			return nil, syncErr
-		default:
-			return nil, errSessionNotFound
 		}
 	}
 

@@ -12,6 +12,7 @@ import (
 
 	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
 )
 
 // AuthorizeSession decides whether a principal may open a session to a target.
@@ -76,6 +77,13 @@ func (s *Server) AuthorizeSession(_ context.Context, req *sshproxyv1.AuthorizeSe
 		}
 	}
 
+	approvalRequired := decision.ApprovalRequired
+	// A standing JIT grant satisfies session-level approval the same way it
+	// satisfies a rule denial: the person already obtained consent.
+	if approvalRequired && s.grants != nil && s.grants.HasGrant(req.GetUsername(), target.Name) {
+		approvalRequired = false
+	}
+
 	return &sshproxyv1.AuthorizeSessionResponse{
 		Allowed:            true,
 		Reason:             decision.Reason,
@@ -90,7 +98,7 @@ func (s *Server) AuthorizeSession(_ context.Context, req *sshproxyv1.AuthorizeSe
 		IdleTimeoutSeconds: int64(decision.IdleTimeout / time.Second),
 		RecordPolicy:       recordPolicyToProto(decision.RecordPolicy),
 		CommandPolicyId:    decision.CommandPolicyID,
-		ApprovalRequired:   decision.ApprovalRequired,
+		ApprovalRequired:   approvalRequired,
 	}, nil
 }
 
@@ -223,6 +231,8 @@ func isSCPCommand(command string) bool {
 
 // AuthorizeCommand screens a command before it reaches the upstream host.
 func (s *Server) AuthorizeCommand(req *sshproxyv1.AuthorizeCommandRequest, stream sshproxyv1.AccessDecisionService_AuthorizeCommandServer) error {
+	telemetry.SetSessionID(stream.Context(), req.GetSessionId())
+
 	policyID := strings.TrimSpace(req.GetCommandPolicyId())
 	if policyID == "" {
 		return stream.Send(&sshproxyv1.AuthorizeCommandResponse{

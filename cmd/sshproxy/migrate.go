@@ -74,7 +74,7 @@ func runMigrateINI2DB(args []string) {
 	defer func() { _ = st.Close() }()
 
 	if spec := strings.TrimSpace(*keySpec); spec != "" {
-		provider, err := secrets.LoadStaticProvider(spec)
+		provider, err := secrets.LoadProvider(spec)
 		if err != nil {
 			printError(fmt.Sprintf("load encryption key: %v", err))
 			os.Exit(1)

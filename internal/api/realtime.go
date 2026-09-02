@@ -74,7 +74,14 @@ func (a *API) BuildDashboardSnapshot() (*models.DashboardSnapshot, error) {
 }
 
 // ListFilteredSessions returns sessions after applying the same filters as the REST API.
+//
+// Preference order: shared dp_sessions (Go data plane / web terminal), then the
+// legacy session metadata store, then the C data-plane admin API.
 func (a *API) ListFilteredSessions(status, user, ip, target string) ([]models.Session, error) {
+	if a.dpStore != nil {
+		return a.listDataPlaneSessions(status, user, ip, target)
+	}
+
 	if a.sessionMetadata != nil {
 		var syncErr error
 		if !a.sessionSyncBg.Load() {

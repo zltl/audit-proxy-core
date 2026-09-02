@@ -13,11 +13,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"strings"
 	"time"
 
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/api"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/server"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
 )
 
 func main() {
@@ -99,6 +101,16 @@ func main() {
 		log.Fatalf("server: %v", err)
 	}
 
+	ctx := context.Background()
+	shutdownTrace, err := telemetry.Init(ctx, telemetry.Config{
+		Enabled:     cfg.OTelEndpoint != "",
+		Endpoint:    cfg.OTelEndpoint,
+		ServiceName: firstNonEmpty(cfg.OTelServiceName, "ssh-proxy-control-plane"),
+	})
+	if err != nil {
+		log.Printf("telemetry: %v", err)
+	}
+
 	// Start the server in a goroutine so we can block on signals.
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start() }()
@@ -116,10 +128,22 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if shutdownTrace != nil {
+		_ = shutdownTrace(ctx)
+	}
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatalf("shutdown: %v", err)
 	}
 	log.Println("server stopped")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func buildAPIConfig(cfg *config.Config) *api.Config {
@@ -175,5 +199,9 @@ func buildAPIConfig(cfg *config.Config) *api.Config {
 		DatabaseConnMaxLifetime:            cfg.DatabaseConnMaxLifetime,
 		DatabaseConnMaxIdleTime:            cfg.DatabaseConnMaxIdleTime,
 		DatabaseReadAfterWriteWindow:       cfg.DatabaseReadAfterWriteWindow,
+		AuditChainKey:                      cfg.AuditChainKey,
+		AuditAnchorEnabled:                 cfg.AuditAnchorEnabled,
+		AuditAnchorRetentionDays:           cfg.AuditAnchorRetentionDays,
+		RecordingDeleteLocalAfterUpload:    cfg.RecordingDeleteLocalAfterUpload,
 	}
 }

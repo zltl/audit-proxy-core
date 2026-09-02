@@ -163,6 +163,10 @@ type Config struct {
 	// AuditLogDir is the directory where audit-log files are written.
 	AuditLogDir string `json:"audit_log_dir"`
 
+	// RecordingEncryptionKey seals and opens session recordings. Control plane
+	// needs the same key as the data plane to live-follow or download protected casts.
+	RecordingEncryptionKey string `json:"recording_encryption_key"`
+
 	// RecordingDir is the directory for SSH session recordings.
 	RecordingDir string `json:"recording_dir"`
 
@@ -282,6 +286,26 @@ type Config struct {
 
 	// AuditArchiveObjectStorageUseSSL forces TLS when the endpoint omits a URL scheme.
 	AuditArchiveObjectStorageUseSSL bool `json:"audit_archive_object_storage_use_ssl"`
+
+	// AuditAnchorEnabled uploads signed chain-head snapshots to object storage
+	// with compliance retention when audit archive storage is configured.
+	AuditAnchorEnabled bool `json:"audit_anchor_enabled"`
+
+	// AuditAnchorRetentionDays is the Object Lock retention for anchor objects.
+	AuditAnchorRetentionDays int `json:"audit_anchor_retention_days"`
+
+	// RecordingRetentionDays deletes local recordings older than this after upload.
+	RecordingRetentionDays int `json:"recording_retention_days"`
+
+	// RecordingDeleteLocalAfterUpload removes the on-disk copy once object storage
+	// holds a verified copy.
+	RecordingDeleteLocalAfterUpload bool `json:"recording_delete_local_after_upload"`
+
+	// OTelEndpoint enables OpenTelemetry trace export when set.
+	OTelEndpoint string `json:"otel_endpoint"`
+
+	// OTelServiceName names this process in exported traces.
+	OTelServiceName string `json:"otel_service_name"`
 
 	// AuditQueueBackend enables background audit event forwarding to a message queue.
 	// Supported values: "", "kafka", or "rabbitmq".

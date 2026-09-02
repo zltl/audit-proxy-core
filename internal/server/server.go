@@ -32,7 +32,9 @@ import (
 	samlprovider "github.com/ssh-proxy-core/ssh-proxy-core/internal/saml"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/threat"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/terminal"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/ws"
 	"github.com/ssh-proxy-core/ssh-proxy-core/web"
 	"google.golang.org/grpc"
@@ -60,6 +62,8 @@ type Server struct {
 	decisionPoint  *pdp.Server
 	pdpEventSink   *pdp.FileEventSink
 	dataPlaneStore *store.Store
+	jitStore       *jit.Store
+	approvalMgr    *cmdctrl.ApprovalManager
 	backgroundCtx  context.Context
 	stopBackground context.CancelFunc
 }
@@ -141,6 +145,7 @@ func New(cfg *config.Config) (*Server, error) {
 
 	handler := middleware.Chain(
 		s.mux,
+		telemetry.HTTPMiddleware("ssh-proxy-control-plane"),
 		middleware.HSTS(cfg.HSTSEnabled, cfg.HSTSIncludeSubdomains, cfg.HSTSPreload),
 		middleware.Recovery,
 		middleware.Logger,
@@ -174,8 +179,10 @@ func (s *Server) Start() error {
 	if err := s.startGRPC(); err != nil {
 		return err
 	}
-	if err := s.startAccessDecisionPoint(); err != nil {
-		return err
+	if s.pdpServer == nil {
+		if err := s.startAccessDecisionPoint(); err != nil {
+			return err
+		}
 	}
 	if s.srv.TLSConfig != nil &&
 		(len(s.srv.TLSConfig.Certificates) > 0 || s.srv.TLSConfig.GetCertificate != nil) {
@@ -378,6 +385,7 @@ func (s *Server) routes() error {
 		SessionSecret:                      s.config.SessionSecret,
 		AuditLogDir:                        s.config.AuditLogDir,
 		RecordingDir:                       s.config.RecordingDir,
+		RecordingEncryptionKey:             s.config.RecordingEncryptionKey,
 		RecordingObjectStorageEnabled:      s.config.RecordingObjectStorageEnabled,
 		RecordingObjectStorageEndpoint:     s.config.RecordingObjectStorageEndpoint,
 		RecordingObjectStorageBucket:       s.config.RecordingObjectStorageBucket,
@@ -426,6 +434,9 @@ func (s *Server) routes() error {
 		ExperimentalFeatures:               s.config.ExperimentalFeatures,
 		AuditRetentionDays:                 s.config.AuditRetentionDays,
 		AuditChainKey:                      s.config.AuditChainKey,
+		AuditAnchorEnabled:                 s.config.AuditAnchorEnabled,
+		AuditAnchorRetentionDays:           s.config.AuditAnchorRetentionDays,
+		RecordingDeleteLocalAfterUpload:    s.config.RecordingDeleteLocalAfterUpload,
 		SSHAllowInsecureHostKeys:           s.config.SSHAllowInsecureHostKeys,
 	}
 	apiHandler, err := api.New(s.dp, apiCfg)
@@ -436,6 +447,7 @@ func (s *Server) routes() error {
 	apiHandler.StartSessionMetadataSync(s.backgroundCtx, 5*time.Second)
 	apiHandler.StartAuditSync(s.backgroundCtx, 5*time.Second)
 	apiHandler.StartAuditArchiveSync(s.backgroundCtx, 5*time.Second)
+	apiHandler.StartAuditAnchorSync(s.backgroundCtx, 15*time.Minute)
 	apiHandler.StartAuditQueueSync(s.backgroundCtx, 5*time.Second)
 	apiHandler.StartRecordingArchiveSync(s.backgroundCtx, 5*time.Second)
 	apiHandler.StartDiscoverySync(s.backgroundCtx, 5*time.Second)
@@ -513,6 +525,7 @@ func (s *Server) routes() error {
 
 	// Just-in-time access requests.
 	jitStore := jit.NewStore(dataDir, nil)
+	s.jitStore = jitStore
 	jitNotifier, err := jit.NewNotifier(jit.NotifierConfig{
 		SMTPAddr:               s.config.JITNotifySMTPAddr,
 		SMTPUsername:           s.config.JITNotifySMTPUsername,
@@ -571,6 +584,7 @@ func (s *Server) routes() error {
 		}
 	}
 	approvalMgr := cmdctrl.NewApprovalManager(5*time.Minute, "")
+	s.approvalMgr = approvalMgr
 	apiHandler.SetCmdCtrl(policyEngine, approvalMgr)
 	apiHandler.RegisterCmdCtrlRoutes(s.mux)
 
@@ -620,23 +634,27 @@ func (s *Server) routes() error {
 		EmailFrom:    strings.TrimSpace(s.config.JITNotifyEmailFrom),
 	})
 
+	if err := s.startAccessDecisionPoint(); err != nil {
+		return err
+	}
+
 	// Page routes.
-	s.mux.HandleFunc("GET /dashboard", s.handlePage("pages/dashboard.html", "Dashboard"))
-	s.mux.HandleFunc("GET /sessions", s.handlePage("pages/sessions.html", "Sessions"))
-	s.mux.HandleFunc("GET /users", s.handlePage("pages/users.html", "Users"))
-	s.mux.HandleFunc("GET /servers", s.handlePage("pages/servers.html", "Servers"))
-	s.mux.HandleFunc("GET /automation", s.handlePage("pages/automation.html", "Automation"))
-	s.mux.HandleFunc("GET /audit", s.handlePage("pages/audit.html", "Audit Log"))
-	s.mux.HandleFunc("GET /webhooks", s.handlePage("pages/webhooks.html", "Webhook Deliveries"))
-	s.mux.HandleFunc("GET /settings", s.handlePage("pages/settings.html", "Settings"))
-	s.mux.HandleFunc("GET /terminal", s.handlePage("pages/terminal.html", "Terminal"))
+	s.mux.HandleFunc("GET /dashboard", s.handlePage("pages/dashboard.html", "Dashboard", "dashboard"))
+	s.mux.HandleFunc("GET /sessions", s.handlePage("pages/sessions.html", "Sessions", "sessions"))
+	s.mux.HandleFunc("GET /users", s.handlePage("pages/users.html", "Users", "users"))
+	s.mux.HandleFunc("GET /servers", s.handlePage("pages/servers.html", "Servers", "servers"))
+	s.mux.HandleFunc("GET /automation", s.handlePage("pages/automation.html", "Automation", "automation"))
+	s.mux.HandleFunc("GET /audit", s.handlePage("pages/audit.html", "Audit Log", "audit"))
+	s.mux.HandleFunc("GET /webhooks", s.handlePage("pages/webhooks.html", "Webhook Deliveries", "webhooks"))
+	s.mux.HandleFunc("GET /settings", s.handlePage("pages/settings.html", "Settings", "settings"))
+	s.mux.HandleFunc("GET /terminal", s.handlePage("pages/terminal.html", "Terminal", "terminal"))
+	s.mux.HandleFunc("GET /dp", s.handlePage("pages/dp.html", "Data Plane", "dp"))
 
 	// WebSocket terminal endpoint.
 	s.mux.Handle("GET /ws/dashboard", s.handleDashboardStream())
 	s.mux.Handle("GET /ws/sessions", s.handleSessionsStream())
 	s.mux.Handle("GET /ws/sessions/{id}/live", s.handleSessionLiveStream())
 	terminalHandler := &ws.TerminalHandler{
-		ProxyAddr:               s.config.SSHProxyAddr,
 		RecordingDir:            s.config.RecordingDir,
 		RecordingBasePath:       terminalRecordingBasePath,
 		TransferApprovalEnabled: s.config.DLPTransferApprovalEnabled,
@@ -656,6 +674,18 @@ func (s *Server) routes() error {
 			SensitiveDetectAPIKey:     s.config.DLPSensitiveDetectAPIKey,
 			SensitiveMaxScanBytes:     s.config.DLPSensitiveMaxScanBytes,
 		}),
+	}
+	if s.decisionPoint != nil {
+		recKey, _ := terminal.ParseRecordingKey(s.config.RecordingEncryptionKey)
+		terminalHandler.Bridge = &terminal.Bridge{
+			PDP:                s.decisionPoint,
+			NodeID:             "control-plane",
+			RecordingDir:       s.config.RecordingDir,
+			RecordingKey:       recKey,
+			CompressRecordings: true,
+		}
+	} else {
+		terminalHandler.ProxyAddr = s.config.SSHProxyAddr
 	}
 	s.mux.Handle("GET /ws/terminal", terminalHandler)
 	s.mux.HandleFunc("GET /api/v2/terminal/recordings/{id}/download", s.handleTerminalRecordingDownload(terminalHandler))
@@ -683,10 +713,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePage returns a handler that renders the named template with the given title.
-func (s *Server) handlePage(tmplName, title string) http.HandlerFunc {
+func (s *Server) handlePage(tmplName, title, activePage string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, tmplName, map[string]interface{}{
-			"Title": title,
+			"Title":      title,
+			"ActivePage": activePage,
+			"DPEnabled":  s.decisionPoint != nil,
 		})
 	}
 }

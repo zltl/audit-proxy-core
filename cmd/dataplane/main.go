@@ -20,6 +20,7 @@ import (
 
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dp"
 	"github.com/ssh-proxy-core/ssh-proxy-core/internal/pdpclient"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
 )
 
 func main() {
@@ -43,6 +44,8 @@ func main() {
 		pdpName     = flag.String("pdp-server-name", "", "expected server name in the decision point's certificate")
 		failMode    = flag.String("fail-mode", "closed",
 			"what to do when the decision point is unreachable: closed refuses new sessions, open admits them")
+		fallbackIni = flag.String("config", "",
+			"optional config.ini used for emergency policy when fail-mode is open and the decision point is down")
 		cacheTTL = flag.Duration("decision-cache-ttl", 5*time.Second,
 			"how long an authorization decision may be reused; also how long a revocation can lag")
 
@@ -60,12 +63,30 @@ func main() {
 			"compress session recordings; terminal output shrinks by roughly an order of magnitude")
 		recordingKey = flag.String("recording-encryption-key", "",
 			"32-byte hex key sealing recordings at rest; a transcript contains whatever the user typed")
+		otelEndpoint = flag.String("otel-endpoint", "", "OTLP HTTP endpoint for traces (host:port)")
 	)
 	flag.Parse()
 
 	if strings.TrimSpace(*hostKeys) == "" {
 		fatal("--host-keys is required: a proxy that generates a host key on each start teaches users to ignore the warning that detects interception")
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	shutdownTrace, err := telemetry.Init(ctx, telemetry.Config{
+		Enabled:     strings.TrimSpace(*otelEndpoint) != "",
+		Endpoint:    *otelEndpoint,
+		ServiceName: "ssh-proxy-dataplane",
+	})
+	if err != nil {
+		log.Printf("telemetry: %v", err)
+	}
+	defer func() {
+		if shutdownTrace != nil {
+			_ = shutdownTrace(context.Background())
+		}
+	}()
 
 	pdpConfig := pdpclient.Config{
 		Address:        *pdpAddr,
@@ -75,16 +96,14 @@ func main() {
 		TLSClientKey:   *pdpKey,
 		TLSServerName:  *pdpName,
 		Insecure:       *pdpInsecure,
-		FailMode:       pdpclient.FailMode(*failMode),
-		CacheTTL:       *cacheTTL,
+		FailMode:             pdpclient.FailMode(*failMode),
+		FallbackConfigPath:   *fallbackIni,
+		CacheTTL:             *cacheTTL,
 		RequestTimeout: 10 * time.Second,
 	}
 	if err := pdpConfig.Validate(); err != nil {
 		fatal(err.Error())
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	client, err := pdpclient.Dial(ctx, pdpConfig)
 	if err != nil {

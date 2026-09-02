@@ -1,31 +1,36 @@
-FROM golang:1.22-alpine AS builder
+# syntax=docker/dockerfile:1
+FROM golang:1.25-bookworm AS builder
 
-RUN apk add --no-cache git ca-certificates
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 
+COPY api/ api/
 COPY cmd/ cmd/
 COPY internal/ internal/
 COPY web/ web/
 
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /build/control-plane ./cmd/control-plane
 
-# --- Runtime stage ---
-FROM alpine:3.19
+FROM debian:bookworm-slim
 
-RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -S sshproxy \
-    && adduser -S -G sshproxy -H -D -s /sbin/nologin sshproxy \
-    && mkdir -p /etc/ssh-proxy /data \
-    && chown sshproxy:sshproxy /etc/ssh-proxy /data
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata wget \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r sshproxy \
+    && useradd -r -g sshproxy -d /nonexistent -s /usr/sbin/nologin sshproxy \
+    && mkdir -p /etc/ssh-proxy /data /run \
+    && chown sshproxy:sshproxy /etc/ssh-proxy /data /run
 
 COPY --from=builder /build/control-plane /usr/local/bin/control-plane
 
+# Compose test overrides user to root so the shared PDP unix socket (0660)
+# is reachable by the dataplane on the same volume.
 USER sshproxy
 
 EXPOSE 8443
 
 ENTRYPOINT ["control-plane"]
-CMD ["-addr", ":8443"]
+CMD ["-config", "/config.json"]

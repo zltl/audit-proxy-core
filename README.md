@@ -1,7 +1,6 @@
 # SSH Proxy Core
 
-数据库为准的 SSH 审计代理。Go 数据面（协议终结、录像、传输审计）+ Go 控制面
-（访问决策、管理 API、Web UI、审计汇）。
+数据库为准的 SSH 审计代理。**默认栈为 Go 数据面**（`cmd/dataplane`：协议终结、录像、传输审计）+ Go 控制面（访问决策、管理 API、Web UI、审计汇）。
 
 > **新架构文档：[docs/architecture.md](docs/architecture.md)**
 >
@@ -9,7 +8,7 @@
 > 引导来源（`sshproxy migrate ini2db` 导入）。数据面自身不做任何授权判断，而是在每次
 > 需要时向控制面的决策点提问，因此撤销在下一次决策时生效而不是下一次重载。
 >
-> 旧的 C 数据面（`src/`，本文档其余部分描述的对象）仍可构建，但存在三个协议层缺陷：
+> 旧的 C 数据面已迁至 [`legacy/c-dataplane/`](legacy/c-dataplane/)（`make legacy-c`），仍可构建但存在三个协议层缺陷：
 > 每连接只服务第一个 session channel、拒绝所有端口转发、不校验上游 host key。
 > 新部署请使用 `cmd/dataplane`。
 
@@ -114,11 +113,14 @@
 ### 1. 安装与构建
 
 ```bash
-# 安装依赖 (Ubuntu/Debian)
-sudo apt update && sudo apt install -y build-essential libssh-dev
+# 依赖：Go 1.25+（见 go.mod）
+# 构建默认 Go 控制面 + 数据面
+make          # 等同 make go-build → build/bin/{control-plane,dataplane,sshproxy}
+make test     # go test ./...
+make go-smoke # 本地端到端冒烟（主功能测试）
 
-# 构建
-make
+# 可选：遗留 C 数据面
+make legacy-c
 
 # 生成主机密钥 (首次运行)
 ssh-keygen -t ed25519 -f /tmp/ssh_proxy_host_key -N ""

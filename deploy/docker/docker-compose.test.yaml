@@ -1,0 +1,117 @@
+# Full-stack bring-up for the Go control plane + Go dataplane.
+# Functional SSH path is covered by scripts/smoke-test.sh; this file validates
+# compose networking, shared PDP socket, and health endpoints.
+#
+# Optional target-sshd (linuxserver/openssh-server):
+#   user target / password targetpass, SSH on container port 2222.
+#   From the dataplane network: host=target-sshd port=2222.
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sshproxy
+      POSTGRES_PASSWORD: sshproxy
+      POSTGRES_DB: sshproxy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sshproxy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [stack]
+
+  # Optional demo upstream. Not required for compose-smoke bring-up checks.
+  target-sshd:
+    image: linuxserver/openssh-server:latest
+    environment:
+      PUID: 1000
+      PGID: 1000
+      PASSWORD_ACCESS: "true"
+      USER_NAME: target
+      USER_PASSWORD: targetpass
+    networks: [stack]
+
+  keygen:
+    image: alpine:3.19
+    volumes:
+      - host-keys:/keys
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        apk add --no-cache openssh >/dev/null
+        if [ ! -f /keys/host_key ]; then
+          ssh-keygen -q -t ed25519 -f /keys/host_key -N ""
+        fi
+        chmod 644 /keys/host_key /keys/host_key.pub || true
+
+  control-plane:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.control-plane
+    # Root so unix:/run/pdp.sock (mode 0660) is usable by dataplane on the shared volume.
+    user: "0:0"
+    ports:
+      - "8443:8443"
+    volumes:
+      - ../../scripts/compose-config.json:/config.json:ro
+      - proxy-data:/data
+      - pdp-socket:/run
+    command: ["-config", "/config.json"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8443/api/v1/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks: [stack]
+
+  dataplane:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.dataplane
+    user: "0:0"
+    ports:
+      - "2222:2222"
+      - "9100:9100"
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      keygen:
+        condition: service_completed_successfully
+    command:
+      - --listen=0.0.0.0:2222
+      - --node-id=compose-node
+      - --host-keys=/keys/host_key
+      - --pdp=unix:/run/pdp.sock
+      - --pdp-insecure
+      - --fail-mode=closed
+      - --audit-spool-dir=/data/spool
+      - --audit-chain-key=7553e251ed2a16ac1c63ed1ee403dbab19a064609b93c196538504b7158faef2
+      - --recording-dir=/data/recordings
+      - --recording-encryption-key=cb32c5a409a51aced4709abdfc1f02efd2a23723a05da1d1b27b2f0e62547c51
+      - --metrics-addr=0.0.0.0:9100
+    volumes:
+      - pdp-socket:/run
+      - host-keys:/keys:ro
+      - proxy-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9100/readyz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    networks: [stack]
+
+networks:
+  stack:
+    driver: bridge
+
+volumes:
+  pdp-socket:
+  host-keys:
+  proxy-data:

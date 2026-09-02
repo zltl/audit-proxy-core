@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
 )
 
 // connection is one authenticated client connection and its upstream.
@@ -138,10 +139,7 @@ func (c *connection) authorizeAndConnect(ctx context.Context) error {
 		return fmt.Errorf("access denied: %s", decision.GetReason())
 	}
 	if decision.GetApprovalRequired() {
-		// Holding the connection open while a human decides is a session-level
-		// approval; until that workflow is wired the safe answer is to refuse
-		// rather than to silently connect without the required approval.
-		return fmt.Errorf("access to this target requires approval, which is not yet available for session start")
+		return fmt.Errorf("access to this target requires approval; request just-in-time access before connecting")
 	}
 
 	c.targetID = decision.GetTargetId()
@@ -173,6 +171,7 @@ func (c *connection) authorizeAndConnect(ctx context.Context) error {
 		return fmt.Errorf("access denied: %s", opened.GetReason())
 	}
 	c.sessionID = opened.GetSessionId()
+	ctx = telemetry.SetSessionID(ctx, c.sessionID)
 
 	dialer := &upstreamDialer{proxy: c.proxy}
 	upstream, err := dialer.dial(ctx, upstreamTarget{
