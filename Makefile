@@ -24,9 +24,10 @@ demo-ascii:
 	cp demos/ascii-stream/demo.cast internal/asciidemo/demo.cast
 
 demo-ascii-gif: demo-ascii
-	@command -v agg >/dev/null 2>&1 || { echo "install agg: cargo install --git https://github.com/asciinema/agg --locked"; exit 1; }
-	agg --font-family "Adwaita Mono,DejaVu Sans Mono,Liberation Mono,Consolas" \
-		--speed 3 --idle-time-limit 2 --font-size 14 \
+	@command -v agg >/dev/null 2>&1 || command -v $(HOME)/.cargo/bin/agg >/dev/null 2>&1 || { echo "install agg: cargo install --git https://github.com/asciinema/agg --locked"; exit 1; }
+	$$(command -v agg || echo $(HOME)/.cargo/bin/agg) --theme asciinema \
+		--font-family "Adwaita Mono,DejaVu Sans Mono,Liberation Mono,Consolas" \
+		--speed 3 --idle-time-limit 2 --font-size 12 \
 		demos/ascii-stream/demo.cast docs/assets/ascii-stream-demo.gif
 
 go-smoke:

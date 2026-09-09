@@ -1,18 +1,16 @@
+<div align="center">
+
 # Audit Proxy Core
 
-<p align="center">
-  <img src="docs/assets/ascii-stream-demo.gif" alt="ASCII terminal recording stream demo" width="720"/>
-</p>
+![ASCII terminal recording stream demo](docs/assets/ascii-stream-demo.gif)
 
-<p align="center">
-  Full ASCII storyboard (asciicast v2): matrix opener → proxy handshake → command audit → policy block.
-  <a href="demos/ascii-stream/README.md">Demo guide</a> ·
-  <code>audit-proxy play --file demos/ascii-stream/demo.cast</code>
-</p>
+**Full ASCII storyboard (asciicast v2)** — matrix opener → proxy handshake → command audit → policy block
+
+[Demo guide](demos/ascii-stream/README.md) · `audit-proxy play --file demos/ascii-stream/demo.cast` · [中文文档](README.md)
+
+</div>
 
 High-performance, extensible SSH protocol proxy platform. C data plane (libssh, ~14,700 LOC) + Go control plane (REST API / Web UI / Automation / Gateway / Insights).
-
-[中文文档](README.md)
 
 ## Table of Contents
 

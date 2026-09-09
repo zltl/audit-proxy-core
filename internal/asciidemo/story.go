@@ -85,14 +85,11 @@ func Storyboard() []Frame {
 	// --- Banner ---
 	banner := []string{
 		"",
-		"   ███████╗███████╗██╗  ██╗     ██████╗ ██████╗  ██████╗ ██╗  ██╗██╗   ██╗",
-		"   ██╔════╝██╔════╝██║  ██║     ██╔══██╗██╔══██╗██╔═══██╗╚██╗██╔╝╚██╗ ██╔╝",
-		"   ███████╗███████╗███████║     ██████╔╝██████╔╝██║   ██║ ╚███╔╝  ╚████╔╝ ",
-		"   ╚════██║╚════██║██╔══██║     ██╔═══╝ ██╔══██╗██║   ██║ ██╔██╗   ╚██╔╝  ",
-		"   ███████║███████║██║  ██║     ██║     ██║  ██║╚██████╔╝██╔╝ ██╗   ██║   ",
-		"   ╚══════╝╚══════╝╚═╝  ╚═╝     ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ",
+		"                   " + cyan + bold + "╔══════════════════════════════╗" + reset,
+		"                   " + cyan + bold + "║      AUDIT PROXY CORE        ║" + reset,
+		"                   " + cyan + bold + "╚══════════════════════════════╝" + reset,
 		"",
-		"                        " + cyan + bold + "A U D I T   ·   P R O X Y   ·   C O R E" + reset,
+		"              " + dim + "session recording · asciicast v2 · live tail" + reset,
 		"",
 	}
 	var bannerBuf strings.Builder
@@ -173,7 +170,7 @@ func Storyboard() []Frame {
 		"  │  " + green + "●" + reset + " recording.complete                       │",
 		"  │  format: asciicast v2                       │",
 		"  │  live tail: /ws/sessions/{id}/live          │",
-		"  │  playback:  asciinema-player · audit-proxy play│",
+		"  │  playback:  audit-proxy play · web UI         │",
 		"  └─────────────────────────────────────────────┘",
 	}
 	for _, line := range seal {

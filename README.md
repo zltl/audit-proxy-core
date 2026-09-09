@@ -1,14 +1,14 @@
+<div align="center">
+
 # Audit Proxy Core
 
-<p align="center">
-  <img src="docs/assets/ascii-stream-demo.gif" alt="ASCII 终端录像流演示" width="720"/>
-</p>
+![ASCII 终端录像流演示](docs/assets/ascii-stream-demo.gif)
 
-<p align="center">
-  全程 ASCII 动画（asciicast v2）：矩阵开场 → 代理握手 → 命令审计 → 策略拦截。
-  <a href="demos/ascii-stream/README.md">演示说明</a> ·
-  <code>audit-proxy play --file demos/ascii-stream/demo.cast</code>
-</p>
+**asciicast v2 全程 ASCII 演示** — 矩阵开场 → 代理握手 → 命令审计 → 策略拦截
+
+[演示说明](demos/ascii-stream/README.md) · `audit-proxy play --file demos/ascii-stream/demo.cast` · [English](README_EN.md)
+
+</div>
 
 数据库为准的 SSH 审计代理。**默认栈为 Go 数据面**（`cmd/dataplane`：协议终结、录像、传输审计）+ Go 控制面（访问决策、管理 API、Web UI、审计汇）。
 
@@ -26,8 +26,6 @@
 <!-- ![Build](https://img.shields.io/github/actions/workflow/status/your-org/audit-proxy-core/ci.yml?branch=main) -->
 <!-- ![License](https://img.shields.io/badge/license-GPL--3.0--only-blue) -->
 <!-- ![Version](https://img.shields.io/badge/version-0.3.0-green) -->
-
-[English](README_EN.md)
 
 ---
 
