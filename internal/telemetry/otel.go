@@ -39,7 +39,7 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 		return func(context.Context) error { return nil }, nil
 	}
 	if cfg.ServiceName == "" {
-		cfg.ServiceName = "ssh-proxy"
+		cfg.ServiceName = "audit-proxy"
 	}
 
 	endpoint := strings.TrimSpace(cfg.Endpoint)

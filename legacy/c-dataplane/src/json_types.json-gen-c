@@ -1,4 +1,4 @@
-/* JSON types for ssh-proxy-core logging */
+/* JSON types for audit-proxy-core logging */
 
 /* File transfer record */
 struct transfer_log {

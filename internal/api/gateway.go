@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/features"
+	"github.com/zltl/audit-proxy-core/internal/features"
 )
 
 var errGatewayProxyNotFound = errors.New("gateway proxy not found")

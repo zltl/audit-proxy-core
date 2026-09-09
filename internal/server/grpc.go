@@ -6,7 +6,7 @@ import (
 	"log"
 	"net"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/grpcapi"
+	"github.com/zltl/audit-proxy-core/internal/grpcapi"
 	"google.golang.org/grpc"
 )
 

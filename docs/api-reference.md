@@ -1,4 +1,4 @@
-# SSH Proxy Core — REST API Reference
+# Audit Proxy Core — REST API Reference
 
 Base URLs:
 
@@ -68,9 +68,9 @@ JSON error body.
 
 ## SDKs and Schemas
 
-- Go SDK: `sdk/sshproxy`
-- Python SDK: `sdk/python/sshproxy`
-- gRPC proto definitions: `api/proto/sshproxy/v1/control_plane.proto`
+- Go SDK: `sdk/auditproxy`
+- Python SDK: `sdk/python/auditproxy`
+- gRPC proto definitions: `api/proto/auditproxy/v1/control_plane.proto`
 - Webhook event schema: `docs/webhook-event-schema.json`
 
 The SDKs wrap the standard API envelope and ship typed helpers for core
@@ -355,7 +355,7 @@ Get session recording metadata.
   "success": true,
   "data": {
     "session_id": "sess-abc123",
-    "recording_file": "/var/lib/ssh-proxy/recordings/session_123.cast"
+    "recording_file": "/var/lib/audit-proxy/recordings/session_123.cast"
   }
 }
 ```
@@ -539,7 +539,7 @@ Enable or disable MFA for a user.
   "data": {
     "mfa_enabled": true,
     "secret": "JBSWY3DPEBLW64TMMQ======",
-    "otpauth_uri": "otpauth://totp/SSHProxy:alice?secret=JBSWY3DPEBLW64TMMQ======&issuer=SSHProxy"
+    "otpauth_uri": "otpauth://totp/AuditProxy:alice?secret=JBSWY3DPEBLW64TMMQ======&issuer=AuditProxy"
   }
 }
 ```
@@ -1330,8 +1330,8 @@ Prometheus-format metrics.
 ```
 Content-Type: text/plain
 
-# HELP ssh_proxy_active_sessions Current active sessions
-ssh_proxy_active_sessions 12
+# HELP audit_proxy_active_sessions Current active sessions
+audit_proxy_active_sessions 12
 ...
 ```
 
@@ -1866,9 +1866,9 @@ Join the cluster using seed addresses or discovery URIs.
 {
   "seeds": [
     "10.0.0.1:8444",
-    "dns://ssh-proxy.internal:8444",
-    "k8s://ssh-proxy.default:8444",
-    "consul://consul.service.consul:8500/ssh-proxy?tag=prod"
+    "dns://audit-proxy.internal:8444",
+    "k8s://audit-proxy.default:8444",
+    "consul://consul.service.consul:8500/audit-proxy?tag=prod"
   ]
 }
 ```

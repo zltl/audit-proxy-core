@@ -1,6 +1,6 @@
 /**
  * @file password_policy.h
- * @brief SSH Proxy Core - Password Policy Module
+ * @brief Audit Proxy Core - Password Policy Module
  *
  * Validates passwords against configurable complexity requirements and
  * enforces password age during login.

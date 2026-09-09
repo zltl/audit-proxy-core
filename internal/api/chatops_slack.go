@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/jit"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 const slackSignatureMaxSkew = 5 * time.Minute

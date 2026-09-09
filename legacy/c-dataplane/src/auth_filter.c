@@ -1,6 +1,6 @@
 /**
  * @file auth_filter.c
- * @brief SSH Proxy Core - Authentication Filter Implementation
+ * @brief Audit Proxy Core - Authentication Filter Implementation
  */
 
 #include "auth_filter.h"

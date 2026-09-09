@@ -23,7 +23,7 @@ import (
 
 	crewsaml "github.com/crewjam/saml"
 	dsig "github.com/russellhaering/goxmldsig"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
+	"github.com/zltl/audit-proxy-core/internal/config"
 )
 
 func TestLoginPageShowsSAMLButtonWhenConfigured(t *testing.T) {

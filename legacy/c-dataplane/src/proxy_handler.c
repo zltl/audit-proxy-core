@@ -1,6 +1,6 @@
 /**
  * @file proxy_handler.c
- * @brief SSH Proxy Core - Connection Handler Implementation
+ * @brief Audit Proxy Core - Connection Handler Implementation
  */
 
 #include "proxy_handler.h"
@@ -1004,7 +1004,7 @@ static void send_connection_header(ssh_channel ch, const char *username,
         "\r\n"
         "\033[1;36m"
         "========================================\r\n"
-        "  SSH Proxy v%s @ %s\r\n"
+        "  Audit Proxy v%s @ %s\r\n"
         "========================================\r\n"
         "\033[0m"
         "  User:    \033[1;33m%s\033[0m\r\n"

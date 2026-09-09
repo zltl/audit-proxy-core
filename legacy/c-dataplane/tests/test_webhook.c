@@ -224,7 +224,7 @@ static int test_dead_letter_queue(void)
 {
     char dlq_path[256];
     snprintf(dlq_path, sizeof(dlq_path),
-             "/tmp/sshproxy-webhook-dlq-%ld.jsonl", (long)getpid());
+             "/tmp/audit-proxy-webhook-dlq-%ld.jsonl", (long)getpid());
     unlink(dlq_path);
 
     webhook_config_t config;
@@ -266,7 +266,7 @@ static int test_queue_full_spills_to_dead_letter(void)
 {
     char dlq_path[256];
     snprintf(dlq_path, sizeof(dlq_path),
-             "/tmp/sshproxy-webhook-queue-full-%ld.jsonl", (long)getpid());
+             "/tmp/audit-proxy-webhook-queue-full-%ld.jsonl", (long)getpid());
     unlink(dlq_path);
 
     slow_webhook_server_t server = {.listen_fd = -1};

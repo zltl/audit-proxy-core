@@ -1,6 +1,6 @@
 /**
  * @file audit_sign.h
- * @brief SSH Proxy Core - Audit Log Signing & Integrity Verification
+ * @brief Audit Proxy Core - Audit Log Signing & Integrity Verification
  *
  * Provides HMAC-SHA256 signing and chain-hash integrity for audit log lines,
  * plus a verification function to validate an entire log file.

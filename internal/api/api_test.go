@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/authn"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cmdctrl"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/discovery"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
+	"github.com/zltl/audit-proxy-core/internal/authn"
+	"github.com/zltl/audit-proxy-core/internal/cmdctrl"
+	"github.com/zltl/audit-proxy-core/internal/discovery"
+	"github.com/zltl/audit-proxy-core/internal/middleware"
+	"github.com/zltl/audit-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/sshca"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -755,7 +755,7 @@ func TestMFAQRCode(t *testing.T) {
 	}
 	resp := parseResponse(t, rr)
 	data := resp.Data.(map[string]interface{})
-	if !strings.HasPrefix(data["otpauth_uri"].(string), "otpauth://totp/SSHProxy:qruser") {
+	if !strings.HasPrefix(data["otpauth_uri"].(string), "otpauth://totp/AuditProxy:qruser") {
 		t.Errorf("unexpected otpauth_uri: %v", data["otpauth_uri"])
 	}
 }

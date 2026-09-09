@@ -1,8 +1,8 @@
-# SSH Proxy Core - 测试流程文档
+# Audit Proxy Core - 测试流程文档
 
 ## 概述
 
-本文档描述了 SSH Proxy Core 项目的完整测试流程。项目包含两个测试套件：
+本文档描述了 Audit Proxy Core 项目的完整测试流程。项目包含两个测试套件：
 
 | 测试套件 | 语言 | 测试数量 | 运行命令 |
 |---------|------|---------|---------|
@@ -32,7 +32,7 @@ go test ./... -count=1
 | 测试文件 | 测试内容 |
 |---------|---------|
 | `test_logger.c` | 日志系统初始化、级别过滤、格式化输出 |
-| `test_ssh_proxy.c` | 代理核心 API（创建、启动、停止） |
+| `test_audit_proxy.c` | 代理核心 API（创建、启动、停止） |
 | `test_ssh_server.c` | SSH 服务器（创建、密钥生成） |
 | `test_session.c` | 会话管理器（创建、状态转换、超时） |
 | `test_filter.c` | 过滤器链（添加、处理、回调） |
@@ -102,7 +102,7 @@ go test ./... -count=1
 
 ```
 ╔═══════════════════════════════════════════════════════════════╗
-║           SSH Proxy Core - Integration Tests                   ║
+║           Audit Proxy Core - Integration Tests                   ║
 ╚═══════════════════════════════════════════════════════════════╝
 
 ▶ Core Workflow Tests
@@ -146,10 +146,10 @@ Running test_rbac_workflow...
 make
 
 # 调试模式启动（端口 2222）
-./build/bin/ssh-proxy-core -d
+./build/bin/audit-proxy-core -d
 
 # 指定端口
-./build/bin/ssh-proxy-core -p 2223 -d
+./build/bin/audit-proxy-core -p 2223 -d
 ```
 
 ### 2. 测试连接
@@ -159,7 +159,7 @@ make
 ssh -p 2222 testuser@localhost
 
 # 查看审计日志
-cat /tmp/ssh_proxy_audit/audit_*.log
+cat /tmp/audit_proxy_audit/audit_*.log
 ```
 
 ### 3. 验证过滤器

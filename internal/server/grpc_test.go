@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/config"
+	"github.com/zltl/audit-proxy-core/internal/models"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -152,10 +152,10 @@ func TestControlPlaneGRPCBridge(t *testing.T) {
 	}
 	defer conn.Close()
 
-	systemClient := sshproxyv1.NewSystemServiceClient(conn)
-	sessionClient := sshproxyv1.NewSessionServiceClient(conn)
-	serverClient := sshproxyv1.NewServerServiceClient(conn)
-	configClient := sshproxyv1.NewConfigServiceClient(conn)
+	systemClient := auditproxyv1.NewSystemServiceClient(conn)
+	sessionClient := auditproxyv1.NewSessionServiceClient(conn)
+	serverClient := auditproxyv1.NewServerServiceClient(conn)
+	configClient := auditproxyv1.NewConfigServiceClient(conn)
 
 	health, err := systemClient.GetHealth(ctx, &emptypb.Empty{})
 	if err != nil {
@@ -165,7 +165,7 @@ func TestControlPlaneGRPCBridge(t *testing.T) {
 		t.Fatalf("GetHealth() = %+v, want healthy/healthy", health)
 	}
 
-	sessions, err := sessionClient.ListSessions(ctx, &sshproxyv1.ListSessionsRequest{Status: "active", Page: 1, PerPage: 10})
+	sessions, err := sessionClient.ListSessions(ctx, &auditproxyv1.ListSessionsRequest{Status: "active", Page: 1, PerPage: 10})
 	if err != nil {
 		t.Fatalf("ListSessions() error = %v", err)
 	}
@@ -173,7 +173,7 @@ func TestControlPlaneGRPCBridge(t *testing.T) {
 		t.Fatalf("ListSessions() = %+v, want sess-active only", sessions)
 	}
 
-	sessionItem, err := sessionClient.GetSession(ctx, &sshproxyv1.ResourceID{Id: "sess-active"})
+	sessionItem, err := sessionClient.GetSession(ctx, &auditproxyv1.ResourceID{Id: "sess-active"})
 	if err != nil {
 		t.Fatalf("GetSession() error = %v", err)
 	}
@@ -181,7 +181,7 @@ func TestControlPlaneGRPCBridge(t *testing.T) {
 		t.Fatalf("GetSession().username = %q, want alice", sessionItem.GetUsername())
 	}
 
-	killStatus, err := sessionClient.KillSession(ctx, &sshproxyv1.ResourceID{Id: "sess-active"})
+	killStatus, err := sessionClient.KillSession(ctx, &auditproxyv1.ResourceID{Id: "sess-active"})
 	if err != nil {
 		t.Fatalf("KillSession() error = %v", err)
 	}
@@ -189,7 +189,7 @@ func TestControlPlaneGRPCBridge(t *testing.T) {
 		t.Fatalf("KillSession().message = %q", killStatus.GetMessage())
 	}
 
-	servers, err := serverClient.ListServers(ctx, &sshproxyv1.ListServersRequest{Page: 1, PerPage: 10})
+	servers, err := serverClient.ListServers(ctx, &auditproxyv1.ListServersRequest{Page: 1, PerPage: 10})
 	if err != nil {
 		t.Fatalf("ListServers() error = %v", err)
 	}

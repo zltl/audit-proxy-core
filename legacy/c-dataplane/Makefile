@@ -51,7 +51,7 @@ JSON_GEN_C := $(GEN_DIR)/json.gen.c
 JSON_SSTR_H := $(GEN_DIR)/sstr.h
 JSON_SSTR_C := $(GEN_DIR)/sstr.c
 
-TARGET := ssh-proxy-core
+TARGET := audit-proxy-core
 LIB_TARGET := libsshproxy.a
 
 SRCS := $(wildcard $(SRC_DIR)/*.c)

@@ -12,7 +12,7 @@ func TestGetConfigParsesINIFile(t *testing.T) {
 	iniConfig := `[server]
 bind_addr = 127.0.0.1
 port = 2200
-host_key = /etc/ssh-proxy/host_key
+host_key = /etc/audit-proxy/host_key
 show_progress = false
 
 [logging]
@@ -57,7 +57,7 @@ events = auth.success, session.start
 [network_sources]
 office_cidrs = 10.0.0.0/8
 vpn_cidrs = 100.64.0.0/10
-geoip_data_file = /etc/ssh-proxy/geoip.json
+geoip_data_file = /etc/audit-proxy/geoip.json
 
 [route:admin]
 upstream = prod-1
@@ -105,7 +105,7 @@ login_timezone = +08:00
 	if data["source_office_cidrs"] != "10.0.0.0/8" || data["source_vpn_cidrs"] != "100.64.0.0/10" {
 		t.Fatalf("expected parsed network source cidrs, got office=%#v vpn=%#v", data["source_office_cidrs"], data["source_vpn_cidrs"])
 	}
-	if data["source_geoip_data_file"] != "/etc/ssh-proxy/geoip.json" {
+	if data["source_geoip_data_file"] != "/etc/audit-proxy/geoip.json" {
 		t.Fatalf("expected parsed geoip data path, got %#v", data["source_geoip_data_file"])
 	}
 	if !data["mfa_enabled"].(bool) {
@@ -161,7 +161,7 @@ func TestExportConfigRendersINIAndYAML(t *testing.T) {
   "webhook_hmac_secret": "super-secret",
   "source_office_cidrs": "10.0.0.0/8",
   "source_vpn_cidrs": "100.64.0.0/10",
-  "source_geoip_data_file": "/etc/ssh-proxy/geoip.json",
+  "source_geoip_data_file": "/etc/audit-proxy/geoip.json",
   "routes": [
     {
       "pattern": "*",
@@ -197,7 +197,7 @@ func TestExportConfigRendersINIAndYAML(t *testing.T) {
 	resp := parseResponse(t, rr)
 	data := resp.Data.(map[string]interface{})
 	content := data["content"].(string)
-	for _, needle := range []string{"[server]", "bind_addr = 0.0.0.0", "[router]", "retry_max = 4", "retry_initial_delay_ms = 150", "retry_max_delay_ms = 2500", "retry_backoff_factor = 1.5", "circuit_breaker_enabled = true", "circuit_breaker_failure_threshold = 5", "circuit_breaker_open_seconds = 45", "[webhook]", "hmac_secret = super-secret", "[network_sources]", "office_cidrs = 10.0.0.0/8", "vpn_cidrs = 100.64.0.0/10", "geoip_data_file = /etc/ssh-proxy/geoip.json", "[route:*]", "region = California", "city = San Francisco", "latitude = 37.7749", "longitude = -122.4194", "[policy:*]", "allowed_source_types = office, vpn", "denied_source_types = public", "login_window = 09:00-18:00", "login_days = mon-fri", "login_timezone = +08:00"} {
+	for _, needle := range []string{"[server]", "bind_addr = 0.0.0.0", "[router]", "retry_max = 4", "retry_initial_delay_ms = 150", "retry_max_delay_ms = 2500", "retry_backoff_factor = 1.5", "circuit_breaker_enabled = true", "circuit_breaker_failure_threshold = 5", "circuit_breaker_open_seconds = 45", "[webhook]", "hmac_secret = super-secret", "[network_sources]", "office_cidrs = 10.0.0.0/8", "vpn_cidrs = 100.64.0.0/10", "geoip_data_file = /etc/audit-proxy/geoip.json", "[route:*]", "region = California", "city = San Francisco", "latitude = 37.7749", "longitude = -122.4194", "[policy:*]", "allowed_source_types = office, vpn", "denied_source_types = public", "login_window = 09:00-18:00", "login_days = mon-fri", "login_timezone = +08:00"} {
 		if !strings.Contains(content, needle) {
 			t.Fatalf("expected INI export to contain %q, got %s", needle, content)
 		}
@@ -210,7 +210,7 @@ func TestExportConfigRendersINIAndYAML(t *testing.T) {
 	resp = parseResponse(t, rr)
 	data = resp.Data.(map[string]interface{})
 	content = data["content"].(string)
-	for _, needle := range []string{"bind_addr: 0.0.0.0", "router_retry_max: 4", "router_retry_initial_delay_ms: 150", "router_retry_max_delay_ms: 2500", "router_retry_backoff_factor: 1.5", "router_circuit_breaker_enabled: true", "router_circuit_breaker_failure_threshold: 5", "router_circuit_breaker_open_seconds: 45", "webhook_hmac_secret: super-secret", "source_office_cidrs: 10.0.0.0/8", "source_vpn_cidrs: 100.64.0.0/10", "source_geoip_data_file: /etc/ssh-proxy/geoip.json", "routes:", "region: California", "city: San Francisco", "latitude: 37.7749", "longitude: -122.4194", "allowed_source_types:", "denied_source_types:", "login_window: 09:00-18:00", "login_days: mon-fri", "login_timezone: \"+08:00\""} {
+	for _, needle := range []string{"bind_addr: 0.0.0.0", "router_retry_max: 4", "router_retry_initial_delay_ms: 150", "router_retry_max_delay_ms: 2500", "router_retry_backoff_factor: 1.5", "router_circuit_breaker_enabled: true", "router_circuit_breaker_failure_threshold: 5", "router_circuit_breaker_open_seconds: 45", "webhook_hmac_secret: super-secret", "source_office_cidrs: 10.0.0.0/8", "source_vpn_cidrs: 100.64.0.0/10", "source_geoip_data_file: /etc/audit-proxy/geoip.json", "routes:", "region: California", "city: San Francisco", "latitude: 37.7749", "longitude: -122.4194", "allowed_source_types:", "denied_source_types:", "login_window: 09:00-18:00", "login_days: mon-fri", "login_timezone: \"+08:00\""} {
 		if !strings.Contains(content, needle) {
 			t.Fatalf("expected YAML export to contain %q, got %s", needle, content)
 		}

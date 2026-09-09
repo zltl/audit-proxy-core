@@ -1,6 +1,6 @@
 /**
  * @file account_lock.c
- * @brief SSH Proxy Core - Account Lockout Implementation
+ * @brief Audit Proxy Core - Account Lockout Implementation
  *
  * Uses an open-addressing hash table for O(1) username lookups.
  * All operations are protected by a pthread_mutex for thread safety.

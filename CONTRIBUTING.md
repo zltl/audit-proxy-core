@@ -1,4 +1,4 @@
-# Contributing to SSH Proxy Core
+# Contributing to Audit Proxy Core
 
 Thank you for your interest in contributing! This document provides guidelines
 for contributing to the project.

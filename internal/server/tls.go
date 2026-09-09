@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
+	"github.com/zltl/audit-proxy-core/internal/config"
 	"golang.org/x/crypto/acme/autocert"
 )
 
@@ -130,7 +130,7 @@ func generateSelfSignedCertificate(hosts []string) (tls.Certificate, error) {
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			CommonName:   firstHost(hosts),
-			Organization: []string{"SSH Proxy Core Self-Signed"},
+			Organization: []string{"Audit Proxy Core Self-Signed"},
 		},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(90 * 24 * time.Hour),

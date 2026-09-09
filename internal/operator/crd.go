@@ -12,7 +12,7 @@ func CRDObject() map[string]interface{} {
 			"scope": "Namespaced",
 			"names": map[string]interface{}{
 				"plural":   Plural,
-				"singular": "sshproxycluster",
+				"singular": "auditproxycluster",
 				"kind":     Kind,
 				"shortNames": []string{
 					"spc",

@@ -4,7 +4,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
+	"github.com/zltl/audit-proxy-core/internal/middleware"
 )
 
 func (s *Server) registerSAMLRoutes() {

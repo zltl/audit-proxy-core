@@ -4,7 +4,7 @@ output "admin_username" {
 }
 
 output "server_data" {
-  description = "Server information from the SSH Proxy control plane"
+  description = "Server information from the Audit Proxy control plane"
   value       = data.external.servers.result
 }
 

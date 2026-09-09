@@ -8,13 +8,13 @@ import (
 )
 
 func TestRenderResourcesIncludesManagedObjects(t *testing.T) {
-	cluster := SSHProxyCluster{
+	cluster := AuditProxyCluster{
 		Metadata: ObjectMeta{
 			Name:      "example",
 			Namespace: "ops",
 			UID:       "uid-1",
 		},
-		Spec: SSHProxyClusterSpec{
+		Spec: AuditProxyClusterSpec{
 			Config: ConfigSpec{
 				ControlPlaneJSON: `{"listen_addr":":8443","session_secret":"secret","admin_user":"admin","admin_pass_hash":"hash","data_plane_addr":"http://127.0.0.1:9090"}`,
 				DataPlaneINI:     "[server]\nport = 2222\n",
@@ -64,14 +64,14 @@ func TestReconcilerAppliesResourcesAndUpdatesReadyStatus(t *testing.T) {
 			return time.Unix(1710000000, 0).UTC()
 		},
 	}
-	cluster := SSHProxyCluster{
+	cluster := AuditProxyCluster{
 		Metadata: ObjectMeta{
 			Name:       "example",
 			Namespace:  "ops",
 			UID:        "uid-1",
 			Generation: 3,
 		},
-		Spec: SSHProxyClusterSpec{
+		Spec: AuditProxyClusterSpec{
 			Config: ConfigSpec{
 				ControlPlaneJSON: `{"listen_addr":":8443","session_secret":"secret","admin_user":"admin","admin_pass_hash":"hash","data_plane_addr":"http://127.0.0.1:9090"}`,
 				DataPlaneINI:     "[server]\nport = 2222\n",
@@ -99,9 +99,9 @@ func TestReconcilerWritesErrorStatusForInvalidSpec(t *testing.T) {
 		Client:    fake,
 		Namespace: "ops",
 	}
-	cluster := SSHProxyCluster{
+	cluster := AuditProxyCluster{
 		Metadata: ObjectMeta{Name: "bad", Namespace: "ops", Generation: 1},
-		Spec:     SSHProxyClusterSpec{},
+		Spec:     AuditProxyClusterSpec{},
 	}
 	if err := reconciler.ReconcileCluster(context.Background(), cluster); err == nil {
 		t.Fatal("expected validation error")
@@ -113,12 +113,12 @@ func TestReconcilerWritesErrorStatusForInvalidSpec(t *testing.T) {
 
 type fakeClient struct {
 	applied []map[string]interface{}
-	status  SSHProxyClusterStatus
+	status  AuditProxyClusterStatus
 }
 
 func (f *fakeClient) EnsureCRD(context.Context) error { return nil }
 
-func (f *fakeClient) ListClusters(context.Context, string) ([]SSHProxyCluster, error) {
+func (f *fakeClient) ListClusters(context.Context, string) ([]AuditProxyCluster, error) {
 	return nil, nil
 }
 
@@ -130,7 +130,7 @@ func (f *fakeClient) Apply(_ context.Context, obj map[string]interface{}) error 
 	return nil
 }
 
-func (f *fakeClient) UpdateStatus(_ context.Context, _, _ string, status SSHProxyClusterStatus) error {
+func (f *fakeClient) UpdateStatus(_ context.Context, _, _ string, status AuditProxyClusterStatus) error {
 	f.status = status
 	return nil
 }

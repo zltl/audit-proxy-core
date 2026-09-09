@@ -6,8 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cmdctrl"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
+	"github.com/zltl/audit-proxy-core/internal/cmdctrl"
+	"github.com/zltl/audit-proxy-core/internal/jit"
 )
 
 // JITGrantChecker adapts the JIT store to GrantChecker.

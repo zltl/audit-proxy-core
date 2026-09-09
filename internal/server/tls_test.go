@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
+	"github.com/zltl/audit-proxy-core/internal/config"
 	"golang.org/x/crypto/acme"
 )
 

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/secrets"
+	"github.com/zltl/audit-proxy-core/internal/secrets"
 )
 
 // ErrNoSealer is returned when secret material is requested from a Store that

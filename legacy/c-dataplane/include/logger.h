@@ -1,6 +1,6 @@
 /**
  * @file logger.h
- * @brief SSH Proxy Core - Logging System
+ * @brief Audit Proxy Core - Logging System
  */
 
 #ifndef SSH_PROXY_LOGGER_H

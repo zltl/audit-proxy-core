@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 // BuildDashboardSnapshot returns the composite payload used by the realtime dashboard.

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/threat"
+	"github.com/zltl/audit-proxy-core/internal/jit"
+	"github.com/zltl/audit-proxy-core/internal/threat"
 )
 
 func TestThreatResponseAppliesActions(t *testing.T) {

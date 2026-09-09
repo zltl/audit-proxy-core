@@ -1,5 +1,5 @@
 #!/bin/bash
-# SSH Proxy Core - 实际环境配置与验证脚本
+# Audit Proxy Core - 实际环境配置与验证脚本
 # 用法: ./scripts/setup-and-verify.sh
 
 set -e
@@ -20,13 +20,13 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 PROXY_PORT=${PROXY_PORT:-2222}
 UPSTREAM_HOST=${UPSTREAM_HOST:-127.0.0.1}
 UPSTREAM_PORT=${UPSTREAM_PORT:-22}
-HOST_KEY=${HOST_KEY:-/etc/ssh-proxy/host_key}
-AUDIT_DIR=${AUDIT_DIR:-/var/log/ssh-proxy/audit}
-CONFIG_DIR=${CONFIG_DIR:-/etc/ssh-proxy}
-PID_FILE=${PID_FILE:-/var/run/ssh-proxy.pid}
+HOST_KEY=${HOST_KEY:-/etc/audit-proxy/host_key}
+AUDIT_DIR=${AUDIT_DIR:-/var/log/audit-proxy/audit}
+CONFIG_DIR=${CONFIG_DIR:-/etc/audit-proxy}
+PID_FILE=${PID_FILE:-/var/run/audit-proxy.pid}
 
 echo "╔═══════════════════════════════════════════════════════════════╗"
-echo "║         SSH Proxy Core - 环境配置与验证                       ║"
+echo "║         Audit Proxy Core - 环境配置与验证                       ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo
 
@@ -99,10 +99,10 @@ if [ "$EUID" -eq 0 ]; then
     log_success "创建目录: $CONFIG_DIR, $AUDIT_DIR"
 else
     log_warn "非 root 用户，使用临时目录"
-    CONFIG_DIR="/tmp/ssh-proxy"
-    AUDIT_DIR="/tmp/ssh-proxy/audit"
-    HOST_KEY="/tmp/ssh-proxy/host_key"
-    PID_FILE="/tmp/ssh-proxy/ssh-proxy.pid"
+    CONFIG_DIR="/tmp/audit-proxy"
+    AUDIT_DIR="/tmp/audit-proxy/audit"
+    HOST_KEY="/tmp/audit-proxy/host_key"
+    PID_FILE="/tmp/audit-proxy/audit-proxy.pid"
     mkdir -p "$CONFIG_DIR"
     mkdir -p "$AUDIT_DIR"
 fi
@@ -132,7 +132,7 @@ fi
 
 # 启动代理 (后台)
 log_info "启动代理服务器 (端口: $PROXY_PORT)..."
-./build/bin/ssh-proxy-core -p "$PROXY_PORT" -k "$HOST_KEY" -d &
+./build/bin/audit-proxy-core -p "$PROXY_PORT" -k "$HOST_KEY" -d &
 PROXY_PID=$!
 echo $PROXY_PID > "$PID_FILE"
 
@@ -204,8 +204,8 @@ echo "  - 审计目录: $AUDIT_DIR"
 echo "  - 配置目录: $CONFIG_DIR"
 echo
 echo "生产环境启动命令:"
-echo "  ./build/bin/ssh-proxy-core -p $PROXY_PORT -k $HOST_KEY"
+echo "  ./build/bin/audit-proxy-core -p $PROXY_PORT -k $HOST_KEY"
 echo
 echo "调试模式启动命令:"
-echo "  ./build/bin/ssh-proxy-core -p $PROXY_PORT -k $HOST_KEY -d"
+echo "  ./build/bin/audit-proxy-core -p $PROXY_PORT -k $HOST_KEY -d"
 echo

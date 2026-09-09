@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
 )
 
 // Authenticate forwards one authentication step.
@@ -17,7 +17,7 @@ import (
 // Authentication is never served from cache and never softened by the fail
 // mode: admitting somebody whose credentials could not be checked is the one
 // outcome that cannot be walked back.
-func (c *Client) Authenticate(ctx context.Context, req *sshproxyv1.AuthenticateRequest) (*sshproxyv1.AuthenticateResponse, error) {
+func (c *Client) Authenticate(ctx context.Context, req *auditproxyv1.AuthenticateRequest) (*auditproxyv1.AuthenticateResponse, error) {
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
 
@@ -33,10 +33,10 @@ func (c *Client) Authenticate(ctx context.Context, req *sshproxyv1.AuthenticateR
 }
 
 // AuthorizeSession asks whether a session may be opened.
-func (c *Client) AuthorizeSession(ctx context.Context, req *sshproxyv1.AuthorizeSessionRequest) (*sshproxyv1.AuthorizeSessionResponse, error) {
+func (c *Client) AuthorizeSession(ctx context.Context, req *auditproxyv1.AuthorizeSessionRequest) (*auditproxyv1.AuthorizeSessionResponse, error) {
 	key := sessionCacheKey(req)
 	if cached, ok := c.cache.Get(key); ok {
-		if resp, ok := cached.(*sshproxyv1.AuthorizeSessionResponse); ok {
+		if resp, ok := cached.(*auditproxyv1.AuthorizeSessionResponse); ok {
 			return resp, nil
 		}
 	}
@@ -63,7 +63,7 @@ func (c *Client) AuthorizeSession(ctx context.Context, req *sshproxyv1.Authorize
 }
 
 // sessionFallback applies the fail mode when the decision point is unreachable.
-func (c *Client) sessionFallback(cause error, req *sshproxyv1.AuthorizeSessionRequest) (*sshproxyv1.AuthorizeSessionResponse, error) {
+func (c *Client) sessionFallback(cause error, req *auditproxyv1.AuthorizeSessionRequest) (*auditproxyv1.AuthorizeSessionResponse, error) {
 	if c.iniFallback != nil {
 		if resp, ok := c.iniFallback.evaluate(req); ok {
 			return resp, nil
@@ -71,7 +71,7 @@ func (c *Client) sessionFallback(cause error, req *sshproxyv1.AuthorizeSessionRe
 	}
 	if c.config.FailMode == FailOpen {
 		log.Printf("pdpclient: decision point unreachable (%v); admitting the session because fail_mode is open", cause)
-		return &sshproxyv1.AuthorizeSessionResponse{
+		return &auditproxyv1.AuthorizeSessionResponse{
 			Allowed: true,
 			Reason:  "decision point unreachable; admitted under fail-open policy",
 			Features: []string{
@@ -79,13 +79,13 @@ func (c *Client) sessionFallback(cause error, req *sshproxyv1.AuthorizeSessionRe
 			},
 		}, nil
 	}
-	return &sshproxyv1.AuthorizeSessionResponse{
+	return &auditproxyv1.AuthorizeSessionResponse{
 		Allowed: false,
 		Reason:  "the access policy could not be consulted; refusing",
 	}, nil
 }
 
-func sessionCacheKey(req *sshproxyv1.AuthorizeSessionRequest) string {
+func sessionCacheKey(req *auditproxyv1.AuthorizeSessionRequest) string {
 	var b strings.Builder
 	b.WriteString("session\x00")
 	b.WriteString(req.GetUsername())
@@ -103,7 +103,7 @@ func sessionCacheKey(req *sshproxyv1.AuthorizeSessionRequest) string {
 }
 
 // AuthorizeChannel asks whether a channel or channel request may proceed.
-func (c *Client) AuthorizeChannel(ctx context.Context, req *sshproxyv1.AuthorizeChannelRequest) (*sshproxyv1.AuthorizeChannelResponse, error) {
+func (c *Client) AuthorizeChannel(ctx context.Context, req *auditproxyv1.AuthorizeChannelRequest) (*auditproxyv1.AuthorizeChannelResponse, error) {
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
 
@@ -114,12 +114,12 @@ func (c *Client) AuthorizeChannel(ctx context.Context, req *sshproxyv1.Authorize
 		}
 		c.markUnhealthy(err)
 		if c.config.FailMode == FailOpen {
-			return &sshproxyv1.AuthorizeChannelResponse{
+			return &auditproxyv1.AuthorizeChannelResponse{
 				Allowed: true,
 				Reason:  "decision point unreachable; permitted under fail-open policy",
 			}, nil
 		}
-		return &sshproxyv1.AuthorizeChannelResponse{
+		return &auditproxyv1.AuthorizeChannelResponse{
 			Allowed: false,
 			Reason:  "the access policy could not be consulted; refusing",
 		}, nil
@@ -131,7 +131,7 @@ func (c *Client) AuthorizeChannel(ctx context.Context, req *sshproxyv1.Authorize
 // CommandDecisionFunc receives each stage of a command decision. Approval turns
 // one request into two answers, so the caller is handed both rather than only
 // the last.
-type CommandDecisionFunc func(*sshproxyv1.AuthorizeCommandResponse)
+type CommandDecisionFunc func(*auditproxyv1.AuthorizeCommandResponse)
 
 // AuthorizeCommand screens a command, blocking while an approval is pending.
 //
@@ -140,9 +140,9 @@ type CommandDecisionFunc func(*sshproxyv1.AuthorizeCommandResponse)
 // instead of leaving them staring at nothing.
 func (c *Client) AuthorizeCommand(
 	ctx context.Context,
-	req *sshproxyv1.AuthorizeCommandRequest,
+	req *auditproxyv1.AuthorizeCommandRequest,
 	onUpdate CommandDecisionFunc,
-) (*sshproxyv1.AuthorizeCommandResponse, error) {
+) (*auditproxyv1.AuthorizeCommandResponse, error) {
 	// No per-call timeout here: an approval legitimately takes as long as the
 	// approver does, and the caller's context already bounds the session.
 	stream, err := c.api.AuthorizeCommand(ctx, req)
@@ -154,7 +154,7 @@ func (c *Client) AuthorizeCommand(
 		return c.commandFallback(), nil
 	}
 
-	var last *sshproxyv1.AuthorizeCommandResponse
+	var last *auditproxyv1.AuthorizeCommandResponse
 	for {
 		resp, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -165,7 +165,7 @@ func (c *Client) AuthorizeCommand(
 				return nil, err
 			}
 			c.markUnhealthy(err)
-			if last != nil && last.GetDecision() != sshproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL {
+			if last != nil && last.GetDecision() != auditproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL {
 				return last, nil
 			}
 			return c.commandFallback(), nil
@@ -175,7 +175,7 @@ func (c *Client) AuthorizeCommand(
 		if onUpdate != nil {
 			onUpdate(resp)
 		}
-		if resp.GetDecision() != sshproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL {
+		if resp.GetDecision() != auditproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL {
 			// A terminal decision arrived; nothing further is expected.
 			break
 		}
@@ -186,15 +186,15 @@ func (c *Client) AuthorizeCommand(
 	return last, nil
 }
 
-func (c *Client) commandFallback() *sshproxyv1.AuthorizeCommandResponse {
+func (c *Client) commandFallback() *auditproxyv1.AuthorizeCommandResponse {
 	if c.config.FailMode == FailOpen {
-		return &sshproxyv1.AuthorizeCommandResponse{
-			Decision: sshproxyv1.CommandDecision_COMMAND_DECISION_ALLOW,
+		return &auditproxyv1.AuthorizeCommandResponse{
+			Decision: auditproxyv1.CommandDecision_COMMAND_DECISION_ALLOW,
 			Reason:   "command policy could not be consulted; allowed under fail-open policy",
 		}
 	}
-	return &sshproxyv1.AuthorizeCommandResponse{
-		Decision: sshproxyv1.CommandDecision_COMMAND_DECISION_DENY,
+	return &auditproxyv1.AuthorizeCommandResponse{
+		Decision: auditproxyv1.CommandDecision_COMMAND_DECISION_DENY,
 		Reason:   "command policy could not be consulted; refusing",
 	}
 }
@@ -205,7 +205,7 @@ func (c *Client) commandFallback() *sshproxyv1.AuthorizeCommandResponse {
 // key is refused even under fail-open, because proceeding would mean recording
 // a session with something that may not be the intended host, which defeats the
 // purpose of the proxy rather than merely inconveniencing a user.
-func (c *Client) ResolveHostKey(ctx context.Context, req *sshproxyv1.ResolveHostKeyRequest) (*sshproxyv1.ResolveHostKeyResponse, error) {
+func (c *Client) ResolveHostKey(ctx context.Context, req *auditproxyv1.ResolveHostKeyRequest) (*auditproxyv1.ResolveHostKeyResponse, error) {
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
 
@@ -213,8 +213,8 @@ func (c *Client) ResolveHostKey(ctx context.Context, req *sshproxyv1.ResolveHost
 	if err != nil {
 		if unreachable(err) {
 			c.markUnhealthy(err)
-			return &sshproxyv1.ResolveHostKeyResponse{
-				Verdict: sshproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_REJECTED,
+			return &auditproxyv1.ResolveHostKeyResponse{
+				Verdict: auditproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_REJECTED,
 				Reason:  "the host key trust store could not be consulted",
 				Proceed: false,
 			}, nil
@@ -226,7 +226,7 @@ func (c *Client) ResolveHostKey(ctx context.Context, req *sshproxyv1.ResolveHost
 }
 
 // IssueUpstreamCredential fetches the material for connecting to the upstream.
-func (c *Client) IssueUpstreamCredential(ctx context.Context, req *sshproxyv1.IssueUpstreamCredentialRequest) (*sshproxyv1.IssueUpstreamCredentialResponse, error) {
+func (c *Client) IssueUpstreamCredential(ctx context.Context, req *auditproxyv1.IssueUpstreamCredentialRequest) (*auditproxyv1.IssueUpstreamCredentialResponse, error) {
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
 
@@ -243,7 +243,7 @@ func (c *Client) IssueUpstreamCredential(ctx context.Context, req *sshproxyv1.Is
 }
 
 // OpenSession registers a session.
-func (c *Client) OpenSession(ctx context.Context, req *sshproxyv1.OpenSessionRequest) (*sshproxyv1.OpenSessionResponse, error) {
+func (c *Client) OpenSession(ctx context.Context, req *auditproxyv1.OpenSessionRequest) (*auditproxyv1.OpenSessionResponse, error) {
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
 
@@ -258,13 +258,13 @@ func (c *Client) OpenSession(ctx context.Context, req *sshproxyv1.OpenSessionReq
 			// remotely, which is called out so it is visible in the log rather
 			// than discovered when somebody tries to terminate it.
 			log.Printf("pdpclient: session registry unreachable; proceeding without a shared session record")
-			return &sshproxyv1.OpenSessionResponse{
+			return &auditproxyv1.OpenSessionResponse{
 				SessionId: "local-" + time.Now().UTC().Format("20060102150405.000000000"),
 				Allowed:   true,
 				Reason:    "session registry unreachable; not recorded centrally",
 			}, nil
 		}
-		return &sshproxyv1.OpenSessionResponse{
+		return &auditproxyv1.OpenSessionResponse{
 			Allowed: false,
 			Reason:  "the session registry could not be reached; refusing",
 		}, nil
@@ -278,7 +278,7 @@ func (c *Client) HeartbeatSession(ctx context.Context, sessionID string, bytesIn
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
 
-	resp, err := c.api.HeartbeatSession(callCtx, &sshproxyv1.HeartbeatSessionRequest{
+	resp, err := c.api.HeartbeatSession(callCtx, &auditproxyv1.HeartbeatSessionRequest{
 		SessionId: sessionID, BytesIn: bytesIn, BytesOut: bytesOut,
 	})
 	if err != nil {
@@ -299,7 +299,7 @@ func (c *Client) HeartbeatSession(ctx context.Context, sessionID string, bytesIn
 }
 
 // CloseSession records the end of a session.
-func (c *Client) CloseSession(ctx context.Context, req *sshproxyv1.CloseSessionRequest) error {
+func (c *Client) CloseSession(ctx context.Context, req *auditproxyv1.CloseSessionRequest) error {
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
 
@@ -317,7 +317,7 @@ func (c *Client) CloseSession(ctx context.Context, req *sshproxyv1.CloseSessionR
 // WatchRevocations delivers termination requests for this node until the
 // context ends. It reconnects on failure, because a dropped stream must not
 // quietly stop a node from hearing about kills.
-func (c *Client) WatchRevocations(ctx context.Context, handle func(*sshproxyv1.Revocation)) {
+func (c *Client) WatchRevocations(ctx context.Context, handle func(*auditproxyv1.Revocation)) {
 	backoff := time.Second
 	const maxBackoff = 30 * time.Second
 
@@ -325,7 +325,7 @@ func (c *Client) WatchRevocations(ctx context.Context, handle func(*sshproxyv1.R
 		if ctx.Err() != nil {
 			return
 		}
-		stream, err := c.api.StreamRevocations(ctx, &sshproxyv1.StreamRevocationsRequest{
+		stream, err := c.api.StreamRevocations(ctx, &auditproxyv1.StreamRevocationsRequest{
 			NodeId: c.config.NodeID,
 		})
 		if err == nil {
@@ -363,7 +363,7 @@ func (c *Client) WatchRevocations(ctx context.Context, handle func(*sshproxyv1.R
 // failure here delays delivery rather than losing it. A partial acceptance is
 // treated as a failure for the same reason: replaying a few records is
 // harmless because the store deduplicates them, whereas dropping any is not.
-func (c *Client) ReportEvents(ctx context.Context, nodeID string, events []*sshproxyv1.AuditEvent) error {
+func (c *Client) ReportEvents(ctx context.Context, nodeID string, events []*auditproxyv1.AuditEvent) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -377,7 +377,7 @@ func (c *Client) ReportEvents(ctx context.Context, nodeID string, events []*sshp
 		}
 		return err
 	}
-	if err := stream.Send(&sshproxyv1.AuditEventBatch{NodeId: nodeID, Events: events}); err != nil {
+	if err := stream.Send(&auditproxyv1.AuditEventBatch{NodeId: nodeID, Events: events}); err != nil {
 		if unreachable(err) {
 			c.markUnhealthy(err)
 		}

@@ -10,15 +10,15 @@ func TestMetricsRenderPrometheusFormat(t *testing.T) {
 	m := NewMetrics()
 	m.SessionsStarted.Add(3)
 	m.HostKeysRefused.Add(1)
-	m.SetGauge("ssh_proxy_sessions_active", func() float64 { return 2 })
+	m.SetGauge("audit_proxy_sessions_active", func() float64 { return 2 })
 
 	output := m.Render()
 	for _, want := range []string{
-		"# TYPE ssh_proxy_sessions_started_total counter",
-		"ssh_proxy_sessions_started_total 3",
-		"ssh_proxy_host_keys_refused_total 1",
-		"# TYPE ssh_proxy_sessions_active gauge",
-		"ssh_proxy_sessions_active 2",
+		"# TYPE audit_proxy_sessions_started_total counter",
+		"audit_proxy_sessions_started_total 3",
+		"audit_proxy_host_keys_refused_total 1",
+		"# TYPE audit_proxy_sessions_active gauge",
+		"audit_proxy_sessions_active 2",
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("output is missing %q:\n%s", want, output)
@@ -40,15 +40,15 @@ func TestMetricsRenderPrometheusFormat(t *testing.T) {
 func TestMetricsGaugesAreSampledAtScrapeTime(t *testing.T) {
 	m := NewMetrics()
 	value := 1.0
-	m.SetGauge("ssh_proxy_sessions_active", func() float64 { return value })
+	m.SetGauge("audit_proxy_sessions_active", func() float64 { return value })
 
-	if !strings.Contains(m.Render(), "ssh_proxy_sessions_active 1") {
+	if !strings.Contains(m.Render(), "audit_proxy_sessions_active 1") {
 		t.Fatal("gauge was not rendered")
 	}
 	// Reading at scrape time rather than tracking incrementally means the value
 	// cannot drift away from reality.
 	value = 7
-	if !strings.Contains(m.Render(), "ssh_proxy_sessions_active 7") {
+	if !strings.Contains(m.Render(), "audit_proxy_sessions_active 7") {
 		t.Fatal("the gauge did not reflect the current value")
 	}
 }
@@ -66,7 +66,7 @@ func TestMetricsHandler(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
 		t.Errorf("content type = %q", got)
 	}
-	if !strings.Contains(rec.Body.String(), "ssh_proxy_sessions_started_total 1") {
+	if !strings.Contains(rec.Body.String(), "audit_proxy_sessions_started_total 1") {
 		t.Errorf("body = %s", rec.Body.String())
 	}
 }

@@ -1,0 +1,35 @@
+[Unit]
+Description=Audit Proxy Core Server
+Documentation=https://github.com/your-org/audit-proxy-core
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=audit-proxy
+Group=audit-proxy
+ExecStart=/usr/local/bin/audit-proxy-core -c /etc/audit-proxy/config.ini
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ReadWritePaths=/var/log/audit-proxy
+ReadOnlyPaths=/etc/audit-proxy
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

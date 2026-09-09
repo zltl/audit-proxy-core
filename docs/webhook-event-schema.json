@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/ssh-proxy-core/ssh-proxy-core/docs/webhook-event-schema.json",
-  "title": "SSH Proxy Webhook Event",
-  "description": "Schema for webhook payloads emitted by the SSH Proxy Core data plane.",
+  "$id": "https://github.com/zltl/audit-proxy-core/docs/webhook-event-schema.json",
+  "title": "Audit Proxy Webhook Event",
+  "description": "Schema for webhook payloads emitted by the Audit Proxy Core data plane.",
   "type": "object",
   "additionalProperties": false,
   "required": [

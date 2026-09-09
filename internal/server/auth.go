@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/authn"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
+	"github.com/zltl/audit-proxy-core/internal/authn"
+	"github.com/zltl/audit-proxy-core/internal/middleware"
 
 	"golang.org/x/crypto/bcrypt"
 )

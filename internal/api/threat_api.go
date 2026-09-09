@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/threat"
+	"github.com/zltl/audit-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/threat"
 )
 
 // SetThreat attaches a threat detector to the API for threat detection endpoints.

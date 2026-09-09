@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/auditchain"
+	"github.com/zltl/audit-proxy-core/internal/auditchain"
 )
 
 // chainWriter produces a valid chain of audit records the way the data plane

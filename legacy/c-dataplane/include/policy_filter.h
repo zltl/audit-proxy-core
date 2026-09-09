@@ -1,6 +1,6 @@
 /**
  * @file policy_filter.h
- * @brief SSH Proxy Core - Policy Filter
+ * @brief Audit Proxy Core - Policy Filter
  *
  * Controls SSH feature access: shell, exec, scp, sftp, port forwarding,
  * git operations, file transfer logging, etc.

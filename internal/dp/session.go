@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
 )
 
 // ptyRequest is the payload of a pty-req channel request.
@@ -187,7 +187,7 @@ func (s *sessionChannel) screenRequest(ctx context.Context, req *ssh.Request) (a
 			s.interactive = true
 			s.mu.Unlock()
 		}
-		return s.authorize(ctx, sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_PTY, "", req), false
+		return s.authorize(ctx, auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_PTY, "", req), false
 
 	case "window-change":
 		var payload windowChangeRequest
@@ -201,10 +201,10 @@ func (s *sessionChannel) screenRequest(ctx context.Context, req *ssh.Request) (a
 		return true, false
 
 	case "env":
-		return s.authorize(ctx, sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_ENV, "", req), false
+		return s.authorize(ctx, auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_ENV, "", req), false
 
 	case "shell":
-		if !s.authorize(ctx, sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_SHELL, "", req) {
+		if !s.authorize(ctx, auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_SHELL, "", req) {
 			return false, false
 		}
 		s.startRecording("shell")
@@ -213,7 +213,7 @@ func (s *sessionChannel) screenRequest(ctx context.Context, req *ssh.Request) (a
 	case "exec":
 		var payload execRequest
 		_ = ssh.Unmarshal(req.Payload, &payload)
-		if !s.authorize(ctx, sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_EXEC, payload.Command, req) {
+		if !s.authorize(ctx, auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_EXEC, payload.Command, req) {
 			return false, false
 		}
 		// A one-shot command is screened before it reaches the target, which is
@@ -235,7 +235,7 @@ func (s *sessionChannel) screenRequest(ctx context.Context, req *ssh.Request) (a
 	case "subsystem":
 		var payload execRequest
 		_ = ssh.Unmarshal(req.Payload, &payload)
-		if !s.authorize(ctx, sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_SUBSYSTEM, payload.Command, req) {
+		if !s.authorize(ctx, auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_SUBSYSTEM, payload.Command, req) {
 			return false, false
 		}
 		s.enableSFTPInspection(payload.Command)
@@ -243,10 +243,10 @@ func (s *sessionChannel) screenRequest(ctx context.Context, req *ssh.Request) (a
 		return true, false
 
 	case "x11-req":
-		return s.authorize(ctx, sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_X11, "", req), false
+		return s.authorize(ctx, auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_X11, "", req), false
 
 	case "auth-agent-req@openssh.com":
-		return s.authorize(ctx, sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_AGENT, "", req), false
+		return s.authorize(ctx, auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_AGENT, "", req), false
 
 	default:
 		// Signals, exit-status, and vendor extensions carry no new privilege.
@@ -272,9 +272,9 @@ func (s *sessionChannel) rejectCommand(req *ssh.Request, message string) {
 	_ = s.client.Close()
 }
 
-func (s *sessionChannel) authorize(ctx context.Context, requestType sshproxyv1.ChannelRequestType, payload string, req *ssh.Request) bool {
-	err := s.conn.authorizeChannel(ctx, &sshproxyv1.AuthorizeChannelRequest{
-		ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
+func (s *sessionChannel) authorize(ctx context.Context, requestType auditproxyv1.ChannelRequestType, payload string, req *ssh.Request) bool {
+	err := s.conn.authorizeChannel(ctx, &auditproxyv1.AuthorizeChannelRequest{
+		ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
 		RequestType: requestType,
 		Payload:     payload,
 	})
@@ -300,15 +300,15 @@ func (s *sessionChannel) screenCommand(ctx context.Context, command string) comm
 		return commandDecision{}
 	}
 
-	resp, err := s.conn.proxy.pdp.AuthorizeCommand(ctx, &sshproxyv1.AuthorizeCommandRequest{
+	resp, err := s.conn.proxy.pdp.AuthorizeCommand(ctx, &auditproxyv1.AuthorizeCommandRequest{
 		SessionId:       s.conn.sessionID,
 		Username:        s.conn.username,
 		Roles:           s.conn.roles,
 		Target:          s.conn.targetHost,
 		Command:         command,
 		CommandPolicyId: s.conn.commandPolicy,
-	}, func(update *sshproxyv1.AuthorizeCommandResponse) {
-		if update.GetDecision() == sshproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL {
+	}, func(update *auditproxyv1.AuthorizeCommandResponse) {
+		if update.GetDecision() == auditproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL {
 			// Without this the shell just stops, and the user has no way to
 			// know whether it is waiting on a person or has hung.
 			writeChannelNotice(s.client, "waiting for approval: "+update.GetReason())
@@ -326,16 +326,16 @@ func (s *sessionChannel) screenCommand(ctx context.Context, command string) comm
 	s.mu.Unlock()
 
 	switch resp.GetDecision() {
-	case sshproxyv1.CommandDecision_COMMAND_DECISION_DENY:
+	case auditproxyv1.CommandDecision_COMMAND_DECISION_DENY:
 		recorder.Marker("blocked: " + command)
 		s.conn.proxy.metrics.CommandsBlocked.Add(1)
 		s.conn.emitCommand(command, "deny", resp.GetRuleId())
 		return commandDecision{blocked: true, message: resp.GetReason()}
-	case sshproxyv1.CommandDecision_COMMAND_DECISION_REWRITE:
+	case auditproxyv1.CommandDecision_COMMAND_DECISION_REWRITE:
 		recorder.Marker("rewritten: " + command)
 		s.conn.emitCommand(command, "rewrite", resp.GetRuleId())
 		return commandDecision{rewritten: resp.GetRewrittenCommand()}
-	case sshproxyv1.CommandDecision_COMMAND_DECISION_AUDIT:
+	case auditproxyv1.CommandDecision_COMMAND_DECISION_AUDIT:
 		recorder.Marker("flagged: " + command)
 		s.conn.emitCommand(command, "audit", resp.GetRuleId())
 		return commandDecision{}
@@ -522,10 +522,10 @@ func (s *sessionChannel) flushInspectors() {
 
 // startRecording begins capturing this channel, unless policy says not to.
 func (s *sessionChannel) startRecording(title string) {
-	if s.conn.recordPolicy == sshproxyv1.RecordPolicy_RECORD_POLICY_NONE {
+	if s.conn.recordPolicy == auditproxyv1.RecordPolicy_RECORD_POLICY_NONE {
 		return
 	}
-	if s.conn.recordPolicy == sshproxyv1.RecordPolicy_RECORD_POLICY_COMMANDS {
+	if s.conn.recordPolicy == auditproxyv1.RecordPolicy_RECORD_POLICY_COMMANDS {
 		// Command-level recording captures decisions and transfers but not the
 		// terminal stream, for environments where screen content is sensitive.
 		return
@@ -588,11 +588,11 @@ func (s *sessionChannel) finish() {
 
 // writeChannelError sends a message the SSH client will show the user.
 func writeChannelError(channel ssh.Channel, message string) {
-	_, _ = channel.Stderr().Write([]byte("\r\n[ssh-proxy] " + message + "\r\n"))
+	_, _ = channel.Stderr().Write([]byte("\r\n[audit-proxy] " + message + "\r\n"))
 }
 
 func writeChannelNotice(channel ssh.Channel, message string) {
-	_, _ = channel.Stderr().Write([]byte("\r\n[ssh-proxy] " + message + "\r\n"))
+	_, _ = channel.Stderr().Write([]byte("\r\n[audit-proxy] " + message + "\r\n"))
 }
 
 // exitStatusPayload builds the payload of an exit-status request.

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	crewsaml "github.com/crewjam/saml"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/oidc"
+	"github.com/zltl/audit-proxy-core/internal/oidc"
 )
 
 func TestSanitizeRedirectURI(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cluster"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/cluster"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 var startTime = time.Now()

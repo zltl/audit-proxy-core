@@ -13,8 +13,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/oidc"
+	"github.com/zltl/audit-proxy-core/internal/middleware"
+	"github.com/zltl/audit-proxy-core/internal/oidc"
 )
 
 // oidcStateCookieName is the cookie that stores the PKCE verifier and nonce
@@ -174,12 +174,12 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	if stObj.CLIChallenge != "" {
 		if s.cliLogin == nil || !s.cliLogin.complete(stObj.CLIChallenge, username, cookie.Value) {
-			s.renderOIDCError(w, r, "CLI login session expired. Please run `sshproxy login` again.")
+			s.renderOIDCError(w, r, "CLI login session expired. Please run `audit-proxy login` again.")
 			return
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<!doctype html><html><head><meta charset="utf-8"><title>SSH Proxy CLI Login</title></head><body><h1>Authentication successful</h1><p>You can return to the <code>sshproxy</code> CLI and close this window.</p></body></html>`)
+		fmt.Fprint(w, `<!doctype html><html><head><meta charset="utf-8"><title>Audit Proxy CLI Login</title></head><body><h1>Authentication successful</h1><p>You can return to the <code>audit-proxy</code> CLI and close this window.</p></body></html>`)
 		return
 	}
 

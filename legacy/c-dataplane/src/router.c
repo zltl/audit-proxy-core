@@ -1,6 +1,6 @@
 /**
  * @file router.c
- * @brief SSH Proxy Core - Router and Upstream Implementation
+ * @brief Audit Proxy Core - Router and Upstream Implementation
  */
 
 #include "router.h"

@@ -16,36 +16,36 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
 )
 
 // stubServer is a scriptable decision point.
 type stubServer struct {
-	sshproxyv1.UnimplementedAccessDecisionServiceServer
+	auditproxyv1.UnimplementedAccessDecisionServiceServer
 
 	mu sync.Mutex
 
-	sessionResponse *sshproxyv1.AuthorizeSessionResponse
+	sessionResponse *auditproxyv1.AuthorizeSessionResponse
 	sessionCalls    int
 	sessionErr      error
 
-	channelResponse *sshproxyv1.AuthorizeChannelResponse
+	channelResponse *auditproxyv1.AuthorizeChannelResponse
 	channelErr      error
 
-	commandMessages []*sshproxyv1.AuthorizeCommandResponse
+	commandMessages []*auditproxyv1.AuthorizeCommandResponse
 	commandErr      error
 
-	hostKeyResponse *sshproxyv1.ResolveHostKeyResponse
+	hostKeyResponse *auditproxyv1.ResolveHostKeyResponse
 	hostKeyErr      error
 
-	heartbeatResponse *sshproxyv1.HeartbeatSessionResponse
+	heartbeatResponse *auditproxyv1.HeartbeatSessionResponse
 	heartbeatErr      error
 
-	revocations   []*sshproxyv1.Revocation
+	revocations   []*auditproxyv1.Revocation
 	revocationErr error
 }
 
-func (s *stubServer) AuthorizeSession(context.Context, *sshproxyv1.AuthorizeSessionRequest) (*sshproxyv1.AuthorizeSessionResponse, error) {
+func (s *stubServer) AuthorizeSession(context.Context, *auditproxyv1.AuthorizeSessionRequest) (*auditproxyv1.AuthorizeSessionResponse, error) {
 	s.mu.Lock()
 	s.sessionCalls++
 	err, resp := s.sessionErr, s.sessionResponse
@@ -56,14 +56,14 @@ func (s *stubServer) AuthorizeSession(context.Context, *sshproxyv1.AuthorizeSess
 	return resp, nil
 }
 
-func (s *stubServer) AuthorizeChannel(context.Context, *sshproxyv1.AuthorizeChannelRequest) (*sshproxyv1.AuthorizeChannelResponse, error) {
+func (s *stubServer) AuthorizeChannel(context.Context, *auditproxyv1.AuthorizeChannelRequest) (*auditproxyv1.AuthorizeChannelResponse, error) {
 	if s.channelErr != nil {
 		return nil, s.channelErr
 	}
 	return s.channelResponse, nil
 }
 
-func (s *stubServer) AuthorizeCommand(_ *sshproxyv1.AuthorizeCommandRequest, stream sshproxyv1.AccessDecisionService_AuthorizeCommandServer) error {
+func (s *stubServer) AuthorizeCommand(_ *auditproxyv1.AuthorizeCommandRequest, stream auditproxyv1.AccessDecisionService_AuthorizeCommandServer) error {
 	if s.commandErr != nil {
 		return s.commandErr
 	}
@@ -75,21 +75,21 @@ func (s *stubServer) AuthorizeCommand(_ *sshproxyv1.AuthorizeCommandRequest, str
 	return nil
 }
 
-func (s *stubServer) ResolveHostKey(context.Context, *sshproxyv1.ResolveHostKeyRequest) (*sshproxyv1.ResolveHostKeyResponse, error) {
+func (s *stubServer) ResolveHostKey(context.Context, *auditproxyv1.ResolveHostKeyRequest) (*auditproxyv1.ResolveHostKeyResponse, error) {
 	if s.hostKeyErr != nil {
 		return nil, s.hostKeyErr
 	}
 	return s.hostKeyResponse, nil
 }
 
-func (s *stubServer) HeartbeatSession(context.Context, *sshproxyv1.HeartbeatSessionRequest) (*sshproxyv1.HeartbeatSessionResponse, error) {
+func (s *stubServer) HeartbeatSession(context.Context, *auditproxyv1.HeartbeatSessionRequest) (*auditproxyv1.HeartbeatSessionResponse, error) {
 	if s.heartbeatErr != nil {
 		return nil, s.heartbeatErr
 	}
 	return s.heartbeatResponse, nil
 }
 
-func (s *stubServer) StreamRevocations(_ *sshproxyv1.StreamRevocationsRequest, stream sshproxyv1.AccessDecisionService_StreamRevocationsServer) error {
+func (s *stubServer) StreamRevocations(_ *auditproxyv1.StreamRevocationsRequest, stream auditproxyv1.AccessDecisionService_StreamRevocationsServer) error {
 	if s.revocationErr != nil {
 		return s.revocationErr
 	}
@@ -114,7 +114,7 @@ func newTestClient(t *testing.T, stub *stubServer, cfg Config) *Client {
 
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
-	sshproxyv1.RegisterAccessDecisionServiceServer(server, stub)
+	auditproxyv1.RegisterAccessDecisionServiceServer(server, stub)
 	go func() { _ = server.Serve(listener) }()
 
 	conn, err := grpc.NewClient("passthrough:///bufnet",
@@ -170,14 +170,14 @@ func TestConfigValidation(t *testing.T) {
 }
 
 func TestAuthorizeSessionCaches(t *testing.T) {
-	stub := &stubServer{sessionResponse: &sshproxyv1.AuthorizeSessionResponse{
+	stub := &stubServer{sessionResponse: &auditproxyv1.AuthorizeSessionResponse{
 		Allowed: true, TargetHost: "10.0.1.10", TargetPort: 22,
 	}}
 	client := newTestClient(t, stub, Config{CacheTTL: time.Minute})
 
-	req := &sshproxyv1.AuthorizeSessionRequest{
+	req := &auditproxyv1.AuthorizeSessionRequest{
 		Username: "alice", Target: "web-1", UpstreamLogin: "deploy",
-		Client: &sshproxyv1.ClientInfo{SourceIp: "10.0.0.5"},
+		Client: &auditproxyv1.ClientInfo{SourceIp: "10.0.0.5"},
 	}
 	for i := 0; i < 3; i++ {
 		resp, err := client.AuthorizeSession(context.Background(), req)
@@ -193,9 +193,9 @@ func TestAuthorizeSessionCaches(t *testing.T) {
 	}
 
 	// A different principal must not be served from another's cached answer.
-	other := &sshproxyv1.AuthorizeSessionRequest{
+	other := &auditproxyv1.AuthorizeSessionRequest{
 		Username: "bob", Target: "web-1", UpstreamLogin: "deploy",
-		Client: &sshproxyv1.ClientInfo{SourceIp: "10.0.0.5"},
+		Client: &auditproxyv1.ClientInfo{SourceIp: "10.0.0.5"},
 	}
 	if _, err := client.AuthorizeSession(context.Background(), other); err != nil {
 		t.Fatalf("AuthorizeSession: %v", err)
@@ -206,12 +206,12 @@ func TestAuthorizeSessionCaches(t *testing.T) {
 }
 
 func TestAuthorizeSessionDoesNotCacheRefusals(t *testing.T) {
-	stub := &stubServer{sessionResponse: &sshproxyv1.AuthorizeSessionResponse{
+	stub := &stubServer{sessionResponse: &auditproxyv1.AuthorizeSessionResponse{
 		Allowed: false, Reason: "no rule permits this",
 	}}
 	client := newTestClient(t, stub, Config{CacheTTL: time.Minute})
 
-	req := &sshproxyv1.AuthorizeSessionRequest{Username: "alice", Target: "web-1"}
+	req := &auditproxyv1.AuthorizeSessionRequest{Username: "alice", Target: "web-1"}
 	for i := 0; i < 2; i++ {
 		if _, err := client.AuthorizeSession(context.Background(), req); err != nil {
 			t.Fatalf("AuthorizeSession: %v", err)
@@ -226,7 +226,7 @@ func TestFailClosedRefusesWhenUnreachable(t *testing.T) {
 	stub := &stubServer{sessionErr: status.Error(codes.Unavailable, "control plane is down")}
 	client := newTestClient(t, stub, Config{FailMode: FailClosed})
 
-	resp, err := client.AuthorizeSession(context.Background(), &sshproxyv1.AuthorizeSessionRequest{
+	resp, err := client.AuthorizeSession(context.Background(), &auditproxyv1.AuthorizeSessionRequest{
 		Username: "alice", Target: "web-1",
 	})
 	if err != nil {
@@ -244,7 +244,7 @@ func TestFailOpenAdmitsWhenUnreachable(t *testing.T) {
 	stub := &stubServer{sessionErr: status.Error(codes.Unavailable, "control plane is down")}
 	client := newTestClient(t, stub, Config{FailMode: FailOpen})
 
-	resp, err := client.AuthorizeSession(context.Background(), &sshproxyv1.AuthorizeSessionRequest{
+	resp, err := client.AuthorizeSession(context.Background(), &auditproxyv1.AuthorizeSessionRequest{
 		Username: "alice", Target: "web-1",
 	})
 	if err != nil {
@@ -263,12 +263,12 @@ func TestFailOpenAdmitsWhenUnreachable(t *testing.T) {
 func TestDeliberateRefusalIsNotSoftenedByFailOpen(t *testing.T) {
 	// A refusal is an answer, not an outage. Fail-open must not turn one into
 	// an allow, or a deny rule would stop meaning anything under load.
-	stub := &stubServer{sessionResponse: &sshproxyv1.AuthorizeSessionResponse{
+	stub := &stubServer{sessionResponse: &auditproxyv1.AuthorizeSessionResponse{
 		Allowed: false, Reason: "denied by policy",
 	}}
 	client := newTestClient(t, stub, Config{FailMode: FailOpen})
 
-	resp, err := client.AuthorizeSession(context.Background(), &sshproxyv1.AuthorizeSessionRequest{
+	resp, err := client.AuthorizeSession(context.Background(), &auditproxyv1.AuthorizeSessionRequest{
 		Username: "alice", Target: "web-1",
 	})
 	if err != nil {
@@ -283,7 +283,7 @@ func TestNonTransportErrorsArePropagated(t *testing.T) {
 	stub := &stubServer{sessionErr: status.Error(codes.Internal, "database exploded")}
 	client := newTestClient(t, stub, Config{FailMode: FailClosed})
 
-	if _, err := client.AuthorizeSession(context.Background(), &sshproxyv1.AuthorizeSessionRequest{
+	if _, err := client.AuthorizeSession(context.Background(), &auditproxyv1.AuthorizeSessionRequest{
 		Username: "alice",
 	}); err == nil {
 		t.Fatal("a service error should surface rather than being turned into a policy decision")
@@ -294,7 +294,7 @@ func TestHostKeyIsNeverSoftenedByFailOpen(t *testing.T) {
 	stub := &stubServer{hostKeyErr: status.Error(codes.Unavailable, "down")}
 	client := newTestClient(t, stub, Config{FailMode: FailOpen})
 
-	resp, err := client.ResolveHostKey(context.Background(), &sshproxyv1.ResolveHostKeyRequest{
+	resp, err := client.ResolveHostKey(context.Background(), &auditproxyv1.ResolveHostKeyRequest{
 		Fingerprint: "SHA256:x",
 	})
 	if err != nil {
@@ -306,25 +306,25 @@ func TestHostKeyIsNeverSoftenedByFailOpen(t *testing.T) {
 }
 
 func TestAuthorizeCommandApprovalStages(t *testing.T) {
-	stub := &stubServer{commandMessages: []*sshproxyv1.AuthorizeCommandResponse{
-		{Decision: sshproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL, ApprovalId: "a1"},
-		{Decision: sshproxyv1.CommandDecision_COMMAND_DECISION_ALLOW, Reason: "approved by reviewer"},
+	stub := &stubServer{commandMessages: []*auditproxyv1.AuthorizeCommandResponse{
+		{Decision: auditproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL, ApprovalId: "a1"},
+		{Decision: auditproxyv1.CommandDecision_COMMAND_DECISION_ALLOW, Reason: "approved by reviewer"},
 	}}
 	client := newTestClient(t, stub, Config{})
 
-	var seen []sshproxyv1.CommandDecision
-	final, err := client.AuthorizeCommand(context.Background(), &sshproxyv1.AuthorizeCommandRequest{
+	var seen []auditproxyv1.CommandDecision
+	final, err := client.AuthorizeCommand(context.Background(), &auditproxyv1.AuthorizeCommandRequest{
 		SessionId: "s1", Command: "systemctl restart nginx",
-	}, func(resp *sshproxyv1.AuthorizeCommandResponse) {
+	}, func(resp *auditproxyv1.AuthorizeCommandResponse) {
 		seen = append(seen, resp.GetDecision())
 	})
 	if err != nil {
 		t.Fatalf("AuthorizeCommand: %v", err)
 	}
-	if len(seen) != 2 || seen[0] != sshproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL {
+	if len(seen) != 2 || seen[0] != auditproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL {
 		t.Fatalf("the caller should see the pending stage so it can tell the user: %v", seen)
 	}
-	if final.GetDecision() != sshproxyv1.CommandDecision_COMMAND_DECISION_ALLOW {
+	if final.GetDecision() != auditproxyv1.CommandDecision_COMMAND_DECISION_ALLOW {
 		t.Fatalf("final = %v", final.GetDecision())
 	}
 }
@@ -334,11 +334,11 @@ func TestAuthorizeCommandFailModes(t *testing.T) {
 		stub := &stubServer{commandErr: status.Error(codes.Unavailable, "down")}
 		client := newTestClient(t, stub, Config{FailMode: FailClosed})
 		resp, err := client.AuthorizeCommand(context.Background(),
-			&sshproxyv1.AuthorizeCommandRequest{Command: "rm -rf /"}, nil)
+			&auditproxyv1.AuthorizeCommandRequest{Command: "rm -rf /"}, nil)
 		if err != nil {
 			t.Fatalf("AuthorizeCommand: %v", err)
 		}
-		if resp.GetDecision() != sshproxyv1.CommandDecision_COMMAND_DECISION_DENY {
+		if resp.GetDecision() != auditproxyv1.CommandDecision_COMMAND_DECISION_DENY {
 			t.Fatalf("decision = %v, want DENY", resp.GetDecision())
 		}
 	})
@@ -347,11 +347,11 @@ func TestAuthorizeCommandFailModes(t *testing.T) {
 		stub := &stubServer{commandErr: status.Error(codes.Unavailable, "down")}
 		client := newTestClient(t, stub, Config{FailMode: FailOpen})
 		resp, err := client.AuthorizeCommand(context.Background(),
-			&sshproxyv1.AuthorizeCommandRequest{Command: "ls"}, nil)
+			&auditproxyv1.AuthorizeCommandRequest{Command: "ls"}, nil)
 		if err != nil {
 			t.Fatalf("AuthorizeCommand: %v", err)
 		}
-		if resp.GetDecision() != sshproxyv1.CommandDecision_COMMAND_DECISION_ALLOW {
+		if resp.GetDecision() != auditproxyv1.CommandDecision_COMMAND_DECISION_ALLOW {
 			t.Fatalf("decision = %v, want ALLOW", resp.GetDecision())
 		}
 	})
@@ -372,12 +372,12 @@ func TestHeartbeatDoesNotCutSessionsOnControlPlaneBlip(t *testing.T) {
 
 func TestHeartbeatSurfacesRevocationAndClearsCache(t *testing.T) {
 	stub := &stubServer{
-		heartbeatResponse: &sshproxyv1.HeartbeatSessionResponse{Revoked: true, Reason: "kicked"},
-		sessionResponse:   &sshproxyv1.AuthorizeSessionResponse{Allowed: true},
+		heartbeatResponse: &auditproxyv1.HeartbeatSessionResponse{Revoked: true, Reason: "kicked"},
+		sessionResponse:   &auditproxyv1.AuthorizeSessionResponse{Allowed: true},
 	}
 	client := newTestClient(t, stub, Config{CacheTTL: time.Minute})
 
-	req := &sshproxyv1.AuthorizeSessionRequest{Username: "alice", Target: "web-1"}
+	req := &auditproxyv1.AuthorizeSessionRequest{Username: "alice", Target: "web-1"}
 	if _, err := client.AuthorizeSession(context.Background(), req); err != nil {
 		t.Fatalf("AuthorizeSession: %v", err)
 	}
@@ -398,7 +398,7 @@ func TestHeartbeatSurfacesRevocationAndClearsCache(t *testing.T) {
 }
 
 func TestWatchRevocationsDeliversAndReconnects(t *testing.T) {
-	stub := &stubServer{revocations: []*sshproxyv1.Revocation{
+	stub := &stubServer{revocations: []*auditproxyv1.Revocation{
 		{SessionId: "s1", Reason: "terminated"},
 	}}
 	client := newTestClient(t, stub, Config{})
@@ -406,8 +406,8 @@ func TestWatchRevocationsDeliversAndReconnects(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	received := make(chan *sshproxyv1.Revocation, 4)
-	go client.WatchRevocations(ctx, func(rev *sshproxyv1.Revocation) { received <- rev })
+	received := make(chan *auditproxyv1.Revocation, 4)
+	go client.WatchRevocations(ctx, func(rev *auditproxyv1.Revocation) { received <- rev })
 
 	select {
 	case rev := <-received:

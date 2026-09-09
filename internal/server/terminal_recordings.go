@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/ws"
+	"github.com/zltl/audit-proxy-core/internal/ws"
 )
 
 const terminalRecordingBasePath = "/api/v2/terminal/recordings"

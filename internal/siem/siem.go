@@ -85,7 +85,7 @@ func NewForwarder(cfg *SIEMConfig) (*Forwarder, error) {
 		cfg.FlushInterval = 5 * time.Second
 	}
 	if cfg.Source == "" {
-		cfg.Source = "ssh-proxy"
+		cfg.Source = "audit-proxy"
 	}
 	if cfg.Format == "" {
 		switch cfg.Type {
@@ -336,7 +336,7 @@ func (f *Forwarder) sendElastic(events []Event) error {
 	var buf bytes.Buffer
 	index := f.config.Index
 	if index == "" {
-		index = "ssh-proxy"
+		index = "audit-proxy"
 	}
 
 	for _, ev := range events {
@@ -406,10 +406,10 @@ func (f *Forwarder) sendSyslog(events []Event) error {
 	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 
 	facility := 4 // auth
-	hostname := "ssh-proxy"
+	hostname := "audit-proxy"
 	appName := f.config.Source
 	if appName == "" {
-		appName = "ssh-proxy"
+		appName = "audit-proxy"
 	}
 
 	for _, ev := range events {
@@ -466,7 +466,7 @@ func (f *Forwarder) sendSumo(events []Event) error {
 		return fmt.Errorf("siem: sumo request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Sumo-Host", "ssh-proxy")
+	req.Header.Set("X-Sumo-Host", "audit-proxy")
 	if f.config.Source != "" {
 		req.Header.Set("X-Sumo-Category", f.config.Source)
 		req.Header.Set("X-Sumo-Name", f.config.Source)
@@ -531,7 +531,7 @@ func FormatSplunkHEC(events []Event, index, source string) ([]byte, error) {
 	for _, ev := range events {
 		payload := splunkHECPayload{
 			Event:      ev,
-			Sourcetype: "ssh_proxy",
+			Sourcetype: "audit_proxy",
 			Index:      index,
 			Source:     source,
 			Time:       float64(ev.Timestamp.UnixNano()) / 1e9,
@@ -552,7 +552,7 @@ func FormatDatadogLogs(events []Event, source string) ([]byte, error) {
 			Service:   source,
 			DDSource:  source,
 			Status:    ev.Severity,
-			Hostname:  "ssh-proxy",
+			Hostname:  "audit-proxy",
 			Timestamp: ev.Timestamp.UnixMilli(),
 			Attributes: map[string]interface{}{
 				"source":     ev.Source,
@@ -567,7 +567,7 @@ func FormatDatadogLogs(events []Event, source string) ([]byte, error) {
 // FormatElasticBulk returns the Elastic bulk API NDJSON bytes for a batch.
 func FormatElasticBulk(events []Event, index string) ([]byte, error) {
 	if index == "" {
-		index = "ssh-proxy"
+		index = "audit-proxy"
 	}
 	var buf bytes.Buffer
 	for _, ev := range events {
@@ -632,10 +632,10 @@ func FormatLEEF(events []Event, source string) []string {
 
 func formatSyslogMessages(events []Event, source, format string) []string {
 	if source == "" {
-		source = "ssh-proxy"
+		source = "audit-proxy"
 	}
 	facility := 4
-	hostname := "ssh-proxy"
+	hostname := "audit-proxy"
 
 	msgs := make([]string, 0, len(events))
 	for _, ev := range events {
@@ -678,7 +678,7 @@ func formatSyslogMessage(ev Event, hostname, appName string, facility int, forma
 
 func formatCEFBody(ev Event) string {
 	return fmt.Sprintf(
-		"CEF:0|SSH Proxy|Core|2.0.0|%s|%s|%d|%s",
+		"CEF:0|Audit Proxy|Core|2.0.0|%s|%s|%d|%s",
 		escapeCEF(ev.EventType),
 		escapeCEF(ev.EventType),
 		severityToCEF(ev.Severity),
@@ -688,7 +688,7 @@ func formatCEFBody(ev Event) string {
 
 func formatLEEFBody(ev Event) string {
 	return fmt.Sprintf(
-		"LEEF:2.0|SSH Proxy|Core|2.0.0|%s\t%s",
+		"LEEF:2.0|Audit Proxy|Core|2.0.0|%s\t%s",
 		escapeLEEF(ev.EventType),
 		formatKeyValues(ev, "\t"),
 	)

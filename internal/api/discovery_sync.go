@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/discovery"
+	"github.com/zltl/audit-proxy-core/internal/discovery"
 )
 
 const (

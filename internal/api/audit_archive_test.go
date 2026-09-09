@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 func TestAuditArchiveUploadsAndFallsBackToObjectStorage(t *testing.T) {

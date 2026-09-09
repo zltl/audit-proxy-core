@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/features"
+	"github.com/zltl/audit-proxy-core/internal/features"
 )
 
 // newGatedTestAPI builds an API with the given experimental feature list.

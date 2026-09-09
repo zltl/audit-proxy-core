@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/store"
+	"github.com/zltl/audit-proxy-core/internal/telemetry"
 )
 
 // OpenSession records a session and applies the limits that can only be checked
@@ -19,7 +19,7 @@ import (
 // Concurrency is one of those: policy can say "at most three at once", but only
 // a count of what is currently open can enforce it, and that count has to be
 // taken in the shared database or every node would enforce its own limit.
-func (s *Server) OpenSession(ctx context.Context, req *sshproxyv1.OpenSessionRequest) (*sshproxyv1.OpenSessionResponse, error) {
+func (s *Server) OpenSession(ctx context.Context, req *auditproxyv1.OpenSessionRequest) (*auditproxyv1.OpenSessionResponse, error) {
 	rule, err := s.loadRule(req.GetRuleId())
 	if err != nil {
 		return nil, status(err, "load access rule")
@@ -31,7 +31,7 @@ func (s *Server) OpenSession(ctx context.Context, req *sshproxyv1.OpenSessionReq
 			return nil, status(err, "count active sessions")
 		}
 		if count >= rule.MaxConcurrent {
-			return &sshproxyv1.OpenSessionResponse{
+			return &auditproxyv1.OpenSessionResponse{
 				Allowed: false,
 				Reason: "session limit reached: " +
 					itoa(count) + " of " + itoa(rule.MaxConcurrent) + " already open",
@@ -60,7 +60,7 @@ func (s *Server) OpenSession(ctx context.Context, req *sshproxyv1.OpenSessionReq
 		return nil, status(err, "create session")
 	}
 	telemetry.SetSessionID(ctx, session.ID)
-	return &sshproxyv1.OpenSessionResponse{SessionId: session.ID, Allowed: true}, nil
+	return &auditproxyv1.OpenSessionResponse{SessionId: session.ID, Allowed: true}, nil
 }
 
 // loadRule fetches the rule a session was authorized under. A missing rule is
@@ -84,7 +84,7 @@ func (s *Server) loadRule(ruleID string) (store.AccessRule, error) {
 }
 
 // HeartbeatSession refreshes a live session and reports whether it must end.
-func (s *Server) HeartbeatSession(ctx context.Context, req *sshproxyv1.HeartbeatSessionRequest) (*sshproxyv1.HeartbeatSessionResponse, error) {
+func (s *Server) HeartbeatSession(ctx context.Context, req *auditproxyv1.HeartbeatSessionRequest) (*auditproxyv1.HeartbeatSessionResponse, error) {
 	telemetry.SetSessionID(ctx, req.GetSessionId())
 
 	revoked, reason, err := s.store.TouchSession(req.GetSessionId(), req.GetBytesIn(), req.GetBytesOut())
@@ -92,7 +92,7 @@ func (s *Server) HeartbeatSession(ctx context.Context, req *sshproxyv1.Heartbeat
 		if errors.Is(err, store.ErrNotFound) {
 			// A session the database no longer considers active must be closed
 			// by the node holding it, so it is reported as revoked.
-			return &sshproxyv1.HeartbeatSessionResponse{
+			return &auditproxyv1.HeartbeatSessionResponse{
 				Revoked: true,
 				Reason:  "session is no longer active",
 			}, nil
@@ -100,27 +100,27 @@ func (s *Server) HeartbeatSession(ctx context.Context, req *sshproxyv1.Heartbeat
 		return nil, status(err, "heartbeat session")
 	}
 	if revoked {
-		return &sshproxyv1.HeartbeatSessionResponse{Revoked: true, Reason: reason}, nil
+		return &auditproxyv1.HeartbeatSessionResponse{Revoked: true, Reason: reason}, nil
 	}
 
 	// Time limits are checked on the heartbeat rather than by a sweeper, so a
 	// session ends close to its deadline without a separate scheduler.
 	session, err := s.store.GetSession(req.GetSessionId())
 	if err != nil {
-		return &sshproxyv1.HeartbeatSessionResponse{}, nil
+		return &auditproxyv1.HeartbeatSessionResponse{}, nil
 	}
 	now := s.now()
 	if session.ExceededMaxDuration(now) {
-		return &sshproxyv1.HeartbeatSessionResponse{
+		return &auditproxyv1.HeartbeatSessionResponse{
 			Revoked: true,
 			Reason:  "maximum session duration reached",
 		}, nil
 	}
-	return &sshproxyv1.HeartbeatSessionResponse{}, nil
+	return &auditproxyv1.HeartbeatSessionResponse{}, nil
 }
 
 // CloseSession records the end of a session.
-func (s *Server) CloseSession(ctx context.Context, req *sshproxyv1.CloseSessionRequest) (*sshproxyv1.CloseSessionResponse, error) {
+func (s *Server) CloseSession(ctx context.Context, req *auditproxyv1.CloseSessionRequest) (*auditproxyv1.CloseSessionResponse, error) {
 	telemetry.SetSessionID(ctx, req.GetSessionId())
 
 	sessionStatus := store.SessionClosed
@@ -138,7 +138,7 @@ func (s *Server) CloseSession(ctx context.Context, req *sshproxyv1.CloseSessionR
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, status(err, "close session")
 	}
-	return &sshproxyv1.CloseSessionResponse{}, nil
+	return &auditproxyv1.CloseSessionResponse{}, nil
 }
 
 // revocationPollInterval is how often the stream checks for new termination
@@ -147,7 +147,7 @@ func (s *Server) CloseSession(ctx context.Context, req *sshproxyv1.CloseSessionR
 const revocationPollInterval = 2 * time.Second
 
 // StreamRevocations pushes termination requests to the node that owns them.
-func (s *Server) StreamRevocations(req *sshproxyv1.StreamRevocationsRequest, stream sshproxyv1.AccessDecisionService_StreamRevocationsServer) error {
+func (s *Server) StreamRevocations(req *auditproxyv1.StreamRevocationsRequest, stream auditproxyv1.AccessDecisionService_StreamRevocationsServer) error {
 	nodeID := strings.TrimSpace(req.GetNodeId())
 	if nodeID == "" {
 		return errors.New("pdp: node_id is required to receive revocations")
@@ -172,7 +172,7 @@ func (s *Server) StreamRevocations(req *sshproxyv1.StreamRevocationsRequest, str
 			if sent[session.ID] {
 				continue
 			}
-			if err := stream.Send(&sshproxyv1.Revocation{
+			if err := stream.Send(&auditproxyv1.Revocation{
 				SessionId:   session.ID,
 				Reason:      session.RevokeReason,
 				RequestedAt: timestamp(s.now()),
@@ -198,12 +198,12 @@ func (s *Server) StreamRevocations(req *sshproxyv1.StreamRevocationsRequest, str
 }
 
 // ReportEvents accepts batches of audit records from a data-plane node.
-func (s *Server) ReportEvents(stream sshproxyv1.AccessDecisionService_ReportEventsServer) error {
+func (s *Server) ReportEvents(stream auditproxyv1.AccessDecisionService_ReportEventsServer) error {
 	var accepted int64
 	for {
 		batch, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
-			return stream.SendAndClose(&sshproxyv1.ReportEventsResponse{Accepted: accepted})
+			return stream.SendAndClose(&auditproxyv1.ReportEventsResponse{Accepted: accepted})
 		}
 		if err != nil {
 			return err

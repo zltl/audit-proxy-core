@@ -74,8 +74,8 @@ func TestValidateAllowsClusterDiscoverySeeds(t *testing.T) {
 	cfg.ClusterBindAddr = "127.0.0.1:9444"
 	cfg.ClusterSeeds = []string{
 		"dns://proxy.internal:9444",
-		"k8s://ssh-proxy.default:9444",
-		"consul://127.0.0.1:8500/ssh-proxy?tag=prod",
+		"k8s://audit-proxy.default:9444",
+		"consul://127.0.0.1:8500/audit-proxy?tag=prod",
 	}
 
 	if err := validate(cfg); err != nil {
@@ -473,7 +473,7 @@ func TestValidateAllowsPostgresStoreBackends(t *testing.T) {
 	cfg.SessionSecret = "secret"
 	cfg.ConfigStoreBackend = "postgresql"
 	cfg.UserStoreBackend = "postgres"
-	cfg.PostgresDatabaseURL = "postgres://proxy:secret@db.example.com:5432/sshproxy?sslmode=require"
+	cfg.PostgresDatabaseURL = "postgres://proxy:secret@db.example.com:5432/audit-proxy?sslmode=require"
 
 	if err := validate(cfg); err != nil {
 		t.Fatalf("validate(postgres store backends) = %v", err)
@@ -509,7 +509,7 @@ func TestValidateAllowsTimescaleAuditStoreWithSharedPostgresURL(t *testing.T) {
 	cfg := defaults()
 	cfg.SessionSecret = "secret"
 	cfg.AuditStoreBackend = "timescaledb"
-	cfg.PostgresDatabaseURL = "postgres://proxy:secret@db.example.com:5432/sshproxy?sslmode=require"
+	cfg.PostgresDatabaseURL = "postgres://proxy:secret@db.example.com:5432/audit-proxy?sslmode=require"
 
 	if err := validate(cfg); err != nil {
 		t.Fatalf("validate(timescaledb audit store) = %v", err)
@@ -532,7 +532,7 @@ func TestValidateAllowsElasticsearchAuditStore(t *testing.T) {
 	if cfg.AuditStoreBackend != "elasticsearch" {
 		t.Fatalf("normalized audit store backend = %q", cfg.AuditStoreBackend)
 	}
-	if cfg.AuditStoreIndex != "ssh-proxy-audit" {
+	if cfg.AuditStoreIndex != "audit-proxy-audit" {
 		t.Fatalf("default audit store index = %q", cfg.AuditStoreIndex)
 	}
 }
@@ -543,9 +543,9 @@ func TestValidateAllowsDatabasePoolAndReplicaConfig(t *testing.T) {
 	cfg.ConfigStoreBackend = "postgres"
 	cfg.UserStoreBackend = "postgres"
 	cfg.AuditStoreBackend = "postgres"
-	cfg.PostgresDatabaseURL = "postgres://proxy:secret@db.example.com:5432/sshproxy?sslmode=require"
-	cfg.PostgresReadDatabaseURLs = "postgres://proxy:secret@db-ro-1.example.com:5432/sshproxy?sslmode=require, postgres://proxy:secret@db-ro-2.example.com:5432/sshproxy?sslmode=require"
-	cfg.AuditStoreReadDatabaseURLs = "postgres://proxy:secret@audit-ro.example.com:5432/sshproxy?sslmode=require"
+	cfg.PostgresDatabaseURL = "postgres://proxy:secret@db.example.com:5432/audit-proxy?sslmode=require"
+	cfg.PostgresReadDatabaseURLs = "postgres://proxy:secret@db-ro-1.example.com:5432/audit-proxy?sslmode=require, postgres://proxy:secret@db-ro-2.example.com:5432/audit-proxy?sslmode=require"
+	cfg.AuditStoreReadDatabaseURLs = "postgres://proxy:secret@audit-ro.example.com:5432/audit-proxy?sslmode=require"
 	cfg.DatabaseMaxOpenConns = 24
 	cfg.DatabaseMaxIdleConns = 12
 	cfg.DatabaseConnMaxLifetime = "45m"
@@ -609,7 +609,7 @@ func TestValidateAllowsKafkaAuditQueue(t *testing.T) {
 	cfg.SessionSecret = "secret"
 	cfg.AuditQueueBackend = "kafka"
 	cfg.AuditQueueEndpoint = "kafka-1.example.com:9092,kafka-2.example.com:9092"
-	cfg.AuditQueueTopic = "ssh-proxy-audit"
+	cfg.AuditQueueTopic = "audit-proxy-audit"
 
 	if err := validate(cfg); err != nil {
 		t.Fatalf("validate(kafka audit queue) = %v", err)
@@ -622,7 +622,7 @@ func TestValidateAllowsRabbitMQAuditQueue(t *testing.T) {
 	cfg.AuditQueueBackend = "rabbitmq"
 	cfg.AuditQueueEndpoint = "amqps://guest:guest@mq.example.com:5671/%2f"
 	cfg.AuditQueueExchange = "audit.events"
-	cfg.AuditQueueRoutingKey = "ssh-proxy.audit"
+	cfg.AuditQueueRoutingKey = "audit-proxy.audit"
 
 	if err := validate(cfg); err != nil {
 		t.Fatalf("validate(rabbitmq audit queue) = %v", err)

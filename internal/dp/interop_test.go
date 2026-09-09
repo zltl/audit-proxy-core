@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
 )
 
 // requireOpenSSH skips when the system ssh client is unavailable.
@@ -104,8 +104,8 @@ func TestOpenSSHClientSeesADeniedCommandMessage(t *testing.T) {
 	sshPath := requireOpenSSH(t)
 	h := newHarness(t, func(_ *Config, pdp *scriptedPDP) {
 		pdp.commandPolicyID = "cp-1"
-		pdp.commandResponses["rm -rf /"] = &sshproxyv1.AuthorizeCommandResponse{
-			Decision: sshproxyv1.CommandDecision_COMMAND_DECISION_DENY,
+		pdp.commandResponses["rm -rf /"] = &auditproxyv1.AuthorizeCommandResponse{
+			Decision: auditproxyv1.CommandDecision_COMMAND_DECISION_DENY,
 			Reason:   "refusing a recursive delete of the root filesystem",
 		}
 	})

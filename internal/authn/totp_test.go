@@ -96,11 +96,11 @@ func TestGenerateTOTPSecretIsUnique(t *testing.T) {
 }
 
 func TestTOTPProvisioningURI(t *testing.T) {
-	uri := TOTPProvisioningURI("SSHProxy", "alice", rfc6238Secret, DefaultTOTPConfig())
+	uri := TOTPProvisioningURI("AuditProxy", "alice", rfc6238Secret, DefaultTOTPConfig())
 	for _, want := range []string{
-		"otpauth://totp/SSHProxy:alice?",
+		"otpauth://totp/AuditProxy:alice?",
 		"secret=" + rfc6238Secret,
-		"issuer=SSHProxy",
+		"issuer=AuditProxy",
 		"digits=6",
 		"period=30",
 		"algorithm=SHA1",

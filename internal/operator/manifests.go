@@ -11,7 +11,7 @@ type RenderedResources struct {
 	ResourceNames map[string]string
 }
 
-func RenderResources(cluster SSHProxyCluster) (RenderedResources, error) {
+func RenderResources(cluster AuditProxyCluster) (RenderedResources, error) {
 	cluster.Normalize(cluster.Namespace())
 	if err := cluster.Validate(); err != nil {
 		return RenderedResources{}, err
@@ -57,10 +57,10 @@ func RenderResources(cluster SSHProxyCluster) (RenderedResources, error) {
 	return RenderedResources{Objects: objects, ResourceNames: resourceNames}, nil
 }
 
-func clusterLabels(cluster SSHProxyCluster) map[string]string {
+func clusterLabels(cluster AuditProxyCluster) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":       "ssh-proxy-core",
-		"app.kubernetes.io/managed-by": "ssh-proxy-operator",
+		"app.kubernetes.io/name":       "audit-proxy-core",
+		"app.kubernetes.io/managed-by": "audit-proxy-operator",
 		"app.kubernetes.io/instance":   cluster.Metadata.Name,
 	}
 }
@@ -77,7 +77,7 @@ func objectMeta(name, namespace string, labels map[string]string, ownerRef map[s
 	return meta
 }
 
-func serviceAccountObject(cluster SSHProxyCluster, name string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
+func serviceAccountObject(cluster AuditProxyCluster, name string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": "v1",
 		"kind":       "ServiceAccount",
@@ -85,7 +85,7 @@ func serviceAccountObject(cluster SSHProxyCluster, name string, labels map[strin
 	}
 }
 
-func configMapObject(cluster SSHProxyCluster, name string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
+func configMapObject(cluster AuditProxyCluster, name string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
@@ -97,7 +97,7 @@ func configMapObject(cluster SSHProxyCluster, name string, labels map[string]str
 	}
 }
 
-func secretObject(cluster SSHProxyCluster, name string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
+func secretObject(cluster AuditProxyCluster, name string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
 	stringData := map[string]interface{}{}
 	for key, value := range cluster.Spec.Secrets {
 		stringData[key] = value
@@ -111,7 +111,7 @@ func secretObject(cluster SSHProxyCluster, name string, labels map[string]string
 	}
 }
 
-func pvcObject(cluster SSHProxyCluster, name string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
+func pvcObject(cluster AuditProxyCluster, name string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
 	spec := map[string]interface{}{
 		"accessModes": []string{cluster.Spec.Persistence.AccessMode},
 		"resources": map[string]interface{}{
@@ -131,7 +131,7 @@ func pvcObject(cluster SSHProxyCluster, name string, labels map[string]string, o
 	}
 }
 
-func controlPlaneServiceObject(cluster SSHProxyCluster, name string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
+func controlPlaneServiceObject(cluster AuditProxyCluster, name string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": "v1",
 		"kind":       "Service",
@@ -152,7 +152,7 @@ func controlPlaneServiceObject(cluster SSHProxyCluster, name string, labels map[
 	}
 }
 
-func dataPlaneServiceObject(cluster SSHProxyCluster, name string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
+func dataPlaneServiceObject(cluster AuditProxyCluster, name string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": "v1",
 		"kind":       "Service",
@@ -173,13 +173,13 @@ func dataPlaneServiceObject(cluster SSHProxyCluster, name string, labels map[str
 	}
 }
 
-func controlPlaneDeploymentObject(cluster SSHProxyCluster, names map[string]string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
+func controlPlaneDeploymentObject(cluster AuditProxyCluster, names map[string]string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
 	container := map[string]interface{}{
 		"name":            "control-plane",
 		"image":           controlPlaneImage(cluster),
 		"imagePullPolicy": cluster.Spec.Image.PullPolicy,
 		"args": []string{
-			"-config", "/etc/ssh-proxy/control-plane.json",
+			"-config", "/etc/audit-proxy/control-plane.json",
 			"-addr", fmt.Sprintf(":%d", cluster.Spec.ControlPlane.Port),
 		},
 		"ports": []map[string]interface{}{{
@@ -193,13 +193,13 @@ func controlPlaneDeploymentObject(cluster SSHProxyCluster, names map[string]stri
 	return deploymentObject(cluster, names["controlPlaneDeployment"], "control-plane", cluster.Spec.ControlPlane.Replicas, container, labels, ownerRef)
 }
 
-func dataPlaneDeploymentObject(cluster SSHProxyCluster, names map[string]string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
+func dataPlaneDeploymentObject(cluster AuditProxyCluster, names map[string]string, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
 	container := map[string]interface{}{
 		"name":            "data-plane",
 		"image":           dataPlaneImage(cluster),
 		"imagePullPolicy": cluster.Spec.Image.PullPolicy,
 		"args": []string{
-			"-c", "/etc/ssh-proxy/config.ini",
+			"-c", "/etc/audit-proxy/config.ini",
 		},
 		"ports": []map[string]interface{}{
 			{
@@ -218,11 +218,11 @@ func dataPlaneDeploymentObject(cluster SSHProxyCluster, names map[string]string,
 	return deploymentObject(cluster, names["dataPlaneDeployment"], "data-plane", cluster.Spec.DataPlane.Replicas, container, labels, ownerRef)
 }
 
-func deploymentObject(cluster SSHProxyCluster, name, component string, replicas int32, container map[string]interface{}, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
+func deploymentObject(cluster AuditProxyCluster, name, component string, replicas int32, container map[string]interface{}, labels map[string]string, ownerRef map[string]interface{}) map[string]interface{} {
 	podLabels := map[string]interface{}{
 		"app.kubernetes.io/instance":  cluster.Metadata.Name,
 		"app.kubernetes.io/component": component,
-		"app.kubernetes.io/name":      "ssh-proxy-core",
+		"app.kubernetes.io/name":      "audit-proxy-core",
 	}
 	return map[string]interface{}{
 		"apiVersion": "apps/v1",
@@ -247,7 +247,7 @@ func deploymentObject(cluster SSHProxyCluster, name, component string, replicas 
 	}
 }
 
-func deploymentVolumes(cluster SSHProxyCluster) []map[string]interface{} {
+func deploymentVolumes(cluster AuditProxyCluster) []map[string]interface{} {
 	volumes := []map[string]interface{}{
 		{
 			"name": "config",
@@ -280,11 +280,11 @@ func deploymentVolumes(cluster SSHProxyCluster) []map[string]interface{} {
 	return volumes
 }
 
-func deploymentVolumeMounts(cluster SSHProxyCluster, names map[string]string) []map[string]interface{} {
+func deploymentVolumeMounts(cluster AuditProxyCluster, names map[string]string) []map[string]interface{} {
 	mounts := []map[string]interface{}{
 		{
 			"name":      "config",
-			"mountPath": "/etc/ssh-proxy",
+			"mountPath": "/etc/audit-proxy",
 			"readOnly":  true,
 		},
 		{
@@ -295,14 +295,14 @@ func deploymentVolumeMounts(cluster SSHProxyCluster, names map[string]string) []
 	if len(cluster.Spec.Secrets) > 0 {
 		mounts = append(mounts, map[string]interface{}{
 			"name":      "secrets",
-			"mountPath": "/etc/ssh-proxy/secrets",
+			"mountPath": "/etc/audit-proxy/secrets",
 			"readOnly":  true,
 		})
 	}
 	return mounts
 }
 
-func controlPlaneImage(cluster SSHProxyCluster) string {
+func controlPlaneImage(cluster AuditProxyCluster) string {
 	tag := cluster.Spec.Image.Tag
 	suffix := "-control-plane"
 	if tag == "" {
@@ -311,14 +311,14 @@ func controlPlaneImage(cluster SSHProxyCluster) string {
 	return cluster.Spec.Image.Repository + suffix + ":" + tag
 }
 
-func dataPlaneImage(cluster SSHProxyCluster) string {
+func dataPlaneImage(cluster AuditProxyCluster) string {
 	if cluster.Spec.Image.Tag == "" {
 		return cluster.Spec.Image.Repository
 	}
 	return cluster.Spec.Image.Repository + ":" + cluster.Spec.Image.Tag
 }
 
-func controlPlaneSecretEnv(cluster SSHProxyCluster) []map[string]interface{} {
+func controlPlaneSecretEnv(cluster AuditProxyCluster) []map[string]interface{} {
 	if len(cluster.Spec.Secrets) == 0 {
 		return nil
 	}

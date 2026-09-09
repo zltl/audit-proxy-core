@@ -2,7 +2,7 @@
 <aside class="sidebar" id="sidebar">
     <div class="sidebar-brand">
         <div class="sidebar-brand-icon">⛨</div>
-        <span class="sidebar-brand-text">SSH Proxy Core</span>
+        <span class="sidebar-brand-text">Audit Proxy Core</span>
     </div>
 
     <nav class="sidebar-nav">
@@ -16,6 +16,11 @@
         <a href="/sessions" class="sidebar-nav-item{{if eq .ActivePage "sessions"}} active{{end}}">
             <span class="sidebar-nav-icon">🖥️</span>
             <span class="sidebar-nav-label">Sessions</span>
+        </a>
+
+        <a href="/demo/ascii-stream" class="sidebar-nav-item{{if eq .ActivePage "demo-ascii"}} active{{end}}">
+            <span class="sidebar-nav-icon">🎞</span>
+            <span class="sidebar-nav-label">ASCII Demo</span>
         </a>
 
         <div class="sidebar-section-title">Management</div>

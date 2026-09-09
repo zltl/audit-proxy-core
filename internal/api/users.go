@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/authn"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/authn"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 // UserFile is the serializable format for the user store JSON file.
@@ -767,5 +767,5 @@ func checkPassword(password, hash string) bool {
 func totpConfig() authn.TOTPConfig { return authn.DefaultTOTPConfig() }
 
 func totpProvisioningURI(username, secret string) string {
-	return authn.TOTPProvisioningURI("SSHProxy", username, secret, totpConfig())
+	return authn.TOTPProvisioningURI("AuditProxy", username, secret, totpConfig())
 }

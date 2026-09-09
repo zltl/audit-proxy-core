@@ -19,7 +19,7 @@ cd "$ROOT"
 echo "== building =="
 go build -o "$WORK/control-plane" ./cmd/control-plane
 go build -o "$WORK/dataplane" ./cmd/dataplane
-go build -o "$WORK/sshproxy" ./cmd/sshproxy
+go build -o "$WORK/audit-proxy" ./cmd/audit-proxy
 
 mkdir -p "$WORK/data" "$WORK/audit" "$WORK/run" "$WORK/rec"
 ssh-keygen -q -t ed25519 -f "$WORK/proxy_host_key" -N ""
@@ -161,7 +161,7 @@ echo "   data plane is listening"
 
 echo "== metrics and readiness =="
 curl -sf http://127.0.0.1:19100/readyz > /dev/null || { echo "FAIL: not ready"; exit 1; }
-curl -sf http://127.0.0.1:19100/metrics | grep -q ssh_proxy_sessions_started_total || { echo "FAIL: no metrics"; exit 1; }
+curl -sf http://127.0.0.1:19100/metrics | grep -q audit_proxy_sessions_started_total || { echo "FAIL: no metrics"; exit 1; }
 echo "   ready, metrics exposed"
 
 echo "== configuring through the documented admin API =="

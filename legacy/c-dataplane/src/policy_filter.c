@@ -1,6 +1,6 @@
 /**
  * @file policy_filter.c
- * @brief SSH Proxy Core - Policy Filter Implementation
+ * @brief Audit Proxy Core - Policy Filter Implementation
  *
  * Controls SSH feature access and logs file transfers.
  */

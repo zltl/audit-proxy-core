@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
+	"github.com/zltl/audit-proxy-core/internal/jit"
 )
 
 // SetJIT attaches a JIT store to the API and registers the JIT routes.

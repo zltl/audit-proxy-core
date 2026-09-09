@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/collab"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/features"
+	"github.com/zltl/audit-proxy-core/internal/collab"
+	"github.com/zltl/audit-proxy-core/internal/features"
 )
 
 // SetCollab attaches a collaboration Manager to the API.

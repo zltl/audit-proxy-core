@@ -1,6 +1,6 @@
 /**
  * @file test_integration.c
- * @brief Integration tests for SSH Proxy Core
+ * @brief Integration tests for Audit Proxy Core
  *
  * Tests the complete data flow through all components:
  * Session Manager -> Filter Chain -> Router
@@ -665,7 +665,7 @@ int main(void)
     log_init(LOG_LEVEL_WARN, NULL);
 
     printf("╔═══════════════════════════════════════════════════════════════╗\n");
-    printf("║           SSH Proxy Core - Integration Tests                   ║\n");
+    printf("║           Audit Proxy Core - Integration Tests                   ║\n");
     printf("╚═══════════════════════════════════════════════════════════════╝\n\n");
 
     int failed = 0;

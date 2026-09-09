@@ -161,7 +161,7 @@ func generateClusterCA(t *testing.T) ([]byte, *ecdsa.PrivateKey, *x509.Certifica
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
-			CommonName: "ssh-proxy-cluster-test-ca",
+			CommonName: "audit-proxy-cluster-test-ca",
 		},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),

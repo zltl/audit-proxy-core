@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/discovery"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/discovery"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 // discoveryState holds the runtime state for asset discovery endpoints.

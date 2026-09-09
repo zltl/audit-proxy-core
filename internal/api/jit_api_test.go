@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
+	"github.com/zltl/audit-proxy-core/internal/jit"
 )
 
 func setupJITTestAPI(t *testing.T) (*API, *http.ServeMux, *jit.Store) {

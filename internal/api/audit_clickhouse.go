@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 // auditClickHouseStore indexes audit events in ClickHouse.

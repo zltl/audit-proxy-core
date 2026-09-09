@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/iniimport"
+	"github.com/zltl/audit-proxy-core/internal/iniimport"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
 )
 
 // iniFallback evaluates a local config.ini when the decision point is down.
@@ -51,7 +51,7 @@ func (f *iniFallback) reload() error {
 	return nil
 }
 
-func (f *iniFallback) evaluate(req *sshproxyv1.AuthorizeSessionRequest) (*sshproxyv1.AuthorizeSessionResponse, bool) {
+func (f *iniFallback) evaluate(req *auditproxyv1.AuthorizeSessionRequest) (*auditproxyv1.AuthorizeSessionResponse, bool) {
 	if f == nil {
 		return nil, false
 	}
@@ -73,7 +73,7 @@ func (f *iniFallback) evaluate(req *sshproxyv1.AuthorizeSessionRequest) (*sshpro
 
 	username := strings.TrimSpace(req.GetUsername())
 	if username == "" || !iniUserEnabled(doc, username) {
-		return &sshproxyv1.AuthorizeSessionResponse{
+		return &auditproxyv1.AuthorizeSessionResponse{
 			Allowed: false,
 			Reason:  "ini fallback: user is not permitted",
 		}, true
@@ -84,14 +84,14 @@ func (f *iniFallback) evaluate(req *sshproxyv1.AuthorizeSessionRequest) (*sshpro
 		target = net.JoinHostPort(req.GetTargetHost(), itoa(int(req.GetTargetPort())))
 	}
 	if !iniRouteAllows(doc, username, target) {
-		return &sshproxyv1.AuthorizeSessionResponse{
+		return &auditproxyv1.AuthorizeSessionResponse{
 			Allowed: false,
 			Reason:  "ini fallback: no matching route",
 		}, true
 	}
 
 	log.Printf("pdpclient: admitting %s to %s from ini fallback — the decision point is unreachable", username, target)
-	return &sshproxyv1.AuthorizeSessionResponse{
+	return &auditproxyv1.AuthorizeSessionResponse{
 		Allowed:  true,
 		Reason:   "admitted from config.ini fallback while the decision point is unreachable",
 		Features: []string{"shell", "exec", "pty", "env", "sftp", "download"},

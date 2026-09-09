@@ -1,6 +1,6 @@
 /**
  * @file router.h
- * @brief SSH Proxy Core - Router and Upstream Management
+ * @brief Audit Proxy Core - Router and Upstream Management
  *
  * Implements routing decisions and upstream connection management.
  * Routes SSH connections based on username, target address, or metadata.

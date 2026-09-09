@@ -1,6 +1,6 @@
 /**
  * @file main.c
- * @brief SSH Proxy Core - Main Entry Point
+ * @brief Audit Proxy Core - Main Entry Point
  */
 
 #include <stdio.h>
@@ -31,8 +31,8 @@
 #include <pthread.h>
 #include <sys/stat.h>
 
-#define DEFAULT_HOST_KEY    "/tmp/ssh_proxy_host_key"
-#define DEFAULT_CONFIG_FILE "/etc/ssh-proxy/config.ini"
+#define DEFAULT_HOST_KEY    "/tmp/audit_proxy_host_key"
+#define DEFAULT_CONFIG_FILE "/etc/audit-proxy/config.ini"
 
 static proxy_config_t *g_config = NULL;
 static const char *g_config_path = NULL; /* path for SIGHUP reload */
@@ -182,7 +182,7 @@ int main(int argc, char *argv[]) {
 
     /* Note: Signal handling is done via signalfd in ssh_server */
 
-    LOG_INFO("SSH Proxy Core %s starting...", SSH_PROXY_VERSION_STRING);
+    LOG_INFO("Audit Proxy Core %s starting...", SSH_PROXY_VERSION_STRING);
 
     webhook_runtime_t webhooks = {0};
 
@@ -375,7 +375,7 @@ int main(int argc, char *argv[]) {
         .storage = AUDIT_STORAGE_FILE,
         .log_dir = (g_config != NULL && g_config->audit_log_dir[0] != '\0')
                        ? g_config->audit_log_dir
-                       : "/tmp/ssh_proxy_audit",
+                       : "/tmp/audit_proxy_audit",
         .log_prefix = "audit_",
         .record_input = true,
         .record_output = true,

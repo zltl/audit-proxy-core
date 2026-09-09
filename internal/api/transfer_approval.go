@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
+	"github.com/zltl/audit-proxy-core/internal/jit"
 )
 
 // TransferApprovalStatus represents the lifecycle state of a DLP transfer approval request.
@@ -467,7 +467,7 @@ func (s *TransferApprovalStore) notifyPendingRequest(notifier *jit.Notifier, req
 		req.Reason,
 		req.ID,
 	)
-	if err := notifier.NotifyMessage(context.Background(), "[SSH Proxy] Transfer approval requested", body); err != nil {
+	if err := notifier.NotifyMessage(context.Background(), "[Audit Proxy] Transfer approval requested", body); err != nil {
 		log.Printf("transfer approval notify: %v", err)
 	}
 }

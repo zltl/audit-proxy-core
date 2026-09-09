@@ -1,4 +1,4 @@
-# Reusable module for managing SSH Proxy upstream servers via the Terraform
+# Reusable module for managing Audit Proxy upstream servers via the Terraform
 # provider CLI.
 #
 # Usage:
@@ -17,7 +17,7 @@ terraform {
 }
 
 variable "proxy_server" {
-  description = "SSH Proxy control-plane base URL"
+  description = "Audit Proxy control-plane base URL"
   type        = string
 }
 
@@ -87,12 +87,12 @@ resource "null_resource" "server" {
         weight       = var.weight,
         max_sessions = var.max_sessions,
         tags         = var.tags
-      })}' | terraform-provider-sshproxy create-server
+      })}' | terraform-provider-audit-proxy create-server
     EOT
 
     environment = {
-      SSHPROXY_SERVER = var.proxy_server
-      SSHPROXY_TOKEN  = var.proxy_token
+      AUDITPROXY_SERVER = var.proxy_server
+      AUDITPROXY_TOKEN  = var.proxy_token
     }
   }
 

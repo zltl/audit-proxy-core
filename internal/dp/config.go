@@ -95,15 +95,15 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		ListenAddr:          "0.0.0.0:2222",
-		ServerVersion:       "SSH-2.0-SSHProxy",
-		RecordingDir:        "/var/lib/ssh-proxy/recordings",
+		ServerVersion:       "SSH-2.0-AuditProxy",
+		RecordingDir:        "/var/lib/audit-proxy/recordings",
 		MaxSessions:         1000,
 		AuthTimeout:         60 * time.Second,
 		HeartbeatInterval:   15 * time.Second,
 		UpstreamDialTimeout: 15 * time.Second,
 		KeepAliveInterval:   30 * time.Second,
 		DrainTimeout:        30 * time.Second,
-		AuditSpoolDir:       "/var/lib/ssh-proxy/audit-spool",
+		AuditSpoolDir:       "/var/lib/audit-proxy/audit-spool",
 		AuditSpoolMaxBytes:  1 << 30,
 		AuditFlushInterval:  time.Second,
 	}

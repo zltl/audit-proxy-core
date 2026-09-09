@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/minio/minio-go/v7"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 const defaultAuditArchiveSyncInterval = 5 * time.Second

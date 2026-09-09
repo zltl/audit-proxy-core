@@ -11,10 +11,10 @@ import (
 
 	"google.golang.org/grpc/metadata"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/authn"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/secrets"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/authn"
+	"github.com/zltl/audit-proxy-core/internal/secrets"
+	"github.com/zltl/audit-proxy-core/internal/store"
 )
 
 type fixture struct {
@@ -103,15 +103,15 @@ func TestAuthenticatePassword(t *testing.T) {
 	f := newFixture(t)
 	f.addUser("alice", "correct-password-1")
 
-	resp, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
+	resp, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
 		Username: "alice",
-		Method:   sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
+		Method:   auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
 		Password: "correct-password-1",
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if resp.GetResult() != sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+	if resp.GetResult() != auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 		t.Fatalf("result = %v, reason %q", resp.GetResult(), resp.GetReason())
 	}
 	if resp.GetUsername() != "alice" {
@@ -125,21 +125,21 @@ func TestAuthenticateRejectsBadCredentials(t *testing.T) {
 
 	cases := []struct {
 		name string
-		req  *sshproxyv1.AuthenticateRequest
+		req  *auditproxyv1.AuthenticateRequest
 	}{
-		{"wrong password", &sshproxyv1.AuthenticateRequest{
-			Username: "alice", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
+		{"wrong password", &auditproxyv1.AuthenticateRequest{
+			Username: "alice", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
 			Password: "wrong",
 		}},
-		{"unknown user", &sshproxyv1.AuthenticateRequest{
-			Username: "nobody", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
+		{"unknown user", &auditproxyv1.AuthenticateRequest{
+			Username: "nobody", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
 			Password: "correct-password-1",
 		}},
-		{"empty username", &sshproxyv1.AuthenticateRequest{
-			Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD, Password: "x",
+		{"empty username", &auditproxyv1.AuthenticateRequest{
+			Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD, Password: "x",
 		}},
-		{"unsupported method", &sshproxyv1.AuthenticateRequest{
-			Username: "alice", Method: sshproxyv1.AuthMethod_AUTH_METHOD_NONE,
+		{"unsupported method", &auditproxyv1.AuthenticateRequest{
+			Username: "alice", Method: auditproxyv1.AuthMethod_AUTH_METHOD_NONE,
 		}},
 	}
 	for _, tc := range cases {
@@ -148,7 +148,7 @@ func TestAuthenticateRejectsBadCredentials(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Authenticate: %v", err)
 			}
-			if resp.GetResult() != sshproxyv1.AuthResult_AUTH_RESULT_FAILURE {
+			if resp.GetResult() != auditproxyv1.AuthResult_AUTH_RESULT_FAILURE {
 				t.Fatalf("result = %v, want FAILURE", resp.GetResult())
 			}
 		})
@@ -159,14 +159,14 @@ func TestAuthenticateDoesNotRevealWhetherAnAccountExists(t *testing.T) {
 	f := newFixture(t)
 	f.addUser("alice", "correct-password-1")
 
-	known, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "alice", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD, Password: "wrong",
+	known, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "alice", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD, Password: "wrong",
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	unknown, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "ghost", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD, Password: "wrong",
+	unknown, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "ghost", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD, Password: "wrong",
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
@@ -187,14 +187,14 @@ func TestAuthenticateRejectsDisabledAccount(t *testing.T) {
 		t.Fatalf("UpdateUser: %v", err)
 	}
 
-	resp, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "dormant", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
+	resp, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "dormant", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
 		Password: "some-password-12",
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if resp.GetResult() == sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+	if resp.GetResult() == auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 		t.Fatal("a disabled account authenticated")
 	}
 }
@@ -211,25 +211,25 @@ func TestAuthenticatePublicKeyRequiresProvenPossession(t *testing.T) {
 
 	// Without proof of possession the fingerprint is only a claim; accepting it
 	// would let anyone log in as the owner of a known public key.
-	resp, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "carol", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PUBLIC_KEY,
+	resp, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "carol", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PUBLIC_KEY,
 		PublicKeyFingerprint: "SHA256:carol",
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if resp.GetResult() == sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+	if resp.GetResult() == auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 		t.Fatal("an unverified public key was accepted")
 	}
 
-	resp, err = f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "carol", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PUBLIC_KEY,
+	resp, err = f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "carol", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PUBLIC_KEY,
 		PublicKeyFingerprint: "SHA256:carol", SignatureVerified: true,
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if resp.GetResult() != sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+	if resp.GetResult() != auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 		t.Fatalf("a verified key was refused: %s", resp.GetReason())
 	}
 }
@@ -245,14 +245,14 @@ func TestAuthenticatePublicKeyBoundToItsOwner(t *testing.T) {
 	}
 
 	// Presenting somebody else's key must not authenticate as them or as you.
-	resp, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "mallory", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PUBLIC_KEY,
+	resp, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "mallory", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PUBLIC_KEY,
 		PublicKeyFingerprint: "SHA256:carol", SignatureVerified: true,
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if resp.GetResult() == sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+	if resp.GetResult() == auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 		t.Fatal("a key registered to another user authenticated")
 	}
 }
@@ -267,14 +267,14 @@ func TestAuthenticateExpiredPublicKey(t *testing.T) {
 		t.Fatalf("AddPublicKey: %v", err)
 	}
 
-	resp, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "carol", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PUBLIC_KEY,
+	resp, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "carol", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PUBLIC_KEY,
 		PublicKeyFingerprint: "SHA256:old", SignatureVerified: true,
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if resp.GetResult() == sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+	if resp.GetResult() == auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 		t.Fatal("an expired key authenticated")
 	}
 }
@@ -299,28 +299,28 @@ func TestAuthenticateSecondFactor(t *testing.T) {
 		t.Fatalf("UpdateUser: %v", err)
 	}
 
-	first, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "mona", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
+	first, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "mona", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
 		Password: "first-factor-pass",
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if first.GetResult() != sshproxyv1.AuthResult_AUTH_RESULT_PARTIAL {
+	if first.GetResult() != auditproxyv1.AuthResult_AUTH_RESULT_PARTIAL {
 		t.Fatalf("a correct password alone should not complete authentication: %v", first.GetResult())
 	}
 	if first.GetStateToken() == "" || len(first.GetPrompts()) == 0 {
 		t.Fatalf("expected a challenge with state, got %+v", first)
 	}
 
-	wrong, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "mona", Method: sshproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE,
+	wrong, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "mona", Method: auditproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE,
 		StateToken: first.GetStateToken(), Responses: []string{"000000"},
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if wrong.GetResult() == sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+	if wrong.GetResult() == auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 		t.Fatal("a wrong code completed authentication")
 	}
 
@@ -328,14 +328,14 @@ func TestAuthenticateSecondFactor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TOTPCode: %v", err)
 	}
-	final, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "mona", Method: sshproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE,
+	final, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "mona", Method: auditproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE,
 		StateToken: wrong.GetStateToken(), Responses: []string{code},
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if final.GetResult() != sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+	if final.GetResult() != auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 		t.Fatalf("a valid code did not complete authentication: %s", final.GetReason())
 	}
 }
@@ -349,14 +349,14 @@ func TestSecondFactorRejectsForgedState(t *testing.T) {
 		"garbage",
 		"eyJ1IjoibW9uYSIsInMiOiJhd2FpdF9tZmEiLCJlIjo5OTk5OTk5OTk5fQ.bad-signature",
 	} {
-		resp, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-			Username: "mona", Method: sshproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE,
+		resp, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+			Username: "mona", Method: auditproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE,
 			StateToken: token, Responses: []string{"123456"},
 		})
 		if err != nil {
 			t.Fatalf("Authenticate: %v", err)
 		}
-		if resp.GetResult() == sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+		if resp.GetResult() == auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 			t.Fatalf("a forged state token was accepted: %q", token)
 		}
 	}
@@ -377,8 +377,8 @@ func TestSecondFactorStateExpires(t *testing.T) {
 
 	base := time.Now()
 	f.server.SetClock(func() time.Time { return base })
-	first, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "mona", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
+	first, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "mona", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
 		Password: "first-factor-pass",
 	})
 	if err != nil {
@@ -387,14 +387,14 @@ func TestSecondFactorStateExpires(t *testing.T) {
 
 	f.server.SetClock(func() time.Time { return base.Add(stateTokenTTL + time.Minute) })
 	code, _ := authn.TOTPCode(secret, base.Add(stateTokenTTL+time.Minute), authn.DefaultTOTPConfig())
-	resp, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "mona", Method: sshproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE,
+	resp, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "mona", Method: auditproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE,
 		StateToken: first.GetStateToken(), Responses: []string{code},
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if resp.GetResult() == sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+	if resp.GetResult() == auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 		t.Fatal("an expired half-finished login was resumed")
 	}
 }
@@ -412,8 +412,8 @@ func TestSecondFactorAttemptsAreBounded(t *testing.T) {
 		t.Fatalf("UpdateUser: %v", err)
 	}
 
-	resp, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "mona", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
+	resp, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "mona", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
 		Password: "first-factor-pass",
 	})
 	if err != nil {
@@ -422,8 +422,8 @@ func TestSecondFactorAttemptsAreBounded(t *testing.T) {
 
 	token := resp.GetStateToken()
 	for i := 0; i < maxMFAAttempts+1; i++ {
-		resp, err = f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-			Username: "mona", Method: sshproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE,
+		resp, err = f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+			Username: "mona", Method: auditproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE,
 			StateToken: token, Responses: []string{"000000"},
 		})
 		if err != nil {
@@ -445,22 +445,22 @@ func TestAccountLockoutAfterRepeatedFailures(t *testing.T) {
 	f.server.config.MaxAuthFailures = 3
 
 	for i := 0; i < 3; i++ {
-		if _, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-			Username: "alice", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD, Password: "wrong",
+		if _, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+			Username: "alice", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD, Password: "wrong",
 		}); err != nil {
 			t.Fatalf("Authenticate: %v", err)
 		}
 	}
 
 	// Even the correct password is refused while the account is locked.
-	resp, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "alice", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
+	resp, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "alice", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
 		Password: "correct-password-1",
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if resp.GetResult() == sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+	if resp.GetResult() == auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 		t.Fatal("guessing was not rate limited")
 	}
 	if !strings.Contains(resp.GetReason(), "locked") {
@@ -474,14 +474,14 @@ func TestSuccessfulLoginClearsFailureCount(t *testing.T) {
 	f.server.config.MaxAuthFailures = 3
 
 	for i := 0; i < 2; i++ {
-		if _, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-			Username: "alice", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD, Password: "wrong",
+		if _, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+			Username: "alice", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD, Password: "wrong",
 		}); err != nil {
 			t.Fatalf("Authenticate: %v", err)
 		}
 	}
-	if _, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "alice", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
+	if _, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "alice", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
 		Password: "correct-password-1",
 	}); err != nil {
 		t.Fatalf("Authenticate: %v", err)
@@ -489,20 +489,20 @@ func TestSuccessfulLoginClearsFailureCount(t *testing.T) {
 
 	// Two more failures must not lock the account, because the counter reset.
 	for i := 0; i < 2; i++ {
-		if _, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-			Username: "alice", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD, Password: "wrong",
+		if _, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+			Username: "alice", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD, Password: "wrong",
 		}); err != nil {
 			t.Fatalf("Authenticate: %v", err)
 		}
 	}
-	resp, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "alice", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
+	resp, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "alice", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
 		Password: "correct-password-1",
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if resp.GetResult() != sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+	if resp.GetResult() != auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 		t.Fatalf("the account should not be locked: %s", resp.GetReason())
 	}
 }
@@ -514,15 +514,15 @@ func TestAuthenticateRefusesBlockedSourceNetwork(t *testing.T) {
 		t.Fatalf("PutIPRule: %v", err)
 	}
 
-	resp, err := f.server.Authenticate(context.Background(), &sshproxyv1.AuthenticateRequest{
-		Username: "alice", Method: sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
+	resp, err := f.server.Authenticate(context.Background(), &auditproxyv1.AuthenticateRequest{
+		Username: "alice", Method: auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
 		Password: "correct-password-1",
-		Client:   &sshproxyv1.ClientInfo{SourceIp: "203.0.113.7"},
+		Client:   &auditproxyv1.ClientInfo{SourceIp: "203.0.113.7"},
 	})
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if resp.GetResult() == sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+	if resp.GetResult() == auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 		t.Fatal("a blocked network authenticated")
 	}
 }
@@ -534,7 +534,7 @@ func TestAuthenticateRefusesBlockedSourceNetwork(t *testing.T) {
 func TestAuthorizeSessionFailsClosed(t *testing.T) {
 	f := newFixture(t)
 
-	resp, err := f.server.AuthorizeSession(context.Background(), &sshproxyv1.AuthorizeSessionRequest{
+	resp, err := f.server.AuthorizeSession(context.Background(), &auditproxyv1.AuthorizeSessionRequest{
 		Username: "alice", Target: "web-1", UpstreamLogin: "root",
 	})
 	if err != nil {
@@ -555,7 +555,7 @@ func TestAuthorizeSessionReturnsConstraints(t *testing.T) {
 		UpstreamLogins: []string{"deploy"},
 	})
 
-	resp, err := f.server.AuthorizeSession(context.Background(), &sshproxyv1.AuthorizeSessionRequest{
+	resp, err := f.server.AuthorizeSession(context.Background(), &auditproxyv1.AuthorizeSessionRequest{
 		Username: "alice", Target: "web-1", UpstreamLogin: "deploy",
 	})
 	if err != nil {
@@ -589,7 +589,7 @@ func TestAuthorizeSessionRefusesDisabledAndMaintenanceTargets(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpdateTarget: %v", err)
 	}
-	resp, err := f.server.AuthorizeSession(context.Background(), &sshproxyv1.AuthorizeSessionRequest{
+	resp, err := f.server.AuthorizeSession(context.Background(), &auditproxyv1.AuthorizeSessionRequest{
 		Username: "alice", Target: "web-1",
 	})
 	if err != nil {
@@ -606,7 +606,7 @@ func TestAuthorizeSessionRefusesDisabledAndMaintenanceTargets(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpdateTarget: %v", err)
 	}
-	resp, err = f.server.AuthorizeSession(context.Background(), &sshproxyv1.AuthorizeSessionRequest{
+	resp, err = f.server.AuthorizeSession(context.Background(), &auditproxyv1.AuthorizeSessionRequest{
 		Username: "alice", Target: "web-1",
 	})
 	if err != nil {
@@ -621,7 +621,7 @@ func TestAuthorizeSessionUnknownTarget(t *testing.T) {
 	f := newFixture(t)
 	f.allowRule(store.AccessRule{ID: "r1", Features: store.FeatureShell})
 
-	resp, err := f.server.AuthorizeSession(context.Background(), &sshproxyv1.AuthorizeSessionRequest{
+	resp, err := f.server.AuthorizeSession(context.Background(), &auditproxyv1.AuthorizeSessionRequest{
 		Username: "alice", Target: "not-registered",
 	})
 	if err != nil {
@@ -643,7 +643,7 @@ func TestJustInTimeGrantWidensButDoesNotOverrideDenial(t *testing.T) {
 	f.server.SetGrantChecker(staticGrants{user: "alice", target: "web-1"})
 
 	// With no rules at all, the grant supplies access.
-	resp, err := f.server.AuthorizeSession(context.Background(), &sshproxyv1.AuthorizeSessionRequest{
+	resp, err := f.server.AuthorizeSession(context.Background(), &auditproxyv1.AuthorizeSessionRequest{
 		Username: "alice", Target: "web-1",
 	})
 	if err != nil {
@@ -657,7 +657,7 @@ func TestJustInTimeGrantWidensButDoesNotOverrideDenial(t *testing.T) {
 	}
 
 	// Somebody without a grant is still refused.
-	resp, err = f.server.AuthorizeSession(context.Background(), &sshproxyv1.AuthorizeSessionRequest{
+	resp, err = f.server.AuthorizeSession(context.Background(), &auditproxyv1.AuthorizeSessionRequest{
 		Username: "bob", Target: "web-1",
 	})
 	if err != nil {
@@ -690,33 +690,33 @@ func TestAuthorizeChannelEnforcesFeatureMask(t *testing.T) {
 
 	cases := []struct {
 		name    string
-		req     *sshproxyv1.AuthorizeChannelRequest
+		req     *auditproxyv1.AuthorizeChannelRequest
 		allowed bool
 	}{
-		{"shell is granted", &sshproxyv1.AuthorizeChannelRequest{
-			SessionId: sessionID, ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
-			RequestType: sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_SHELL,
+		{"shell is granted", &auditproxyv1.AuthorizeChannelRequest{
+			SessionId: sessionID, ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
+			RequestType: auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_SHELL,
 		}, true},
-		{"pty is granted", &sshproxyv1.AuthorizeChannelRequest{
-			SessionId: sessionID, ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
-			RequestType: sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_PTY,
+		{"pty is granted", &auditproxyv1.AuthorizeChannelRequest{
+			SessionId: sessionID, ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
+			RequestType: auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_PTY,
 		}, true},
-		{"local forwarding is not", &sshproxyv1.AuthorizeChannelRequest{
-			SessionId: sessionID, ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_DIRECT_TCPIP,
+		{"local forwarding is not", &auditproxyv1.AuthorizeChannelRequest{
+			SessionId: sessionID, ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_DIRECT_TCPIP,
 			DestHost: "10.0.0.9", DestPort: 5432,
 		}, false},
-		{"remote forwarding is not", &sshproxyv1.AuthorizeChannelRequest{
-			SessionId: sessionID, ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_FORWARDED_TCPIP,
+		{"remote forwarding is not", &auditproxyv1.AuthorizeChannelRequest{
+			SessionId: sessionID, ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_FORWARDED_TCPIP,
 		}, false},
-		{"agent forwarding is not", &sshproxyv1.AuthorizeChannelRequest{
-			SessionId: sessionID, ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_AGENT,
+		{"agent forwarding is not", &auditproxyv1.AuthorizeChannelRequest{
+			SessionId: sessionID, ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_AGENT,
 		}, false},
-		{"x11 is not", &sshproxyv1.AuthorizeChannelRequest{
-			SessionId: sessionID, ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_X11,
+		{"x11 is not", &auditproxyv1.AuthorizeChannelRequest{
+			SessionId: sessionID, ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_X11,
 		}, false},
-		{"sftp is not", &sshproxyv1.AuthorizeChannelRequest{
-			SessionId: sessionID, ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
-			RequestType: sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_SUBSYSTEM, Payload: "sftp",
+		{"sftp is not", &auditproxyv1.AuthorizeChannelRequest{
+			SessionId: sessionID, ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
+			RequestType: auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_SUBSYSTEM, Payload: "sftp",
 		}, false},
 	}
 	for _, tc := range cases {
@@ -741,10 +741,10 @@ func TestAuthorizeChannelChargesSCPAgainstTransfer(t *testing.T) {
 	// mask that only looked at the request type would get wrong: scp is an exec.
 	sessionID := f.openSession(store.FeatureExec | store.FeatureShell)
 
-	resp, err := f.server.AuthorizeChannel(context.Background(), &sshproxyv1.AuthorizeChannelRequest{
+	resp, err := f.server.AuthorizeChannel(context.Background(), &auditproxyv1.AuthorizeChannelRequest{
 		SessionId:   sessionID,
-		ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
-		RequestType: sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_EXEC,
+		ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
+		RequestType: auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_EXEC,
 		Payload:     "scp -t /tmp/upload",
 	})
 	if err != nil {
@@ -754,10 +754,10 @@ func TestAuthorizeChannelChargesSCPAgainstTransfer(t *testing.T) {
 		t.Fatal("scp was allowed through the exec capability, bypassing the transfer policy")
 	}
 
-	ordinary, err := f.server.AuthorizeChannel(context.Background(), &sshproxyv1.AuthorizeChannelRequest{
+	ordinary, err := f.server.AuthorizeChannel(context.Background(), &auditproxyv1.AuthorizeChannelRequest{
 		SessionId:   sessionID,
-		ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
-		RequestType: sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_EXEC,
+		ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
+		RequestType: auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_EXEC,
 		Payload:     "uptime",
 	})
 	if err != nil {
@@ -776,9 +776,9 @@ func TestAuthorizeChannelRejectsUnknownOrClosedSession(t *testing.T) {
 	}
 
 	for _, id := range []string{sessionID, "no-such-session"} {
-		resp, err := f.server.AuthorizeChannel(context.Background(), &sshproxyv1.AuthorizeChannelRequest{
-			SessionId: id, ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
-			RequestType: sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_SHELL,
+		resp, err := f.server.AuthorizeChannel(context.Background(), &auditproxyv1.AuthorizeChannelRequest{
+			SessionId: id, ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_SESSION,
+			RequestType: auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_SHELL,
 		})
 		if err != nil {
 			t.Fatalf("AuthorizeChannel: %v", err)
@@ -795,17 +795,17 @@ func TestAuthorizeChannelRejectsUnknownOrClosedSession(t *testing.T) {
 
 // commandStream captures what AuthorizeCommand sends.
 type commandStream struct {
-	sshproxyv1.AccessDecisionService_AuthorizeCommandServer
+	auditproxyv1.AccessDecisionService_AuthorizeCommandServer
 	ctx      context.Context
 	mu       sync.Mutex
-	messages []*sshproxyv1.AuthorizeCommandResponse
+	messages []*auditproxyv1.AuthorizeCommandResponse
 }
 
 func newCommandStream(ctx context.Context) *commandStream {
 	return &commandStream{ctx: ctx}
 }
 
-func (s *commandStream) Send(resp *sshproxyv1.AuthorizeCommandResponse) error {
+func (s *commandStream) Send(resp *auditproxyv1.AuthorizeCommandResponse) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.messages = append(s.messages, resp)
@@ -816,7 +816,7 @@ func (s *commandStream) SetHeader(metadata.MD) error  { return nil }
 func (s *commandStream) SendHeader(metadata.MD) error { return nil }
 func (s *commandStream) SetTrailer(metadata.MD)       {}
 
-func (s *commandStream) last() *sshproxyv1.AuthorizeCommandResponse {
+func (s *commandStream) last() *auditproxyv1.AuthorizeCommandResponse {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.messages) == 0 {
@@ -856,17 +856,17 @@ func TestAuthorizeCommandDecisions(t *testing.T) {
 
 	cases := []struct {
 		command string
-		want    sshproxyv1.CommandDecision
+		want    auditproxyv1.CommandDecision
 	}{
-		{"rm -rf /", sshproxyv1.CommandDecision_COMMAND_DECISION_DENY},
-		{"shutdown -h now", sshproxyv1.CommandDecision_COMMAND_DECISION_REWRITE},
-		{"sudo systemctl restart nginx", sshproxyv1.CommandDecision_COMMAND_DECISION_AUDIT},
-		{"ls -la", sshproxyv1.CommandDecision_COMMAND_DECISION_ALLOW},
+		{"rm -rf /", auditproxyv1.CommandDecision_COMMAND_DECISION_DENY},
+		{"shutdown -h now", auditproxyv1.CommandDecision_COMMAND_DECISION_REWRITE},
+		{"sudo systemctl restart nginx", auditproxyv1.CommandDecision_COMMAND_DECISION_AUDIT},
+		{"ls -la", auditproxyv1.CommandDecision_COMMAND_DECISION_ALLOW},
 	}
 	for _, tc := range cases {
 		t.Run(tc.command, func(t *testing.T) {
 			stream := newCommandStream(context.Background())
-			err := f.server.AuthorizeCommand(&sshproxyv1.AuthorizeCommandRequest{
+			err := f.server.AuthorizeCommand(&auditproxyv1.AuthorizeCommandRequest{
 				SessionId: "s1", Username: "alice", Command: tc.command, CommandPolicyId: policyID,
 			}, stream)
 			if err != nil {
@@ -876,7 +876,7 @@ func TestAuthorizeCommandDecisions(t *testing.T) {
 			if got.GetDecision() != tc.want {
 				t.Fatalf("decision = %v, want %v (%s)", got.GetDecision(), tc.want, got.GetReason())
 			}
-			if tc.want == sshproxyv1.CommandDecision_COMMAND_DECISION_REWRITE &&
+			if tc.want == auditproxyv1.CommandDecision_COMMAND_DECISION_REWRITE &&
 				got.GetRewrittenCommand() == "" {
 				t.Error("a rewrite decision must supply the replacement")
 			}
@@ -894,22 +894,22 @@ func TestAuthorizeCommandSkipsUncompilablePatterns(t *testing.T) {
 	// A rule that cannot compile must neither match everything nor stop later
 	// rules from being considered.
 	stream := newCommandStream(context.Background())
-	if err := f.server.AuthorizeCommand(&sshproxyv1.AuthorizeCommandRequest{
+	if err := f.server.AuthorizeCommand(&auditproxyv1.AuthorizeCommandRequest{
 		SessionId: "s1", Command: "ls", CommandPolicyId: policyID,
 	}, stream); err != nil {
 		t.Fatalf("AuthorizeCommand: %v", err)
 	}
-	if stream.last().GetDecision() != sshproxyv1.CommandDecision_COMMAND_DECISION_ALLOW {
+	if stream.last().GetDecision() != auditproxyv1.CommandDecision_COMMAND_DECISION_ALLOW {
 		t.Fatalf("a broken pattern matched an unrelated command: %+v", stream.last())
 	}
 
 	stream = newCommandStream(context.Background())
-	if err := f.server.AuthorizeCommand(&sshproxyv1.AuthorizeCommandRequest{
+	if err := f.server.AuthorizeCommand(&auditproxyv1.AuthorizeCommandRequest{
 		SessionId: "s1", Command: "rm file", CommandPolicyId: policyID,
 	}, stream); err != nil {
 		t.Fatalf("AuthorizeCommand: %v", err)
 	}
-	if stream.last().GetDecision() != sshproxyv1.CommandDecision_COMMAND_DECISION_DENY {
+	if stream.last().GetDecision() != auditproxyv1.CommandDecision_COMMAND_DECISION_DENY {
 		t.Fatalf("a broken earlier rule prevented a later one from applying: %+v", stream.last())
 	}
 }
@@ -917,12 +917,12 @@ func TestAuthorizeCommandSkipsUncompilablePatterns(t *testing.T) {
 func TestAuthorizeCommandWithoutPolicyAllows(t *testing.T) {
 	f := newFixture(t)
 	stream := newCommandStream(context.Background())
-	if err := f.server.AuthorizeCommand(&sshproxyv1.AuthorizeCommandRequest{
+	if err := f.server.AuthorizeCommand(&auditproxyv1.AuthorizeCommandRequest{
 		SessionId: "s1", Command: "rm -rf /",
 	}, stream); err != nil {
 		t.Fatalf("AuthorizeCommand: %v", err)
 	}
-	if stream.last().GetDecision() != sshproxyv1.CommandDecision_COMMAND_DECISION_ALLOW {
+	if stream.last().GetDecision() != auditproxyv1.CommandDecision_COMMAND_DECISION_ALLOW {
 		t.Fatal("with no policy attached the command should pass through unscreened")
 	}
 }
@@ -958,7 +958,7 @@ func TestAuthorizeCommandApprovalFlow(t *testing.T) {
 	t.Run("approved", func(t *testing.T) {
 		f.server.SetCommandApprover(&scriptedApprover{approve: true})
 		stream := newCommandStream(context.Background())
-		if err := f.server.AuthorizeCommand(&sshproxyv1.AuthorizeCommandRequest{
+		if err := f.server.AuthorizeCommand(&auditproxyv1.AuthorizeCommandRequest{
 			SessionId: "s1", Username: "alice", Command: "systemctl restart nginx",
 			CommandPolicyId: policyID,
 		}, stream); err != nil {
@@ -967,10 +967,10 @@ func TestAuthorizeCommandApprovalFlow(t *testing.T) {
 		if len(stream.messages) != 2 {
 			t.Fatalf("expected a pending message then an outcome, got %d", len(stream.messages))
 		}
-		if stream.messages[0].GetDecision() != sshproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL {
+		if stream.messages[0].GetDecision() != auditproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL {
 			t.Errorf("first message = %v, want PENDING_APPROVAL", stream.messages[0].GetDecision())
 		}
-		if stream.messages[1].GetDecision() != sshproxyv1.CommandDecision_COMMAND_DECISION_ALLOW {
+		if stream.messages[1].GetDecision() != auditproxyv1.CommandDecision_COMMAND_DECISION_ALLOW {
 			t.Errorf("second message = %v, want ALLOW", stream.messages[1].GetDecision())
 		}
 	})
@@ -978,12 +978,12 @@ func TestAuthorizeCommandApprovalFlow(t *testing.T) {
 	t.Run("denied", func(t *testing.T) {
 		f.server.SetCommandApprover(&scriptedApprover{approve: false})
 		stream := newCommandStream(context.Background())
-		if err := f.server.AuthorizeCommand(&sshproxyv1.AuthorizeCommandRequest{
+		if err := f.server.AuthorizeCommand(&auditproxyv1.AuthorizeCommandRequest{
 			SessionId: "s1", Command: "systemctl restart nginx", CommandPolicyId: policyID,
 		}, stream); err != nil {
 			t.Fatalf("AuthorizeCommand: %v", err)
 		}
-		if stream.last().GetDecision() != sshproxyv1.CommandDecision_COMMAND_DECISION_DENY {
+		if stream.last().GetDecision() != auditproxyv1.CommandDecision_COMMAND_DECISION_DENY {
 			t.Fatalf("last = %v, want DENY", stream.last().GetDecision())
 		}
 	})
@@ -991,12 +991,12 @@ func TestAuthorizeCommandApprovalFlow(t *testing.T) {
 	t.Run("approval times out", func(t *testing.T) {
 		f.server.SetCommandApprover(&scriptedApprover{failAwait: errors.New("timed out")})
 		stream := newCommandStream(context.Background())
-		if err := f.server.AuthorizeCommand(&sshproxyv1.AuthorizeCommandRequest{
+		if err := f.server.AuthorizeCommand(&auditproxyv1.AuthorizeCommandRequest{
 			SessionId: "s1", Command: "systemctl restart nginx", CommandPolicyId: policyID,
 		}, stream); err != nil {
 			t.Fatalf("AuthorizeCommand: %v", err)
 		}
-		if stream.last().GetDecision() != sshproxyv1.CommandDecision_COMMAND_DECISION_DENY {
+		if stream.last().GetDecision() != auditproxyv1.CommandDecision_COMMAND_DECISION_DENY {
 			t.Fatal("an approval that never arrives must not become an allow")
 		}
 	})
@@ -1010,12 +1010,12 @@ func TestApprovalRuleWithoutWorkflowDenies(t *testing.T) {
 	f.server.SetCommandApprover(nil)
 
 	stream := newCommandStream(context.Background())
-	if err := f.server.AuthorizeCommand(&sshproxyv1.AuthorizeCommandRequest{
+	if err := f.server.AuthorizeCommand(&auditproxyv1.AuthorizeCommandRequest{
 		SessionId: "s1", Command: "systemctl restart nginx", CommandPolicyId: policyID,
 	}, stream); err != nil {
 		t.Fatalf("AuthorizeCommand: %v", err)
 	}
-	if stream.last().GetDecision() != sshproxyv1.CommandDecision_COMMAND_DECISION_DENY {
+	if stream.last().GetDecision() != auditproxyv1.CommandDecision_COMMAND_DECISION_DENY {
 		t.Fatal("a rule requiring approval with nowhere to send it must refuse, not allow")
 	}
 }

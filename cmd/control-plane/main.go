@@ -1,4 +1,4 @@
-// Command control-plane starts the SSH Proxy control-plane HTTP server.
+// Command control-plane starts the Audit Proxy control-plane HTTP server.
 //
 // Usage:
 //
@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/api"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/server"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
+	"github.com/zltl/audit-proxy-core/internal/api"
+	"github.com/zltl/audit-proxy-core/internal/config"
+	"github.com/zltl/audit-proxy-core/internal/server"
+	"github.com/zltl/audit-proxy-core/internal/telemetry"
 )
 
 func main() {
@@ -105,7 +105,7 @@ func main() {
 	shutdownTrace, err := telemetry.Init(ctx, telemetry.Config{
 		Enabled:     cfg.OTelEndpoint != "",
 		Endpoint:    cfg.OTelEndpoint,
-		ServiceName: firstNonEmpty(cfg.OTelServiceName, "ssh-proxy-control-plane"),
+		ServiceName: firstNonEmpty(cfg.OTelServiceName, "audit-proxy-control-plane"),
 	})
 	if err != nil {
 		log.Printf("telemetry: %v", err)

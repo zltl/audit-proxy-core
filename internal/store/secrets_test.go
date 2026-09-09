@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/secrets"
+	"github.com/zltl/audit-proxy-core/internal/secrets"
 )
 
 func newSealedStore(t *testing.T) (*Store, *secrets.StaticProvider) {

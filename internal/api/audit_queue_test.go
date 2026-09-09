@@ -56,7 +56,7 @@ func TestAuditQueueForwarderPersistsOffsetsAcrossRestarts(t *testing.T) {
 		DataDir:            dir,
 		AuditQueueBackend:  "kafka",
 		AuditQueueEndpoint: "kafka-1.example.com:9092,kafka-2.example.com:9092",
-		AuditQueueTopic:    "ssh-proxy-audit",
+		AuditQueueTopic:    "audit-proxy-audit",
 	}
 
 	sink1 := &fakeAuditQueueSink{}
@@ -124,7 +124,7 @@ func TestAuditQueueForwarderNormalizesLegacyLogForRabbitMQ(t *testing.T) {
 		AuditQueueBackend:    "rabbitmq",
 		AuditQueueEndpoint:   "amqp://guest:guest@mq.example.com:5672/%2f",
 		AuditQueueExchange:   "audit.events",
-		AuditQueueRoutingKey: "ssh-proxy.audit",
+		AuditQueueRoutingKey: "audit-proxy.audit",
 	}
 
 	sink := &fakeAuditQueueSink{}

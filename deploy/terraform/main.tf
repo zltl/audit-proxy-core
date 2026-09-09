@@ -3,13 +3,13 @@ terraform {
 }
 
 variable "proxy_server" {
-  description = "SSH Proxy control plane address"
+  description = "Audit Proxy control plane address"
   type        = string
   default     = "https://proxy.example.com:8443"
 }
 
 variable "proxy_token" {
-  description = "API token for SSH Proxy control plane"
+  description = "API token for Audit Proxy control plane"
   type        = string
   sensitive   = true
 }
@@ -43,22 +43,22 @@ resource "null_resource" "user_admin" {
         role         = "admin",
         display_name = var.admin_display_name,
         password     = "changeme"
-      })}' | terraform-provider-sshproxy create-user
+      })}' | terraform-provider-audit-proxy create-user
     EOT
 
     environment = {
-      SSHPROXY_SERVER = var.proxy_server
-      SSHPROXY_TOKEN  = var.proxy_token
+      AUDITPROXY_SERVER = var.proxy_server
+      AUDITPROXY_TOKEN  = var.proxy_token
     }
   }
 
   provisioner "local-exec" {
     when    = destroy
-    command = "terraform-provider-sshproxy delete-user ${self.triggers.username}"
+    command = "terraform-provider-audit-proxy delete-user ${self.triggers.username}"
 
     environment = {
-      SSHPROXY_SERVER = self.triggers.proxy_server
-      SSHPROXY_TOKEN  = self.triggers.proxy_token
+      AUDITPROXY_SERVER = self.triggers.proxy_server
+      AUDITPROXY_TOKEN  = self.triggers.proxy_token
     }
   }
 }
@@ -67,7 +67,7 @@ resource "null_resource" "user_admin" {
 
 # Read current server list via the external data source pattern.
 data "external" "servers" {
-  program = ["terraform-provider-sshproxy", "read-servers"]
+  program = ["terraform-provider-audit-proxy", "read-servers"]
 
   query = {}
 }

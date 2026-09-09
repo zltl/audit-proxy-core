@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 // serverStore provides in-memory server management backed by a JSON file.

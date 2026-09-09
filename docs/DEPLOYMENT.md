@@ -1,4 +1,4 @@
-# SSH Proxy Core - 实际环境配置与验证指南
+# Audit Proxy Core - 实际环境配置与验证指南
 
 ## 快速开始
 
@@ -27,50 +27,50 @@ pkg-config --modversion libssh
 ### 2. 编译项目
 
 ```bash
-cd /path/to/ssh-proxy-core
+cd /path/to/audit-proxy-core
 make clean && make
 
 # 验证编译成功
-./build/bin/ssh-proxy-core --version
+./build/bin/audit-proxy-core --version
 ```
 
 ### 3. 创建配置目录
 
 ```bash
 # 生产环境
-sudo mkdir -p /etc/ssh-proxy
-sudo mkdir -p /var/log/ssh-proxy/audit
+sudo mkdir -p /etc/audit-proxy
+sudo mkdir -p /var/log/audit-proxy/audit
 sudo mkdir -p /var/run
 
 # 设置权限
-sudo chown $USER:$USER /etc/ssh-proxy
-sudo chown $USER:$USER /var/log/ssh-proxy
+sudo chown $USER:$USER /etc/audit-proxy
+sudo chown $USER:$USER /var/log/audit-proxy
 ```
 
 ### 4. 生成主机密钥
 
 ```bash
 # RSA 密钥 (推荐 4096 位)
-ssh-keygen -t rsa -b 4096 -f /etc/ssh-proxy/host_key_rsa -N ""
+ssh-keygen -t rsa -b 4096 -f /etc/audit-proxy/host_key_rsa -N ""
 
 # ECDSA 密钥
-ssh-keygen -t ecdsa -b 521 -f /etc/ssh-proxy/host_key_ecdsa -N ""
+ssh-keygen -t ecdsa -b 521 -f /etc/audit-proxy/host_key_ecdsa -N ""
 
 # Ed25519 密钥 (最快)
-ssh-keygen -t ed25519 -f /etc/ssh-proxy/host_key_ed25519 -N ""
+ssh-keygen -t ed25519 -f /etc/audit-proxy/host_key_ed25519 -N ""
 ```
 
 ### 5. 启动代理服务器
 
 ```bash
 # 基本启动
-./build/bin/ssh-proxy-core -p 2222 -k /etc/ssh-proxy/host_key_rsa
+./build/bin/audit-proxy-core -p 2222 -k /etc/audit-proxy/host_key_rsa
 
 # 调试模式
-./build/bin/ssh-proxy-core -p 2222 -k /etc/ssh-proxy/host_key_rsa -d
+./build/bin/audit-proxy-core -p 2222 -k /etc/audit-proxy/host_key_rsa -d
 
 # 后台运行
-nohup ./build/bin/ssh-proxy-core -p 2222 -k /etc/ssh-proxy/host_key_rsa > /var/log/ssh-proxy/proxy.log 2>&1 &
+nohup ./build/bin/audit-proxy-core -p 2222 -k /etc/audit-proxy/host_key_rsa > /var/log/audit-proxy/proxy.log 2>&1 &
 ```
 
 ## 验证测试
@@ -100,29 +100,29 @@ ssh -p 2222 -v testuser@localhost
 
 ```bash
 # 查看代理日志
-tail -f /var/log/ssh-proxy/proxy.log
+tail -f /var/log/audit-proxy/proxy.log
 
 # 查看审计日志
-ls -la /var/log/ssh-proxy/audit/
-cat /var/log/ssh-proxy/audit/audit_*.log
+ls -la /var/log/audit-proxy/audit/
+cat /var/log/audit-proxy/audit/audit_*.log
 ```
 
 ## Systemd 服务配置
 
-创建 `/etc/systemd/system/ssh-proxy.service`:
+创建 `/etc/systemd/system/audit-proxy.service`:
 
 ```ini
 [Unit]
-Description=SSH Proxy Core Server
+Description=Audit Proxy Core Server
 After=network.target
 
 [Service]
 Type=simple
-User=ssh-proxy
-Group=ssh-proxy
-ExecStart=/opt/ssh-proxy-core/build/bin/ssh-proxy-core \
+User=audit-proxy
+Group=audit-proxy
+ExecStart=/opt/audit-proxy-core/build/bin/audit-proxy-core \
     -p 2222 \
-    -k /etc/ssh-proxy/host_key_rsa
+    -k /etc/audit-proxy/host_key_rsa
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
@@ -131,7 +131,7 @@ RestartSec=5
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/log/ssh-proxy
+ReadWritePaths=/var/log/audit-proxy
 
 [Install]
 WantedBy=multi-user.target
@@ -141,9 +141,9 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable ssh-proxy
-sudo systemctl start ssh-proxy
-sudo systemctl status ssh-proxy
+sudo systemctl enable audit-proxy
+sudo systemctl start audit-proxy
+sudo systemctl status audit-proxy
 ```
 
 ## Docker 部署
@@ -163,29 +163,29 @@ COPY . .
 
 RUN make clean && make
 
-RUN mkdir -p /etc/ssh-proxy /var/log/ssh-proxy/audit
-RUN ssh-keygen -t rsa -b 2048 -f /etc/ssh-proxy/host_key -N ""
+RUN mkdir -p /etc/audit-proxy /var/log/audit-proxy/audit
+RUN ssh-keygen -t rsa -b 2048 -f /etc/audit-proxy/host_key -N ""
 
 EXPOSE 2222
 
-CMD ["./build/bin/ssh-proxy-core", "-p", "2222", "-k", "/etc/ssh-proxy/host_key"]
+CMD ["./build/bin/audit-proxy-core", "-p", "2222", "-k", "/etc/audit-proxy/host_key"]
 ```
 
 ### 构建和运行
 
 ```bash
 # 构建镜像
-docker build -t ssh-proxy-core .
+docker build -t audit-proxy-core .
 
 # 运行容器
 docker run -d \
     -p 2222:2222 \
-    -v /var/log/ssh-proxy:/var/log/ssh-proxy \
-    --name ssh-proxy \
-    ssh-proxy-core
+    -v /var/log/audit-proxy:/var/log/audit-proxy \
+    --name audit-proxy \
+    audit-proxy-core
 
 # 查看日志
-docker logs -f ssh-proxy
+docker logs -f audit-proxy
 ```
 
 ## 集成测试场景
@@ -250,7 +250,7 @@ done
 wait
 
 # 检查日志中的限制消息
-grep "Rate limit" /var/log/ssh-proxy/proxy.log
+grep "Rate limit" /var/log/audit-proxy/proxy.log
 ```
 
 ## 性能测试
@@ -303,14 +303,14 @@ curl http://localhost:9090/metrics
 
 ```bash
 # 使用内置 Prometheus 指标端点
-curl -s http://localhost:9090/metrics | grep ssh_proxy
+curl -s http://localhost:9090/metrics | grep audit_proxy
 
 # 查看当前连接数
 ss -s | grep -E "TCP|ESTAB"
 
 # 查看进程资源
-ps aux | grep ssh-proxy
-top -p $(pgrep ssh-proxy)
+ps aux | grep audit-proxy
+top -p $(pgrep audit-proxy)
 ```
 
 ## 故障排除
@@ -330,11 +330,11 @@ sudo kill $(sudo fuser 2222/tcp 2>/dev/null | awk '{print $1}')
 
 ```bash
 # 检查密钥权限
-chmod 600 /etc/ssh-proxy/host_key*
+chmod 600 /etc/audit-proxy/host_key*
 
 # 检查目录权限
-chmod 755 /etc/ssh-proxy
-chmod 755 /var/log/ssh-proxy
+chmod 755 /etc/audit-proxy
+chmod 755 /var/log/audit-proxy
 ```
 
 ### 问题: libssh 找不到

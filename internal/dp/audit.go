@@ -11,9 +11,9 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/auditchain"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/auditspool"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/auditchain"
+	"github.com/zltl/audit-proxy-core/internal/auditspool"
 )
 
 // Event types emitted by the data plane.
@@ -56,7 +56,7 @@ type auditEmitter struct {
 
 // auditReporter is the transport that carries batches to the control plane.
 type auditReporter interface {
-	ReportEvents(ctx context.Context, nodeID string, events []*sshproxyv1.AuditEvent) error
+	ReportEvents(ctx context.Context, nodeID string, events []*auditproxyv1.AuditEvent) error
 }
 
 // auditEmitterOptions configures the emitter.
@@ -111,7 +111,7 @@ func newAuditEmitter(options auditEmitterOptions, client auditReporter) (*auditE
 //
 // It returns as soon as the event is on disk. Blocking a session on the audit
 // path would make the control plane's availability the proxy's availability.
-func (e *auditEmitter) Emit(event *sshproxyv1.AuditEvent) {
+func (e *auditEmitter) Emit(event *auditproxyv1.AuditEvent) {
 	if e == nil || event == nil {
 		return
 	}
@@ -146,7 +146,7 @@ func (e *auditEmitter) Emit(event *sshproxyv1.AuditEvent) {
 // The computation is shared with the verifier so the two cannot drift: a chain
 // written one way and checked another would report tampering that never
 // happened, and people would learn to ignore the alarm.
-func (e *auditEmitter) link(event *sshproxyv1.AuditEvent) {
+func (e *auditEmitter) link(event *auditproxyv1.AuditEvent) {
 	e.chainMu.Lock()
 	defer e.chainMu.Unlock()
 
@@ -204,9 +204,9 @@ func (e *auditEmitter) ship(ctx context.Context) {
 			return
 		}
 
-		events := make([]*sshproxyv1.AuditEvent, 0, batch.Len())
+		events := make([]*auditproxyv1.AuditEvent, 0, batch.Len())
 		for _, record := range batch.Records {
-			var event sshproxyv1.AuditEvent
+			var event auditproxyv1.AuditEvent
 			if err := protojson.Unmarshal(record.Payload, &event); err != nil {
 				// A record that cannot be decoded would otherwise be retried
 				// forever, blocking everything behind it.
@@ -268,8 +268,8 @@ func newEventID() string {
 // --------------------------------------------------------------------------
 
 // baseEvent fills in the fields every event from a session shares.
-func (c *connection) baseEvent(eventType string) *sshproxyv1.AuditEvent {
-	return &sshproxyv1.AuditEvent{
+func (c *connection) baseEvent(eventType string) *auditproxyv1.AuditEvent {
+	return &auditproxyv1.AuditEvent{
 		EventType:     eventType,
 		SessionId:     c.sessionID,
 		Username:      c.username,
@@ -288,7 +288,7 @@ func (c *connection) sourceIP() string {
 	return hostOf(c.client.RemoteAddr().String())
 }
 
-func (c *connection) emit(event *sshproxyv1.AuditEvent) {
+func (c *connection) emit(event *auditproxyv1.AuditEvent) {
 	if c.proxy != nil && c.proxy.audit != nil {
 		c.proxy.audit.Emit(event)
 	}
@@ -351,7 +351,7 @@ func (c *connection) emitFileTransfer(transfer FileTransfer) {
 	event.BytesIn = transfer.Bytes
 	event.Decision = decisionWord(transfer.Allowed)
 	event.Details = transfer.Reason
-	event.FileTransfer = &sshproxyv1.FileTransferRecord{
+	event.FileTransfer = &auditproxyv1.FileTransferRecord{
 		Direction: string(transfer.Direction),
 		Path:      transfer.Path,
 		Filename:  baseName(transfer.Path),
@@ -385,7 +385,7 @@ func (c *connection) emitPortForward(kind, destHost string, destPort int, allowe
 	event.ChannelType = "direct-tcpip"
 	event.Decision = decisionWord(allowed)
 	event.Details = reason
-	event.PortForward = &sshproxyv1.PortForwardRecord{
+	event.PortForward = &auditproxyv1.PortForwardRecord{
 		Kind:     kind,
 		DestHost: destHost,
 		DestPort: int32(destPort),

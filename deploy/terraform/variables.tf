@@ -1,5 +1,5 @@
 variable "proxy_server" {
-  description = "SSH Proxy control-plane base URL"
+  description = "Audit Proxy control-plane base URL"
   type        = string
 }
 

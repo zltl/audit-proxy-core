@@ -1,6 +1,6 @@
 /**
  * @file account_lock.h
- * @brief SSH Proxy Core - Account Lockout Module
+ * @brief Audit Proxy Core - Account Lockout Module
  *
  * Tracks failed login attempts per username and locks accounts after
  * exceeding a configurable threshold. Thread-safe via pthread_mutex.

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 // loadAuditEvents loads audit events from the configured backend. When a SQL

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// fakeAPI spins up a test HTTP server that mimics the SSH Proxy control-plane
+// fakeAPI spins up a test HTTP server that mimics the Audit Proxy control-plane
 // API surface used by the Terraform provider CLI.
 func fakeAPI(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -402,17 +402,17 @@ func TestUnknownAction(t *testing.T) {
 }
 
 func TestRunMissingAction(t *testing.T) {
-	code, _ := run([]string{"terraform-provider-sshproxy"}, strings.NewReader(""))
+	code, _ := run([]string{"terraform-provider-audit-proxy"}, strings.NewReader(""))
 	if code != 1 {
 		t.Errorf("expected exit code 1, got %d", code)
 	}
 }
 
 func TestNewClientMissingServer(t *testing.T) {
-	t.Setenv("SSHPROXY_SERVER", "")
+	t.Setenv("AUDITPROXY_SERVER", "")
 	_, err := newClient()
 	if err == nil {
-		t.Fatal("expected error when SSHPROXY_SERVER is not set")
+		t.Fatal("expected error when AUDITPROXY_SERVER is not set")
 	}
 }
 

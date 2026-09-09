@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/operator"
+	"github.com/zltl/audit-proxy-core/internal/operator"
 )
 
 const (
@@ -25,7 +25,7 @@ const (
 )
 
 func main() {
-	namespace := flag.String("namespace", "", "namespace to watch for SSHProxyCluster resources")
+	namespace := flag.String("namespace", "", "namespace to watch for AuditProxyCluster resources")
 	reconcileInterval := flag.Duration("reconcile-interval", 30*time.Second, "operator reconcile interval")
 	apiServer := flag.String("api-server", "", "override Kubernetes API server base URL")
 	tokenFile := flag.String("token-file", defaultSATokenPath, "service account token file")

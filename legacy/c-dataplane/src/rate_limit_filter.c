@@ -1,6 +1,6 @@
 /**
  * @file rate_limit_filter.c
- * @brief SSH Proxy Core - Rate Limiting Filter Implementation
+ * @brief Audit Proxy Core - Rate Limiting Filter Implementation
  */
 
 #include "rate_limit_filter.h"

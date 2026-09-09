@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
+	"github.com/zltl/audit-proxy-core/internal/config"
 )
 
 func TestEnterpriseRoutesAreAvailable(t *testing.T) {
@@ -101,7 +101,7 @@ func TestSIEMCanBeConfiguredAndTested(t *testing.T) {
 	client := newAuthenticatedClient(t, controlPlane.URL, cfg.SessionSecret)
 	csrfToken := mustFetchCSRFToken(t, client, controlPlane.URL)
 
-	configBody := bytes.NewBufferString(`{"type":"splunk","endpoint":"` + siemSink.URL + `","token":"secret-token","source":"ssh-proxy"}`)
+	configBody := bytes.NewBufferString(`{"type":"splunk","endpoint":"` + siemSink.URL + `","token":"secret-token","source":"audit-proxy"}`)
 	resp := mustRequest(t, client, http.MethodPut, controlPlane.URL+"/api/v2/siem/config", configBody, map[string]string{
 		"Content-Type": "application/json",
 		"X-CSRF-Token": csrfToken,
@@ -175,7 +175,7 @@ func TestSIEMDatadogCanBeConfiguredAndTested(t *testing.T) {
 	client := newAuthenticatedClient(t, controlPlane.URL, cfg.SessionSecret)
 	csrfToken := mustFetchCSRFToken(t, client, controlPlane.URL)
 
-	configBody := bytes.NewBufferString(`{"type":"datadog","endpoint":"` + siemSink.URL + `","token":"dd-api-key","source":"ssh-proxy"}`)
+	configBody := bytes.NewBufferString(`{"type":"datadog","endpoint":"` + siemSink.URL + `","token":"dd-api-key","source":"audit-proxy"}`)
 	resp := mustRequest(t, client, http.MethodPut, controlPlane.URL+"/api/v2/siem/config", configBody, map[string]string{
 		"Content-Type": "application/json",
 		"X-CSRF-Token": csrfToken,
@@ -199,7 +199,7 @@ func TestSIEMDatadogCanBeConfiguredAndTested(t *testing.T) {
 	if gotAPIKey != "dd-api-key" {
 		t.Fatalf("Datadog API key header = %q", gotAPIKey)
 	}
-	if gotSource != "ssh-proxy" {
+	if gotSource != "audit-proxy" {
 		t.Fatalf("Datadog source header = %q", gotSource)
 	}
 	if !strings.Contains(gotBody, `"message":"siem.test"`) {
@@ -295,7 +295,7 @@ func TestSIEMSyslogCanBeConfiguredAndTested(t *testing.T) {
 	client := newAuthenticatedClient(t, controlPlane.URL, cfg.SessionSecret)
 	csrfToken := mustFetchCSRFToken(t, client, controlPlane.URL)
 
-	configBody := bytes.NewBufferString(`{"type":"syslog","endpoint":"` + ln.Addr().String() + `","source":"ssh-proxy"}`)
+	configBody := bytes.NewBufferString(`{"type":"syslog","endpoint":"` + ln.Addr().String() + `","source":"audit-proxy"}`)
 	resp := mustRequest(t, client, http.MethodPut, controlPlane.URL+"/api/v2/siem/config", configBody, map[string]string{
 		"Content-Type": "application/json",
 		"X-CSRF-Token": csrfToken,
@@ -354,7 +354,7 @@ func TestSIEMQRadarCanBeConfiguredAndTested(t *testing.T) {
 	client := newAuthenticatedClient(t, controlPlane.URL, cfg.SessionSecret)
 	csrfToken := mustFetchCSRFToken(t, client, controlPlane.URL)
 
-	configBody := bytes.NewBufferString(`{"type":"qradar","endpoint":"` + ln.Addr().String() + `","source":"ssh-proxy"}`)
+	configBody := bytes.NewBufferString(`{"type":"qradar","endpoint":"` + ln.Addr().String() + `","source":"audit-proxy"}`)
 	resp := mustRequest(t, client, http.MethodPut, controlPlane.URL+"/api/v2/siem/config", configBody, map[string]string{
 		"Content-Type": "application/json",
 		"X-CSRF-Token": csrfToken,
@@ -377,7 +377,7 @@ func TestSIEMQRadarCanBeConfiguredAndTested(t *testing.T) {
 
 	select {
 	case payload := <-qradarData:
-		if !strings.Contains(payload, "LEEF:2.0|SSH Proxy|Core|2.0.0|siem.test") {
+		if !strings.Contains(payload, "LEEF:2.0|Audit Proxy|Core|2.0.0|siem.test") {
 			t.Fatalf("qradar payload missing LEEF event: %s", payload)
 		}
 	case <-time.After(2 * time.Second):
@@ -405,7 +405,7 @@ func TestSIEMSumoCanBeConfiguredAndTested(t *testing.T) {
 	client := newAuthenticatedClient(t, controlPlane.URL, cfg.SessionSecret)
 	csrfToken := mustFetchCSRFToken(t, client, controlPlane.URL)
 
-	configBody := bytes.NewBufferString(`{"type":"sumo","endpoint":"` + siemSink.URL + `","source":"ssh-proxy"}`)
+	configBody := bytes.NewBufferString(`{"type":"sumo","endpoint":"` + siemSink.URL + `","source":"audit-proxy"}`)
 	resp := mustRequest(t, client, http.MethodPut, controlPlane.URL+"/api/v2/siem/config", configBody, map[string]string{
 		"Content-Type": "application/json",
 		"X-CSRF-Token": csrfToken,
@@ -426,7 +426,7 @@ func TestSIEMSumoCanBeConfiguredAndTested(t *testing.T) {
 	}
 	_ = mustReadBody(t, resp)
 
-	if gotCategory != "ssh-proxy" {
+	if gotCategory != "audit-proxy" {
 		t.Fatalf("Sumo category header = %q", gotCategory)
 	}
 	if !strings.Contains(gotBody, `"event_type":"siem.test"`) {
@@ -454,7 +454,7 @@ func TestSIEMLogstashCanBeConfiguredAndTested(t *testing.T) {
 	client := newAuthenticatedClient(t, controlPlane.URL, cfg.SessionSecret)
 	csrfToken := mustFetchCSRFToken(t, client, controlPlane.URL)
 
-	configBody := bytes.NewBufferString(`{"type":"logstash","endpoint":"` + siemSink.URL + `","source":"ssh-proxy"}`)
+	configBody := bytes.NewBufferString(`{"type":"logstash","endpoint":"` + siemSink.URL + `","source":"audit-proxy"}`)
 	resp := mustRequest(t, client, http.MethodPut, controlPlane.URL+"/api/v2/siem/config", configBody, map[string]string{
 		"Content-Type": "application/json",
 		"X-CSRF-Token": csrfToken,
@@ -508,7 +508,7 @@ func TestSIEMWazuhCanBeConfiguredAndTested(t *testing.T) {
 	client := newAuthenticatedClient(t, controlPlane.URL, cfg.SessionSecret)
 	csrfToken := mustFetchCSRFToken(t, client, controlPlane.URL)
 
-	configBody := bytes.NewBufferString(`{"type":"wazuh","endpoint":"` + ln.Addr().String() + `","source":"ssh-proxy"}`)
+	configBody := bytes.NewBufferString(`{"type":"wazuh","endpoint":"` + ln.Addr().String() + `","source":"audit-proxy"}`)
 	resp := mustRequest(t, client, http.MethodPut, controlPlane.URL+"/api/v2/siem/config", configBody, map[string]string{
 		"Content-Type": "application/json",
 		"X-CSRF-Token": csrfToken,

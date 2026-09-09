@@ -1,6 +1,6 @@
 /**
  * @file config.c
- * @brief SSH Proxy Core - Configuration Module Implementation
+ * @brief Audit Proxy Core - Configuration Module Implementation
  *
  * Simple INI-style configuration file parser with support for:
  * - [section] headers
@@ -2158,10 +2158,10 @@ proxy_config_t *config_create(void) {
     /* Set defaults */
     strncpy(config->bind_addr, "0.0.0.0", sizeof(config->bind_addr) - 1);
     config->port = 2222;
-    strncpy(config->host_key_path, "/tmp/ssh_proxy_host_key", sizeof(config->host_key_path) - 1);
+    strncpy(config->host_key_path, "/tmp/audit_proxy_host_key", sizeof(config->host_key_path) - 1);
 
     config->log_level = 1; /* INFO */
-    strncpy(config->audit_log_dir, "/tmp/ssh_proxy_audit", sizeof(config->audit_log_dir) - 1);
+    strncpy(config->audit_log_dir, "/tmp/audit_proxy_audit", sizeof(config->audit_log_dir) - 1);
     config->audit_max_archived_files = 0;
     config->audit_retention_days = 0;
 

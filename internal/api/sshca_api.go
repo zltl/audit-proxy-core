@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
+	"github.com/zltl/audit-proxy-core/internal/sshca"
 )
 
 // SetCA attaches a Certificate Authority to the API for SSH CA endpoints.

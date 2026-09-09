@@ -1,4 +1,4 @@
-// Package oidc implements OIDC/OAuth2 authentication for the SSH Proxy
+// Package oidc implements OIDC/OAuth2 authentication for the Audit Proxy
 // control plane using only the Go standard library.
 package oidc
 

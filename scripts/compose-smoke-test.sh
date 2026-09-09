@@ -58,8 +58,8 @@ if ! curl -sf http://127.0.0.1:9100/readyz >/dev/null; then
 fi
 echo "   dataplane /readyz OK"
 
-if ! curl -sf http://127.0.0.1:9100/metrics | grep -q ssh_proxy_sessions_started_total; then
-  echo "FAIL: dataplane metrics missing ssh_proxy_sessions_started_total"
+if ! curl -sf http://127.0.0.1:9100/metrics | grep -q audit_proxy_sessions_started_total; then
+  echo "FAIL: dataplane metrics missing audit_proxy_sessions_started_total"
   exit 1
 fi
 echo "   dataplane /metrics OK"

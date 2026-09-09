@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
+	"github.com/zltl/audit-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/store"
 )
 
 // RecordingDecryptionKey returns the key used to open protected recordings.

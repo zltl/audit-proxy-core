@@ -1,6 +1,6 @@
 /**
  * @file config.h
- * @brief SSH Proxy Core - Configuration Module
+ * @brief Audit Proxy Core - Configuration Module
  *
  * Loads user credentials, public keys, and user-to-upstream route mappings
  * from configuration files instead of hardcoding.

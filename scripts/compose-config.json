@@ -7,7 +7,7 @@
   "audit_log_dir": "/data/audit",
   "recording_dir": "/data/recordings",
   "pdp_listen_addr": "unix:/run/pdp.sock",
-  "postgres_database_url": "postgres://sshproxy:sshproxy@postgres:5432/sshproxy?sslmode=disable",
+  "postgres_database_url": "postgres://auditproxy:auditproxy@postgres:5432/audit-proxy?sslmode=disable",
   "secrets_encryption_key": "f790d3cec0622be6468451f396157402997d40c01a091835a61b0c0d81cbb7c5",
   "audit_chain_key": "7553e251ed2a16ac1c63ed1ee403dbab19a064609b93c196538504b7158faef2",
   "recording_encryption_key": "cb32c5a409a51aced4709abdfc1f02efd2a23723a05da1d1b27b2f0e62547c51"

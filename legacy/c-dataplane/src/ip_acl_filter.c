@@ -1,6 +1,6 @@
 /**
  * @file ip_acl_filter.c
- * @brief SSH Proxy Core - IP Access Control List Filter Implementation
+ * @brief Audit Proxy Core - IP Access Control List Filter Implementation
  */
 
 #include "ip_acl_filter.h"

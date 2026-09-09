@@ -1,6 +1,6 @@
 /**
  * @file rbac_filter.c
- * @brief SSH Proxy Core - RBAC Filter Implementation
+ * @brief Audit Proxy Core - RBAC Filter Implementation
  */
 
 #include "rbac_filter.h"

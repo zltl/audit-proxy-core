@@ -15,11 +15,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 const (
-	defaultAuditSearchIndex  = "ssh-proxy-audit"
+	defaultAuditSearchIndex  = "audit-proxy-audit"
 	auditSearchBulkBatchSize = 200
 	auditSearchPageSize      = 500
 )

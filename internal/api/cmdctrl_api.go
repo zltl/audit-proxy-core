@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cmdctrl"
+	"github.com/zltl/audit-proxy-core/internal/cmdctrl"
 )
 
 type cmdCtrlState struct {

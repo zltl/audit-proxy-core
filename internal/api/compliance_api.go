@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/compliance"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/siem"
+	"github.com/zltl/audit-proxy-core/internal/compliance"
+	"github.com/zltl/audit-proxy-core/internal/siem"
 )
 
 // complianceState holds report generator and cached reports.
@@ -513,7 +513,7 @@ func (a *API) handleTestSIEM(w http.ResponseWriter, r *http.Request) {
 
 	testEvent := siem.Event{
 		Timestamp: time.Now().UTC(),
-		Source:    "ssh-proxy",
+		Source:    "audit-proxy",
 		EventType: "siem.test",
 		Severity:  "info",
 		Data: map[string]interface{}{

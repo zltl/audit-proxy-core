@@ -1,11 +1,21 @@
-# SSH Proxy Core
+# Audit Proxy Core
+
+<p align="center">
+  <img src="docs/assets/ascii-stream-demo.gif" alt="ASCII 终端录像流演示" width="720"/>
+</p>
+
+<p align="center">
+  全程 ASCII 动画（asciicast v2）：矩阵开场 → 代理握手 → 命令审计 → 策略拦截。
+  <a href="demos/ascii-stream/README.md">演示说明</a> ·
+  <code>audit-proxy play --file demos/ascii-stream/demo.cast</code>
+</p>
 
 数据库为准的 SSH 审计代理。**默认栈为 Go 数据面**（`cmd/dataplane`：协议终结、录像、传输审计）+ Go 控制面（访问决策、管理 API、Web UI、审计汇）。
 
 > **新架构文档：[docs/architecture.md](docs/architecture.md)**
 >
 > 身份、目标、上游凭据与授权规则现在都以数据库为唯一事实源，`config.ini` 降级为可选的
-> 引导来源（`sshproxy migrate ini2db` 导入）。数据面自身不做任何授权判断，而是在每次
+> 引导来源（`audit-proxy migrate ini2db` 导入）。数据面自身不做任何授权判断，而是在每次
 > 需要时向控制面的决策点提问，因此撤销在下一次决策时生效而不是下一次重载。
 >
 > 旧的 C 数据面已迁至 [`legacy/c-dataplane/`](legacy/c-dataplane/)（`make legacy-c`），仍可构建但存在三个协议层缺陷：
@@ -13,7 +23,7 @@
 > 新部署请使用 `cmd/dataplane`。
 
 <!-- badges -->
-<!-- ![Build](https://img.shields.io/github/actions/workflow/status/your-org/ssh-proxy-core/ci.yml?branch=main) -->
+<!-- ![Build](https://img.shields.io/github/actions/workflow/status/your-org/audit-proxy-core/ci.yml?branch=main) -->
 <!-- ![License](https://img.shields.io/badge/license-GPL--3.0--only-blue) -->
 <!-- ![Version](https://img.shields.io/badge/version-0.3.0-green) -->
 
@@ -115,7 +125,7 @@
 ```bash
 # 依赖：Go 1.25+（见 go.mod）
 # 构建默认 Go 控制面 + 数据面
-make          # 等同 make go-build → build/bin/{control-plane,dataplane,sshproxy}
+make          # 等同 make go-build → build/bin/{control-plane,dataplane,audit-proxy}
 make test     # go test ./...
 make go-smoke # 本地端到端冒烟（主功能测试）
 
@@ -123,22 +133,22 @@ make go-smoke # 本地端到端冒烟（主功能测试）
 make legacy-c
 
 # 生成主机密钥 (首次运行)
-ssh-keygen -t ed25519 -f /tmp/ssh_proxy_host_key -N ""
+ssh-keygen -t ed25519 -f /tmp/audit_proxy_host_key -N ""
 ```
 
 ### 2. 最小配置
 
-创建 `/etc/ssh-proxy/config.ini`（或使用项目根目录的 `config.ini`）：
+创建 `/etc/audit-proxy/config.ini`（或使用项目根目录的 `config.ini`）：
 
 ```ini
 [server]
 bind_addr = 0.0.0.0
 port = 2222
-host_key = /etc/ssh-proxy/host_key
+host_key = /etc/audit-proxy/host_key
 
 [logging]
 level = info
-audit_dir = /var/log/ssh-proxy/audit
+audit_dir = /var/log/audit-proxy/audit
 
 [limits]
 max_sessions = 1000
@@ -156,7 +166,7 @@ enabled = true
 upstream = prod.example.com
 port = 22
 user = root
-privkey = /etc/ssh-proxy/keys/admin.key
+privkey = /etc/audit-proxy/keys/admin.key
 
 [route:*]
 upstream = bastion.example.com
@@ -167,16 +177,16 @@ user = guest
 
 ```bash
 # 校验配置 (类似 nginx -t)
-./build/bin/ssh-proxy-core -t -c /etc/ssh-proxy/config.ini
+./build/bin/audit-proxy-core -t -c /etc/audit-proxy/config.ini
 
 # 启动服务
-./build/bin/ssh-proxy-core -c /etc/ssh-proxy/config.ini
+./build/bin/audit-proxy-core -c /etc/audit-proxy/config.ini
 
 # 调试模式
-./build/bin/ssh-proxy-core -d
+./build/bin/audit-proxy-core -d
 
 # 查看帮助
-./build/bin/ssh-proxy-core --help
+./build/bin/audit-proxy-core --help
 ```
 
 ### 4. 连接测试
@@ -193,7 +203,7 @@ ssh -p 2222 admin@target-server -o ProxyJump=proxy-server
 
 ## 配置参考
 
-SSH Proxy Core 使用 INI 格式配置文件。完整示例见 `docs/config.example.ini`。
+Audit Proxy Core 使用 INI 格式配置文件。完整示例见 `docs/config.example.ini`。
 
 ### `[server]` 服务器
 
@@ -201,8 +211,8 @@ SSH Proxy Core 使用 INI 格式配置文件。完整示例见 `docs/config.exam
 [server]
 bind_addr = 0.0.0.0               # 监听地址
 port = 2222                        # 监听端口
-host_key = /etc/ssh-proxy/host_key # 主机密钥路径
-banner = /etc/ssh-proxy/banner.txt # 认证前 Banner 文件路径 (可选)
+host_key = /etc/audit-proxy/host_key # 主机密钥路径
+banner = /etc/audit-proxy/banner.txt # 认证前 Banner 文件路径 (可选)
 motd = Welcome {username} from {client_ip}!  # 认证后 MOTD (可选)
 ```
 
@@ -214,7 +224,7 @@ motd = Welcome {username} from {client_ip}!  # 认证后 MOTD (可选)
 | `{client_ip}` | 客户端 IP 地址 |
 | `{datetime}` | 当前日期时间 |
 | `{hostname}` | 代理服务器主机名 |
-| `{version}` | ssh-proxy-core 版本号 |
+| `{version}` | audit-proxy-core 版本号 |
 
 Banner 在认证前显示（如法律声明），MOTD 在认证成功后显示。
 
@@ -223,7 +233,7 @@ Banner 在认证前显示（如法律声明），MOTD 在认证成功后显示�
 ```ini
 [logging]
 level = info                          # 日志级别: trace, debug, info, warn, error, fatal
-audit_dir = /var/log/ssh-proxy/audit  # 审计日志目录
+audit_dir = /var/log/audit-proxy/audit  # 审计日志目录
 audit_encryption_key = 001122...eeff  # 可选: 64 位十六进制 AES-256-GCM 密钥
 format = text                         # 日志格式: text (默认) | json
 ```
@@ -277,7 +287,7 @@ mfa_enabled = true                     # 该用户是否启用 MFA
 ```ini
 [security]
 master_key = ${env:SSH_PROXY_MASTER_KEY}      # 64 hex chars (AES-256)
-# master_key_file = /etc/ssh-proxy/master_key.hex
+# master_key_file = /etc/audit-proxy/master_key.hex
 ```
 
 密码哈希生成：
@@ -294,7 +304,7 @@ openssl passwd -6 -salt saltsalt 'yourpassword'
 upstream = prod.example.com    # 上游服务器地址
 port = 22                      # 上游端口 (默认 22)
 user = root                    # 上游用户名
-privkey = /etc/ssh-proxy/keys/admin.key  # 上游认证私钥
+privkey = /etc/audit-proxy/keys/admin.key  # 上游认证私钥
 
 [route:dev-*]                  # 匹配 dev-alice, dev-bob 等
 upstream = dev.example.com
@@ -487,7 +497,7 @@ pool_max_idle_time = 300          # 空闲连接最大存活时间 (秒)
 ```ini
 [session_store]
 type = local                      # local (内存，默认) | file (文件共享)
-path = /var/lib/ssh-proxy/sessions.json  # 文件后端路径 (type=file 时)
+path = /var/lib/audit-proxy/sessions.json  # 文件后端路径 (type=file 时)
 sync_interval = 5                 # 同步间隔 (秒)
 instance_id = proxy-01            # 实例标识 (多实例部署时区分来源)
 ```
@@ -513,7 +523,7 @@ instance_id = proxy-01            # 实例标识 (多实例部署时区分来源
 | 文件传输日志 | `{audit_dir}/transfers_YYYYMMDD.log` | SCP/SFTP/rsync 传输记录 |
 | 端口转发日志 | `{audit_dir}/port_forwards_YYYYMMDD.log` | 端口转发请求记录 |
 
-默认 `audit_dir` 为 `/tmp/ssh_proxy_audit`，可在 `[logging]` 段的 `audit_dir` 中修改。
+默认 `audit_dir` 为 `/tmp/audit_proxy_audit`，可在 `[logging]` 段的 `audit_dir` 中修改。
 
 ### 结构化 JSON 日志
 
@@ -581,16 +591,16 @@ instance_id = proxy-01            # 实例标识 (多实例部署时区分来源
 sudo apt install asciinema  # 或 pip install asciinema
 
 # 播放
-asciinema play /tmp/ssh_proxy_audit/session_12345_20250105_120000.cast
+asciinema play /tmp/audit_proxy_audit/session_12345_20250105_120000.cast
 
 # 2 倍速 + 限制空闲
-asciinema play -s 2 -i 2 /tmp/ssh_proxy_audit/session_12345_20250105_120000.cast
+asciinema play -s 2 -i 2 /tmp/audit_proxy_audit/session_12345_20250105_120000.cast
 ```
 
 #### 方法 2: asciinema-player (Web)
 
 ```bash
-cd /tmp/ssh_proxy_audit && python3 -m http.server 8000
+cd /tmp/audit_proxy_audit && python3 -m http.server 8000
 ```
 
 ```html
@@ -627,10 +637,10 @@ cat session_*.cast             # 全部帧
 使用 `--check`（或 `-t`）标志校验配置文件，类似 `nginx -t`：
 
 ```bash
-$ ./build/bin/ssh-proxy-core -t -c /etc/ssh-proxy/config.ini
-Configuration OK: /etc/ssh-proxy/config.ini
+$ ./build/bin/audit-proxy-core -t -c /etc/audit-proxy/config.ini
+Configuration OK: /etc/audit-proxy/config.ini
 
-$ ./build/bin/ssh-proxy-core -t -c bad-config.ini
+$ ./build/bin/audit-proxy-core -t -c bad-config.ini
 Configuration ERROR: bad-config.ini
   [ERROR] host_key file not found: /nonexistent/key
   [WARN]  no routes defined — all connections will be rejected
@@ -654,17 +664,17 @@ curl http://localhost:9090/metrics
 **Prometheus 指标**（`/metrics` 端点）:
 
 ```
-ssh_proxy_connections_total 12345
-ssh_proxy_connections_active 42
-ssh_proxy_auth_success_total 10000
-ssh_proxy_auth_failure_total 500
-ssh_proxy_bytes_upstream 1048576
-ssh_proxy_bytes_downstream 2097152
-ssh_proxy_sessions_rejected 100
-ssh_proxy_config_reloads 5
-ssh_proxy_upstream_retries_total 30
-ssh_proxy_upstream_retries_success 25
-ssh_proxy_upstream_retries_exhausted 5
+audit_proxy_connections_total 12345
+audit_proxy_connections_active 42
+audit_proxy_auth_success_total 10000
+audit_proxy_auth_failure_total 500
+audit_proxy_bytes_upstream 1048576
+audit_proxy_bytes_downstream 2097152
+audit_proxy_sessions_rejected 100
+audit_proxy_config_reloads 5
+audit_proxy_upstream_retries_total 30
+audit_proxy_upstream_retries_success 25
+audit_proxy_upstream_retries_exhausted 5
 ```
 
 ### 管理 REST API
@@ -710,7 +720,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:9090/api/v1/relo
 
 ```bash
 # 方式 1: 发送 SIGHUP
-kill -HUP $(pidof ssh-proxy-core)
+kill -HUP $(pidof audit-proxy-core)
 
 # 方式 2: REST API
 curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:9090/api/v1/reload
@@ -718,29 +728,29 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:9090/api/v1/relo
 
 热重载会重新加载配置文件中的用户、路由、策略、ACL 等，已建立的会话不受影响。
 
-### `sshproxy` 控制平面 CLI
+### `audit-proxy` 控制平面 CLI
 
-`cmd/sshproxy` 提供了面向控制平面的命令行工具，可用于 OIDC 登录、SSH 证书获取、会话查询与通过代理发起 `ssh` / `scp`：
+`cmd/audit-proxy` 提供了面向控制平面的命令行工具，可用于 OIDC 登录、SSH 证书获取、会话查询与通过代理发起 `ssh` / `scp`：
 
 ```bash
-go build ./cmd/sshproxy
+go build ./cmd/audit-proxy
 
 # 首次配置控制平面地址
-./sshproxy config set server https://proxy.example.com
-./sshproxy config set ssh_addr proxy.example.com:2222
+./audit-proxy config set server https://proxy.example.com
+./audit-proxy config set ssh_addr proxy.example.com:2222
 
 # 浏览器 OIDC 登录并自动获取短期 SSH 证书
-./sshproxy login
+./audit-proxy login
 
 # 常用命令
-./sshproxy ls servers
-./sshproxy ls sessions
-./sshproxy ssh alice@db-prod
-./sshproxy scp ./backup.tgz alice@db-prod:/tmp/
-./sshproxy completion bash
+./audit-proxy ls servers
+./audit-proxy ls sessions
+./audit-proxy ssh alice@db-prod
+./audit-proxy scp ./backup.tgz alice@db-prod:/tmp/
+./audit-proxy completion bash
 ```
 
-`sshproxy login` 会将控制平面会话保存到 `~/.sshproxy/config.json`，生成或复用 `~/.sshproxy/id_ed25519`，并向内置 SSH CA 申请短期用户证书。后续 `sshproxy ssh` / `scp` 会自动注入该身份文件。若需对控制平面 HTTPS 做证书固定，可在该配置文件中设置 `pinned_server_pubkey_sha256`（格式为 `sha256/<base64-spki-hash>`）。
+`audit-proxy login` 会将控制平面会话保存到 `~/.audit-proxy/config.json`，生成或复用 `~/.audit-proxy/id_ed25519`，并向内置 SSH CA 申请短期用户证书。后续 `audit-proxy ssh` / `scp` 会自动注入该身份文件。若需对控制平面 HTTPS 做证书固定，可在该配置文件中设置 `pinned_server_pubkey_sha256`（格式为 `sha256/<base64-spki-hash>`）。
 
 ### Web SSO（OIDC / SAML）
 
@@ -758,7 +768,7 @@ Assertion Attribute 将 IdP 组/角色映射到本地 `admin` / `operator` /
 
 ```
                            ┌──────────────────────────────────────────────────────┐
-                           │                  SSH Proxy Core                      │
+                           │                  Audit Proxy Core                      │
 ┌──────────┐               │                                                      │               ┌──────────────┐
 │          │   TCP / SSH   │  ┌──────────────────────────────────────────────┐    │   SSH / TCP   │              │
 │  Client  │──────────────▶│  │              Filter Chain                    │    │──────────────▶│   Upstream   │
@@ -802,7 +812,7 @@ on_close:          Rate Limit → Audit → Webhook
 ## 项目结构
 
 ```
-ssh-proxy-core/
+audit-proxy-core/
 ├── src/                      # 源文件 (20 个 .c 文件)
 │   ├── main.c                    # 主入口、CLI 参数解析
 │   ├── ssh_server.c              # SSH 服务器核心
@@ -845,7 +855,7 @@ ssh-proxy-core/
 │   ├── TESTING.md                # 测试指南
 │   └── config.example.ini        # 完整配置示例
 ├── deploy/                   # 部署文件
-│   └── ssh-proxy.service         # systemd 服务单元
+│   └── audit-proxy.service         # systemd 服务单元
 ├── scripts/                  # 脚本
 │   ├── install-libssh.sh         # libssh 源码安装
 │   └── setup-and-verify.sh       # 环境验证
@@ -928,8 +938,8 @@ REST API，而不要求完整 Terraform plugin runtime。
 
 ### 环境变量
 
-- `SSHPROXY_SERVER` — 控制面地址，例如 `https://proxy.example.com:8443`
-- `SSHPROXY_TOKEN` — API Bearer Token
+- `AUDITPROXY_SERVER` — 控制面地址，例如 `https://proxy.example.com:8443`
+- `AUDITPROXY_TOKEN` — API Bearer Token
 
 ### 支持动作
 
@@ -940,8 +950,8 @@ REST API，而不要求完整 Terraform plugin runtime。
 
 ```bash
 # 读取当前配置
-SSHPROXY_SERVER=https://proxy.example.com:8443 \
-SSHPROXY_TOKEN=$TOKEN \
+AUDITPROXY_SERVER=https://proxy.example.com:8443 \
+AUDITPROXY_TOKEN=$TOKEN \
 go run ./cmd/terraform-provider read-config
 
 # “导入”已有用户 / 服务器（按标识读取，供 Terraform state 对齐）
@@ -1122,7 +1132,7 @@ router_t *router = router_create(&rt_cfg);
 
 ```bash
 make debug                          # 调试构建
-gdb ./build/bin/ssh-proxy-core      # GDB 调试
+gdb ./build/bin/audit-proxy-core      # GDB 调试
 
 make compile_commands.json          # 生成 LSP 编译数据库
 ```
@@ -1144,56 +1154,56 @@ make test      # 运行全部测试
 ```bash
 # 安装
 sudo make install
-sudo cp deploy/ssh-proxy.service /etc/systemd/system/
+sudo cp deploy/audit-proxy.service /etc/systemd/system/
 sudo systemctl daemon-reload
 
 # 创建用户和目录
-sudo useradd -r -s /usr/sbin/nologin ssh-proxy
-sudo mkdir -p /etc/ssh-proxy /var/log/ssh-proxy/audit
-sudo chown ssh-proxy:ssh-proxy /var/log/ssh-proxy /var/log/ssh-proxy/audit
+sudo useradd -r -s /usr/sbin/nologin audit-proxy
+sudo mkdir -p /etc/audit-proxy /var/log/audit-proxy/audit
+sudo chown audit-proxy:audit-proxy /var/log/audit-proxy /var/log/audit-proxy/audit
 
 # 生成密钥并放置配置
-sudo ssh-keygen -t ed25519 -f /etc/ssh-proxy/host_key -N ""
-sudo chown ssh-proxy:ssh-proxy /etc/ssh-proxy/host_key*
-sudo cp docs/config.example.ini /etc/ssh-proxy/config.ini
-sudo vi /etc/ssh-proxy/config.ini  # 编辑配置
+sudo ssh-keygen -t ed25519 -f /etc/audit-proxy/host_key -N ""
+sudo chown audit-proxy:audit-proxy /etc/audit-proxy/host_key*
+sudo cp docs/config.example.ini /etc/audit-proxy/config.ini
+sudo vi /etc/audit-proxy/config.ini  # 编辑配置
 
 # 启动
-sudo systemctl enable --now ssh-proxy
+sudo systemctl enable --now audit-proxy
 
 # 查看状态
-sudo systemctl status ssh-proxy
-sudo journalctl -u ssh-proxy -f
+sudo systemctl status audit-proxy
+sudo journalctl -u audit-proxy -f
 ```
 
-systemd 服务文件 (`deploy/ssh-proxy.service`) 已包含安全加固：`NoNewPrivileges`、`ProtectSystem=strict`、`ProtectHome`、`PrivateTmp`。资源限制：65536 文件描述符、4096 进程。
+systemd 服务文件 (`deploy/audit-proxy.service`) 已包含安全加固：`NoNewPrivileges`、`ProtectSystem=strict`、`ProtectHome`、`PrivateTmp`。资源限制：65536 文件描述符、4096 进程。
 
 热重载配置：
 
 ```bash
-sudo systemctl reload ssh-proxy   # 发送 SIGHUP
+sudo systemctl reload audit-proxy   # 发送 SIGHUP
 ```
 
 ### Docker
 
 ```bash
 # 构建镜像
-docker build -t ssh-proxy-core .
+docker build -t audit-proxy-core .
 
 # 运行
 docker run -d \
-  --name ssh-proxy \
+  --name audit-proxy \
   -p 2222:2222 \
   -p 9090:9090 \
-  -v /path/to/config.ini:/etc/ssh-proxy/config.ini:ro \
-  -v /path/to/audit:/var/log/ssh-proxy/audit \
-  ssh-proxy-core
+  -v /path/to/config.ini:/etc/audit-proxy/config.ini:ro \
+  -v /path/to/audit:/var/log/audit-proxy/audit \
+  audit-proxy-core
 
 # 查看日志
-docker logs -f ssh-proxy
+docker logs -f audit-proxy
 ```
 
-Dockerfile 使用多阶段构建（builder + runtime），运行时镜像仅包含 libssh 运行时库。默认使用 `ssh-proxy` 非 root 用户运行，暴露端口 2222 (SSH) 和 9090 (Admin API + Health Check)。
+Dockerfile 使用多阶段构建（builder + runtime），运行时镜像仅包含 libssh 运行时库。默认使用 `audit-proxy` 非 root 用户运行，暴露端口 2222 (SSH) 和 9090 (Admin API + Health Check)。
 
 ---
 

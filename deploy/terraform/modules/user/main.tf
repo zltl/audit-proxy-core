@@ -1,4 +1,4 @@
-# Reusable module for managing SSH Proxy users via the Terraform provider CLI.
+# Reusable module for managing Audit Proxy users via the Terraform provider CLI.
 #
 # Usage:
 #   module "my_user" {
@@ -15,7 +15,7 @@ terraform {
 }
 
 variable "proxy_server" {
-  description = "SSH Proxy control-plane base URL"
+  description = "Audit Proxy control-plane base URL"
   type        = string
 }
 
@@ -70,22 +70,22 @@ resource "null_resource" "user" {
         display_name = var.display_name,
         role         = var.role,
         password     = var.password
-      })}' | terraform-provider-sshproxy create-user
+      })}' | terraform-provider-audit-proxy create-user
     EOT
 
     environment = {
-      SSHPROXY_SERVER = var.proxy_server
-      SSHPROXY_TOKEN  = var.proxy_token
+      AUDITPROXY_SERVER = var.proxy_server
+      AUDITPROXY_TOKEN  = var.proxy_token
     }
   }
 
   provisioner "local-exec" {
     when    = destroy
-    command = "terraform-provider-sshproxy delete-user ${self.triggers.username}"
+    command = "terraform-provider-audit-proxy delete-user ${self.triggers.username}"
 
     environment = {
-      SSHPROXY_SERVER = self.triggers.proxy_server
-      SSHPROXY_TOKEN  = self.triggers.proxy_token
+      AUDITPROXY_SERVER = self.triggers.proxy_server
+      AUDITPROXY_TOKEN  = self.triggers.proxy_token
     }
   }
 }

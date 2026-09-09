@@ -3,7 +3,7 @@ package dp_test
 import (
 	"testing"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dp"
+	"github.com/zltl/audit-proxy-core/internal/dp"
 )
 
 func BenchmarkGoDataPlaneConfigDefaults(b *testing.B) {

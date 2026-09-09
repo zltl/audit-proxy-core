@@ -1,4 +1,4 @@
-/* SSH Proxy Control Plane – base styles */
+/* Audit Proxy Control Plane – base styles */
 *, *::before, *::after { box-sizing: border-box; }
 body { font-family: system-ui, sans-serif; margin: 0; padding: 0; background: #f5f5f5; color: #222; }
 nav { background: #1a1a2e; color: #fff; padding: .75rem 1.5rem; display: flex; align-items: center; gap: 1rem; }

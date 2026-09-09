@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
+	"github.com/zltl/audit-proxy-core/internal/store"
 )
 
 // Result summarises what an import did, so the operator can confirm the outcome

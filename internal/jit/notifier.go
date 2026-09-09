@@ -216,7 +216,7 @@ func (n *Notifier) NotifyMessage(ctx context.Context, subject, body string) erro
 		Timestamp: time.Now().UTC(),
 	}
 	if message.Subject == "" {
-		message.Subject = "[SSH Proxy] Notification"
+		message.Subject = "[Audit Proxy] Notification"
 	}
 	if message.Body == "" {
 		message.Body = message.Subject
@@ -365,7 +365,7 @@ func (n *Notifier) renderEventBody(event *JITEvent) string {
 
 func (n *Notifier) renderMessageSubject(message *messageEvent) string {
 	if message == nil {
-		return "[SSH Proxy] Notification"
+		return "[Audit Proxy] Notification"
 	}
 	rendered, err := renderCompiledTemplate(n.messageSubjectTemplate, map[string]interface{}{
 		"Message": message,
@@ -502,7 +502,7 @@ func renderPagerDutyPayload(routingKey, summary, body, severity string) map[stri
 		"event_action": "trigger",
 		"payload": map[string]interface{}{
 			"summary":  strings.TrimSpace(summary),
-			"source":   "ssh-proxy-core",
+			"source":   "audit-proxy-core",
 			"severity": severity,
 			"custom_details": map[string]string{
 				"body": strings.TrimSpace(body),
@@ -517,7 +517,7 @@ func renderOpsgeniePayload(subject, body, priority string) map[string]interface{
 		"description": strings.TrimSpace(body),
 		"priority":    priority,
 		"details": map[string]string{
-			"source": "ssh-proxy-core",
+			"source": "audit-proxy-core",
 		},
 	}
 }
@@ -571,17 +571,17 @@ func renderNotificationSubject(event *JITEvent) string {
 	}
 	switch event.Type {
 	case "request_created":
-		return fmt.Sprintf("[SSH Proxy] JIT approval requested for %s", defaultString(target, "target"))
+		return fmt.Sprintf("[Audit Proxy] JIT approval requested for %s", defaultString(target, "target"))
 	case "request_approved":
-		return fmt.Sprintf("[SSH Proxy] JIT request approved for %s", defaultString(target, "target"))
+		return fmt.Sprintf("[Audit Proxy] JIT request approved for %s", defaultString(target, "target"))
 	case "request_denied":
-		return fmt.Sprintf("[SSH Proxy] JIT request denied for %s", defaultString(target, "target"))
+		return fmt.Sprintf("[Audit Proxy] JIT request denied for %s", defaultString(target, "target"))
 	case "request_revoked":
-		return fmt.Sprintf("[SSH Proxy] JIT request revoked for %s", defaultString(target, "target"))
+		return fmt.Sprintf("[Audit Proxy] JIT request revoked for %s", defaultString(target, "target"))
 	case "request_break_glass":
-		return fmt.Sprintf("[SSH Proxy] Break-glass access activated for %s", defaultString(target, "target"))
+		return fmt.Sprintf("[Audit Proxy] Break-glass access activated for %s", defaultString(target, "target"))
 	default:
-		return fmt.Sprintf("[SSH Proxy] JIT event for %s", defaultString(target, "target"))
+		return fmt.Sprintf("[Audit Proxy] JIT event for %s", defaultString(target, "target"))
 	}
 }
 

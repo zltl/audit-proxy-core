@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cluster"
+	"github.com/zltl/audit-proxy-core/internal/cluster"
 )
 
 // SetCluster attaches a cluster manager to the API for cluster endpoints.

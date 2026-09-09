@@ -204,7 +204,7 @@ func enableSearchAuditStore(t *testing.T, api *API, backend, endpoint, token str
 	api.config.AuditStoreBackend = backend
 	api.config.AuditStoreEndpoint = endpoint
 	api.config.AuditStoreToken = token
-	api.config.AuditStoreIndex = "ssh-proxy-audit-test"
+	api.config.AuditStoreIndex = "audit-proxy-audit-test"
 	store, err := newAuditSearchStore(api.config)
 	if err != nil {
 		t.Fatalf("newAuditSearchStore() error = %v", err)

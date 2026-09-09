@@ -10,17 +10,17 @@ import (
 	"strings"
 	"time"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/store"
+	"github.com/zltl/audit-proxy-core/internal/telemetry"
 )
 
 // AuthorizeSession decides whether a principal may open a session to a target.
-func (s *Server) AuthorizeSession(_ context.Context, req *sshproxyv1.AuthorizeSessionRequest) (*sshproxyv1.AuthorizeSessionResponse, error) {
+func (s *Server) AuthorizeSession(_ context.Context, req *auditproxyv1.AuthorizeSessionRequest) (*auditproxyv1.AuthorizeSessionResponse, error) {
 	target, err := s.resolveTarget(req)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return &sshproxyv1.AuthorizeSessionResponse{
+			return &auditproxyv1.AuthorizeSessionResponse{
 				Allowed: false,
 				Reason:  "no such target",
 			}, nil
@@ -28,10 +28,10 @@ func (s *Server) AuthorizeSession(_ context.Context, req *sshproxyv1.AuthorizeSe
 		return nil, status(err, "resolve target")
 	}
 	if !target.Enabled {
-		return &sshproxyv1.AuthorizeSessionResponse{Allowed: false, Reason: "target is disabled"}, nil
+		return &auditproxyv1.AuthorizeSessionResponse{Allowed: false, Reason: "target is disabled"}, nil
 	}
 	if target.Maintenance {
-		return &sshproxyv1.AuthorizeSessionResponse{Allowed: false, Reason: "target is in maintenance"}, nil
+		return &auditproxyv1.AuthorizeSessionResponse{Allowed: false, Reason: "target is in maintenance"}, nil
 	}
 
 	decision, err := s.store.Evaluate(store.AccessRequest{
@@ -60,7 +60,7 @@ func (s *Server) AuthorizeSession(_ context.Context, req *sshproxyv1.AuthorizeSe
 	}
 
 	if !decision.Allowed {
-		return &sshproxyv1.AuthorizeSessionResponse{
+		return &auditproxyv1.AuthorizeSessionResponse{
 			Allowed:  false,
 			Reason:   decision.Reason,
 			RuleId:   decision.RuleID,
@@ -84,7 +84,7 @@ func (s *Server) AuthorizeSession(_ context.Context, req *sshproxyv1.AuthorizeSe
 		approvalRequired = false
 	}
 
-	return &sshproxyv1.AuthorizeSessionResponse{
+	return &auditproxyv1.AuthorizeSessionResponse{
 		Allowed:            true,
 		Reason:             decision.Reason,
 		RuleId:             decision.RuleID,
@@ -104,7 +104,7 @@ func (s *Server) AuthorizeSession(_ context.Context, req *sshproxyv1.AuthorizeSe
 
 // resolveTarget finds the target a request refers to, accepting either a
 // registered name or a raw address.
-func (s *Server) resolveTarget(req *sshproxyv1.AuthorizeSessionRequest) (store.Target, error) {
+func (s *Server) resolveTarget(req *auditproxyv1.AuthorizeSessionRequest) (store.Target, error) {
 	if name := strings.TrimSpace(req.GetTarget()); name != "" {
 		if target, err := s.store.GetTarget(name); err == nil {
 			return target, nil
@@ -135,27 +135,27 @@ func (s *Server) resolveTarget(req *sshproxyv1.AuthorizeSessionRequest) (store.T
 // Checking here rather than only at session start is what stops a session that
 // was allowed to run a shell from also opening a tunnel: SSH lets a client ask
 // for both on one connection, and the two are very different privileges.
-func (s *Server) AuthorizeChannel(_ context.Context, req *sshproxyv1.AuthorizeChannelRequest) (*sshproxyv1.AuthorizeChannelResponse, error) {
+func (s *Server) AuthorizeChannel(_ context.Context, req *auditproxyv1.AuthorizeChannelRequest) (*auditproxyv1.AuthorizeChannelResponse, error) {
 	session, err := s.store.GetSession(req.GetSessionId())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return &sshproxyv1.AuthorizeChannelResponse{Allowed: false, Reason: "unknown session"}, nil
+			return &auditproxyv1.AuthorizeChannelResponse{Allowed: false, Reason: "unknown session"}, nil
 		}
 		return nil, status(err, "load session")
 	}
 	if session.Status != store.SessionActive {
-		return &sshproxyv1.AuthorizeChannelResponse{Allowed: false, Reason: "session is no longer active"}, nil
+		return &auditproxyv1.AuthorizeChannelResponse{Allowed: false, Reason: "session is no longer active"}, nil
 	}
 
 	required, ok := requiredFeature(req)
 	if !ok {
-		return &sshproxyv1.AuthorizeChannelResponse{
+		return &auditproxyv1.AuthorizeChannelResponse{
 			Allowed: false,
 			Reason:  "this channel type is not supported",
 		}, nil
 	}
 	if !session.Features.Has(required) {
-		return &sshproxyv1.AuthorizeChannelResponse{
+		return &auditproxyv1.AuthorizeChannelResponse{
 			Allowed:         false,
 			Reason:          "policy does not permit " + required.String() + " on this session",
 			RequiredFeature: required.String(),
@@ -164,53 +164,53 @@ func (s *Server) AuthorizeChannel(_ context.Context, req *sshproxyv1.AuthorizeCh
 
 	// A transfer is also constrained by direction, which the feature mask
 	// carries separately from the protocol that performs it.
-	return &sshproxyv1.AuthorizeChannelResponse{Allowed: true}, nil
+	return &auditproxyv1.AuthorizeChannelResponse{Allowed: true}, nil
 }
 
 // requiredFeature maps a channel or channel request onto the capability it needs.
-func requiredFeature(req *sshproxyv1.AuthorizeChannelRequest) (store.FeatureSet, bool) {
+func requiredFeature(req *auditproxyv1.AuthorizeChannelRequest) (store.FeatureSet, bool) {
 	switch req.GetChannelType() {
-	case sshproxyv1.ChannelType_CHANNEL_TYPE_DIRECT_TCPIP:
+	case auditproxyv1.ChannelType_CHANNEL_TYPE_DIRECT_TCPIP:
 		return store.FeatureLocalForward, true
-	case sshproxyv1.ChannelType_CHANNEL_TYPE_FORWARDED_TCPIP:
+	case auditproxyv1.ChannelType_CHANNEL_TYPE_FORWARDED_TCPIP:
 		return store.FeatureRemoteForward, true
-	case sshproxyv1.ChannelType_CHANNEL_TYPE_X11:
+	case auditproxyv1.ChannelType_CHANNEL_TYPE_X11:
 		return store.FeatureX11, true
-	case sshproxyv1.ChannelType_CHANNEL_TYPE_AGENT:
+	case auditproxyv1.ChannelType_CHANNEL_TYPE_AGENT:
 		return store.FeatureAgentForward, true
 	}
 
 	switch req.GetRequestType() {
-	case sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_PTY:
+	case auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_PTY:
 		return store.FeaturePTY, true
-	case sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_SHELL:
+	case auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_SHELL:
 		return store.FeatureShell, true
-	case sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_EXEC:
+	case auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_EXEC:
 		// scp rides on exec, so an exec that is actually a transfer is charged
 		// against the transfer capability rather than the exec one.
 		if isSCPCommand(req.GetPayload()) {
 			return store.FeatureSCP, true
 		}
 		return store.FeatureExec, true
-	case sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_SUBSYSTEM:
+	case auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_SUBSYSTEM:
 		if strings.EqualFold(strings.TrimSpace(req.GetPayload()), "sftp") {
 			return store.FeatureSFTP, true
 		}
 		return store.FeatureSubsystem, true
-	case sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_ENV:
+	case auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_ENV:
 		return store.FeatureEnv, true
-	case sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_X11:
+	case auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_X11:
 		return store.FeatureX11, true
-	case sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_AGENT:
+	case auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_AGENT:
 		return store.FeatureAgentForward, true
-	case sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_TCPIP_FORWARD:
+	case auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_TCPIP_FORWARD:
 		return store.FeatureRemoteForward, true
-	case sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_WINDOW_CHANGE:
+	case auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_WINDOW_CHANGE:
 		// Resizing an existing terminal grants nothing beyond the pty already
 		// allowed, so it is charged against that.
 		return store.FeaturePTY, true
-	case sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_UNSPECIFIED:
-		if req.GetChannelType() == sshproxyv1.ChannelType_CHANNEL_TYPE_SESSION {
+	case auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_UNSPECIFIED:
+		if req.GetChannelType() == auditproxyv1.ChannelType_CHANNEL_TYPE_SESSION {
 			// Opening a session channel by itself does nothing until a request
 			// arrives on it, each of which is checked in turn.
 			return store.FeatureNone, true
@@ -230,13 +230,13 @@ func isSCPCommand(command string) bool {
 // --------------------------------------------------------------------------
 
 // AuthorizeCommand screens a command before it reaches the upstream host.
-func (s *Server) AuthorizeCommand(req *sshproxyv1.AuthorizeCommandRequest, stream sshproxyv1.AccessDecisionService_AuthorizeCommandServer) error {
+func (s *Server) AuthorizeCommand(req *auditproxyv1.AuthorizeCommandRequest, stream auditproxyv1.AccessDecisionService_AuthorizeCommandServer) error {
 	telemetry.SetSessionID(stream.Context(), req.GetSessionId())
 
 	policyID := strings.TrimSpace(req.GetCommandPolicyId())
 	if policyID == "" {
-		return stream.Send(&sshproxyv1.AuthorizeCommandResponse{
-			Decision: sshproxyv1.CommandDecision_COMMAND_DECISION_ALLOW,
+		return stream.Send(&auditproxyv1.AuthorizeCommandResponse{
+			Decision: auditproxyv1.CommandDecision_COMMAND_DECISION_ALLOW,
 			Reason:   "no command policy is attached to this session",
 		})
 	}
@@ -247,31 +247,31 @@ func (s *Server) AuthorizeCommand(req *sshproxyv1.AuthorizeCommandRequest, strea
 	}
 	match, ok := matchCommandRule(rules, req.GetCommand())
 	if !ok {
-		return stream.Send(&sshproxyv1.AuthorizeCommandResponse{
-			Decision: sshproxyv1.CommandDecision_COMMAND_DECISION_ALLOW,
+		return stream.Send(&auditproxyv1.AuthorizeCommandResponse{
+			Decision: auditproxyv1.CommandDecision_COMMAND_DECISION_ALLOW,
 			Reason:   "no rule matched",
 		})
 	}
 
 	switch match.Action {
 	case store.CommandDeny:
-		return stream.Send(&sshproxyv1.AuthorizeCommandResponse{
-			Decision: sshproxyv1.CommandDecision_COMMAND_DECISION_DENY,
+		return stream.Send(&auditproxyv1.AuthorizeCommandResponse{
+			Decision: auditproxyv1.CommandDecision_COMMAND_DECISION_DENY,
 			Reason:   firstNonEmpty(match.Message, "this command is not permitted"),
 			RuleId:   match.ID,
 			Severity: match.Severity,
 		})
 	case store.CommandRewrite:
-		return stream.Send(&sshproxyv1.AuthorizeCommandResponse{
-			Decision:         sshproxyv1.CommandDecision_COMMAND_DECISION_REWRITE,
+		return stream.Send(&auditproxyv1.AuthorizeCommandResponse{
+			Decision:         auditproxyv1.CommandDecision_COMMAND_DECISION_REWRITE,
 			Reason:           firstNonEmpty(match.Message, "command was rewritten by policy"),
 			RuleId:           match.ID,
 			Severity:         match.Severity,
 			RewrittenCommand: match.Rewrite,
 		})
 	case store.CommandAudit:
-		return stream.Send(&sshproxyv1.AuthorizeCommandResponse{
-			Decision: sshproxyv1.CommandDecision_COMMAND_DECISION_AUDIT,
+		return stream.Send(&auditproxyv1.AuthorizeCommandResponse{
+			Decision: auditproxyv1.CommandDecision_COMMAND_DECISION_AUDIT,
 			Reason:   firstNonEmpty(match.Message, "command was flagged for review"),
 			RuleId:   match.ID,
 			Severity: match.Severity,
@@ -279,8 +279,8 @@ func (s *Server) AuthorizeCommand(req *sshproxyv1.AuthorizeCommandRequest, strea
 	case store.CommandApprove:
 		return s.awaitCommandApproval(req, match, stream)
 	default:
-		return stream.Send(&sshproxyv1.AuthorizeCommandResponse{
-			Decision: sshproxyv1.CommandDecision_COMMAND_DECISION_ALLOW,
+		return stream.Send(&auditproxyv1.AuthorizeCommandResponse{
+			Decision: auditproxyv1.CommandDecision_COMMAND_DECISION_ALLOW,
 			RuleId:   match.ID,
 		})
 	}
@@ -291,15 +291,15 @@ func (s *Server) AuthorizeCommand(req *sshproxyv1.AuthorizeCommandRequest, strea
 // The first message tells the data plane the session is waiting, so it can say
 // so to the user instead of appearing to hang; the second carries the outcome.
 func (s *Server) awaitCommandApproval(
-	req *sshproxyv1.AuthorizeCommandRequest,
+	req *auditproxyv1.AuthorizeCommandRequest,
 	rule store.CommandRule,
-	stream sshproxyv1.AccessDecisionService_AuthorizeCommandServer,
+	stream auditproxyv1.AccessDecisionService_AuthorizeCommandServer,
 ) error {
 	if s.approver == nil {
 		// A rule asking for approval with nowhere to send it must refuse.
 		// Allowing would quietly turn the strictest action into the weakest.
-		return stream.Send(&sshproxyv1.AuthorizeCommandResponse{
-			Decision: sshproxyv1.CommandDecision_COMMAND_DECISION_DENY,
+		return stream.Send(&auditproxyv1.AuthorizeCommandResponse{
+			Decision: auditproxyv1.CommandDecision_COMMAND_DECISION_DENY,
 			Reason:   "this command requires approval, but no approval workflow is configured",
 			RuleId:   rule.ID,
 			Severity: rule.Severity,
@@ -312,8 +312,8 @@ func (s *Server) awaitCommandApproval(
 	if err != nil {
 		return status(err, "request command approval")
 	}
-	if err := stream.Send(&sshproxyv1.AuthorizeCommandResponse{
-		Decision:   sshproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL,
+	if err := stream.Send(&auditproxyv1.AuthorizeCommandResponse{
+		Decision:   auditproxyv1.CommandDecision_COMMAND_DECISION_PENDING_APPROVAL,
 		Reason:     firstNonEmpty(rule.Message, "waiting for approval"),
 		RuleId:     rule.ID,
 		Severity:   rule.Severity,
@@ -324,23 +324,23 @@ func (s *Server) awaitCommandApproval(
 
 	approved, decidedBy, err := s.approver.Await(ctx, approvalID)
 	if err != nil {
-		return stream.Send(&sshproxyv1.AuthorizeCommandResponse{
-			Decision:   sshproxyv1.CommandDecision_COMMAND_DECISION_DENY,
+		return stream.Send(&auditproxyv1.AuthorizeCommandResponse{
+			Decision:   auditproxyv1.CommandDecision_COMMAND_DECISION_DENY,
 			Reason:     "approval was not granted: " + err.Error(),
 			RuleId:     rule.ID,
 			ApprovalId: approvalID,
 		})
 	}
 	if !approved {
-		return stream.Send(&sshproxyv1.AuthorizeCommandResponse{
-			Decision:   sshproxyv1.CommandDecision_COMMAND_DECISION_DENY,
+		return stream.Send(&auditproxyv1.AuthorizeCommandResponse{
+			Decision:   auditproxyv1.CommandDecision_COMMAND_DECISION_DENY,
 			Reason:     "denied by " + decidedBy,
 			RuleId:     rule.ID,
 			ApprovalId: approvalID,
 		})
 	}
-	return stream.Send(&sshproxyv1.AuthorizeCommandResponse{
-		Decision:   sshproxyv1.CommandDecision_COMMAND_DECISION_ALLOW,
+	return stream.Send(&auditproxyv1.AuthorizeCommandResponse{
+		Decision:   auditproxyv1.CommandDecision_COMMAND_DECISION_ALLOW,
 		Reason:     "approved by " + decidedBy,
 		RuleId:     rule.ID,
 		ApprovalId: approvalID,
@@ -378,13 +378,13 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func recordPolicyToProto(p store.RecordPolicy) sshproxyv1.RecordPolicy {
+func recordPolicyToProto(p store.RecordPolicy) auditproxyv1.RecordPolicy {
 	switch p {
 	case store.RecordCommands:
-		return sshproxyv1.RecordPolicy_RECORD_POLICY_COMMANDS
+		return auditproxyv1.RecordPolicy_RECORD_POLICY_COMMANDS
 	case store.RecordNone:
-		return sshproxyv1.RecordPolicy_RECORD_POLICY_NONE
+		return auditproxyv1.RecordPolicy_RECORD_POLICY_NONE
 	default:
-		return sshproxyv1.RecordPolicy_RECORD_POLICY_FULL
+		return auditproxyv1.RecordPolicy_RECORD_POLICY_FULL
 	}
 }

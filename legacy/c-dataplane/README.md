@@ -22,7 +22,7 @@ make -C legacy/c-dataplane release
 Docker (from repo root):
 
 ```bash
-docker build -f legacy/c-dataplane/Dockerfile -t ssh-proxy-core:legacy .
+docker build -f legacy/c-dataplane/Dockerfile -t audit-proxy-core:legacy .
 ```
 
-`config.ini` and `sshproxy migrate ini2db` remain supported for importing legacy configuration into the database-backed Go stack.
+`config.ini` and `audit-proxy migrate ini2db` remain supported for importing legacy configuration into the database-backed Go stack.

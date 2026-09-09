@@ -8,24 +8,24 @@ import (
 )
 
 const (
-	Group              = "proxy.sshproxy.io"
+	Group              = "proxy.auditproxy.io"
 	Version            = "v1alpha1"
-	Kind               = "SSHProxyCluster"
-	Plural             = "sshproxyclusters"
+	Kind               = "AuditProxyCluster"
+	Plural             = "auditproxyclusters"
 	FullCRDName        = Plural + "." + Group
-	FieldManager       = "ssh-proxy-operator"
+	FieldManager       = "audit-proxy-operator"
 	DefaultNamespace   = "default"
-	DefaultBaseImage   = "ghcr.io/ssh-proxy-core/ssh-proxy-core"
+	DefaultBaseImage   = "ghcr.io/audit-proxy-core/audit-proxy-core"
 	DefaultPullPolicy  = "IfNotPresent"
 	DefaultServiceType = "LoadBalancer"
 )
 
-type SSHProxyCluster struct {
+type AuditProxyCluster struct {
 	APIVersion string                `json:"apiVersion"`
 	Kind       string                `json:"kind"`
 	Metadata   ObjectMeta            `json:"metadata"`
-	Spec       SSHProxyClusterSpec   `json:"spec"`
-	Status     SSHProxyClusterStatus `json:"status,omitempty"`
+	Spec       AuditProxyClusterSpec   `json:"spec"`
+	Status     AuditProxyClusterStatus `json:"status,omitempty"`
 }
 
 type ObjectMeta struct {
@@ -36,11 +36,11 @@ type ObjectMeta struct {
 	Labels     map[string]string `json:"labels,omitempty"`
 }
 
-type SSHProxyClusterList struct {
-	Items []SSHProxyCluster `json:"items"`
+type AuditProxyClusterList struct {
+	Items []AuditProxyCluster `json:"items"`
 }
 
-type SSHProxyClusterSpec struct {
+type AuditProxyClusterSpec struct {
 	Image        ImageSpec         `json:"image,omitempty"`
 	ControlPlane PlaneSpec         `json:"controlPlane,omitempty"`
 	DataPlane    PlaneSpec         `json:"dataPlane,omitempty"`
@@ -79,7 +79,7 @@ type ConfigSpec struct {
 	DataPlaneINI     string `json:"dataPlaneINI"`
 }
 
-type SSHProxyClusterStatus struct {
+type AuditProxyClusterStatus struct {
 	ObservedGeneration int64             `json:"observedGeneration,omitempty"`
 	Phase              string            `json:"phase,omitempty"`
 	Message            string            `json:"message,omitempty"`
@@ -87,7 +87,7 @@ type SSHProxyClusterStatus struct {
 	LastReconciledAt   time.Time         `json:"lastReconciledAt,omitempty"`
 }
 
-func (c *SSHProxyCluster) Normalize(defaultNamespace string) {
+func (c *AuditProxyCluster) Normalize(defaultNamespace string) {
 	if c == nil {
 		return
 	}
@@ -135,7 +135,7 @@ func (c *SSHProxyCluster) Normalize(defaultNamespace string) {
 	}
 }
 
-func (c *SSHProxyCluster) Validate() error {
+func (c *AuditProxyCluster) Validate() error {
 	if c == nil {
 		return fmt.Errorf("cluster is required")
 	}
@@ -158,7 +158,7 @@ func (c *SSHProxyCluster) Validate() error {
 	return nil
 }
 
-func (c SSHProxyCluster) Namespace() string {
+func (c AuditProxyCluster) Namespace() string {
 	return firstNonEmpty(c.Metadata.Namespace, DefaultNamespace)
 }
 

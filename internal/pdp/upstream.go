@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/store"
 )
 
 // ResolveHostKey checks a host key presented by an upstream against the trust
@@ -18,7 +18,7 @@ import (
 // This is the check that makes a recorded session mean anything: without it the
 // proxy cannot tell the intended host from something interposed between them,
 // and would faithfully record a conversation with an impostor.
-func (s *Server) ResolveHostKey(_ context.Context, req *sshproxyv1.ResolveHostKeyRequest) (*sshproxyv1.ResolveHostKeyResponse, error) {
+func (s *Server) ResolveHostKey(_ context.Context, req *auditproxyv1.ResolveHostKeyRequest) (*auditproxyv1.ResolveHostKeyResponse, error) {
 	fingerprint := strings.TrimSpace(req.GetFingerprint())
 	if fingerprint == "" {
 		return rejectHostKey("no host key fingerprint was supplied"), nil
@@ -32,8 +32,8 @@ func (s *Server) ResolveHostKey(_ context.Context, req *sshproxyv1.ResolveHostKe
 			return nil, status(err, "check host certificate authority")
 		}
 		if trusted {
-			return &sshproxyv1.ResolveHostKeyResponse{
-				Verdict: sshproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_TRUSTED,
+			return &auditproxyv1.ResolveHostKeyResponse{
+				Verdict: auditproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_TRUSTED,
 				Reason:  "signed by a trusted host certificate authority",
 				Proceed: true,
 			}, nil
@@ -62,8 +62,8 @@ func (s *Server) ResolveHostKey(_ context.Context, req *sshproxyv1.ResolveHostKe
 		}
 		switch key.Status {
 		case store.HostKeyTrusted:
-			return &sshproxyv1.ResolveHostKeyResponse{
-				Verdict: sshproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_TRUSTED,
+			return &auditproxyv1.ResolveHostKeyResponse{
+				Verdict: auditproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_TRUSTED,
 				Reason:  "host key is pinned",
 				Proceed: true,
 			}, nil
@@ -71,8 +71,8 @@ func (s *Server) ResolveHostKey(_ context.Context, req *sshproxyv1.ResolveHostKe
 			return rejectHostKey("this host key has been revoked"), nil
 		default:
 			// Already recorded and still awaiting a decision.
-			return &sshproxyv1.ResolveHostKeyResponse{
-				Verdict: sshproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_PENDING,
+			return &auditproxyv1.ResolveHostKeyResponse{
+				Verdict: auditproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_PENDING,
 				Reason:  "host key is awaiting operator approval",
 				Proceed: s.config.TrustOnFirstUse,
 			}, nil
@@ -99,22 +99,22 @@ func (s *Server) ResolveHostKey(_ context.Context, req *sshproxyv1.ResolveHostKe
 		// the exact shape of an interception, so it is called out as such.
 		return rejectHostKey("host key does not match any key pinned for this target"), nil
 	}
-	return &sshproxyv1.ResolveHostKeyResponse{
-		Verdict: sshproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_PENDING,
+	return &auditproxyv1.ResolveHostKeyResponse{
+		Verdict: auditproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_PENDING,
 		Reason:  "host key recorded on first contact and is awaiting approval",
 		Proceed: s.config.TrustOnFirstUse,
 	}, nil
 }
 
-func rejectHostKey(reason string) *sshproxyv1.ResolveHostKeyResponse {
-	return &sshproxyv1.ResolveHostKeyResponse{
-		Verdict: sshproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_REJECTED,
+func rejectHostKey(reason string) *auditproxyv1.ResolveHostKeyResponse {
+	return &auditproxyv1.ResolveHostKeyResponse{
+		Verdict: auditproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_REJECTED,
 		Reason:  reason,
 		Proceed: false,
 	}
 }
 
-func (s *Server) hostCertificateTrusted(req *sshproxyv1.ResolveHostKeyRequest) (bool, error) {
+func (s *Server) hostCertificateTrusted(req *auditproxyv1.ResolveHostKeyRequest) (bool, error) {
 	caFingerprint := strings.TrimSpace(req.GetCaFingerprint())
 	if caFingerprint == "" {
 		return false, nil
@@ -157,7 +157,7 @@ const upstreamCertificateTTL = 5 * time.Minute
 // Stored material is decrypted here and handed over for immediate use; the data
 // plane never holds the key that would let it decrypt anything else, and never
 // writes what it receives.
-func (s *Server) IssueUpstreamCredential(_ context.Context, req *sshproxyv1.IssueUpstreamCredentialRequest) (*sshproxyv1.IssueUpstreamCredentialResponse, error) {
+func (s *Server) IssueUpstreamCredential(_ context.Context, req *auditproxyv1.IssueUpstreamCredentialRequest) (*auditproxyv1.IssueUpstreamCredentialResponse, error) {
 	session, err := s.store.GetSession(req.GetSessionId())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -192,13 +192,13 @@ func (s *Server) IssueUpstreamCredential(_ context.Context, req *sshproxyv1.Issu
 		return s.materialiseCredential(cred, login, req.GetPublicKey())
 	}
 
-	return &sshproxyv1.IssueUpstreamCredentialResponse{
-		Kind:   sshproxyv1.CredentialKind_CREDENTIAL_KIND_UNSPECIFIED,
+	return &auditproxyv1.IssueUpstreamCredentialResponse{
+		Kind:   auditproxyv1.CredentialKind_CREDENTIAL_KIND_UNSPECIFIED,
 		Reason: "no credential is configured for " + login + " on " + target.Name,
 	}, nil
 }
 
-func (s *Server) materialiseCredential(cred store.Credential, login, publicKey string) (*sshproxyv1.IssueUpstreamCredentialResponse, error) {
+func (s *Server) materialiseCredential(cred store.Credential, login, publicKey string) (*auditproxyv1.IssueUpstreamCredentialResponse, error) {
 	switch cred.Kind {
 	case store.CredentialCACert:
 		if s.signer == nil {
@@ -212,8 +212,8 @@ func (s *Server) materialiseCredential(cred store.Credential, login, publicKey s
 		if err != nil {
 			return nil, status(err, "sign upstream certificate")
 		}
-		return &sshproxyv1.IssueUpstreamCredentialResponse{
-			Kind:        sshproxyv1.CredentialKind_CREDENTIAL_KIND_CERTIFICATE,
+		return &auditproxyv1.IssueUpstreamCredentialResponse{
+			Kind:        auditproxyv1.CredentialKind_CREDENTIAL_KIND_CERTIFICATE,
 			Certificate: certificate,
 			ExpiresAt:   timestamp(expiresAt),
 		}, nil
@@ -223,8 +223,8 @@ func (s *Server) materialiseCredential(cred store.Credential, login, publicKey s
 		if err != nil {
 			return nil, status(err, "decrypt upstream password")
 		}
-		return &sshproxyv1.IssueUpstreamCredentialResponse{
-			Kind:     sshproxyv1.CredentialKind_CREDENTIAL_KIND_PASSWORD,
+		return &auditproxyv1.IssueUpstreamCredentialResponse{
+			Kind:     auditproxyv1.CredentialKind_CREDENTIAL_KIND_PASSWORD,
 			Password: secret,
 		}, nil
 
@@ -233,14 +233,14 @@ func (s *Server) materialiseCredential(cred store.Credential, login, publicKey s
 		if err != nil {
 			return nil, status(err, "decrypt upstream private key")
 		}
-		return &sshproxyv1.IssueUpstreamCredentialResponse{
-			Kind:       sshproxyv1.CredentialKind_CREDENTIAL_KIND_PRIVATE_KEY,
+		return &auditproxyv1.IssueUpstreamCredentialResponse{
+			Kind:       auditproxyv1.CredentialKind_CREDENTIAL_KIND_PRIVATE_KEY,
 			PrivateKey: secret,
 		}, nil
 
 	case store.CredentialAgent:
-		return &sshproxyv1.IssueUpstreamCredentialResponse{
-			Kind:   sshproxyv1.CredentialKind_CREDENTIAL_KIND_AGENT,
+		return &auditproxyv1.IssueUpstreamCredentialResponse{
+			Kind:   auditproxyv1.CredentialKind_CREDENTIAL_KIND_AGENT,
 			Reason: "forward the client's agent to authenticate",
 		}, nil
 

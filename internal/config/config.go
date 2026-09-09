@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cluster"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/features"
+	"github.com/zltl/audit-proxy-core/internal/cluster"
+	"github.com/zltl/audit-proxy-core/internal/features"
 )
 
 // Config holds every tunable for the control-plane process.
@@ -141,9 +141,9 @@ type Config struct {
 	// to reduce replica-lag surprises for immediate read-after-write workflows.
 	DatabaseReadAfterWriteWindow string `json:"database_read_after_write_window"`
 
-	// SSHProxyAddr is the TCP address of the SSH proxy entrypoint used by the
+	// AuditProxyAddr is the TCP address of the SSH proxy entrypoint used by the
 	// browser terminal bridge.
-	SSHProxyAddr string `json:"ssh_proxy_addr"`
+	AuditProxyAddr string `json:"audit_proxy_addr"`
 
 	// SSHAllowInsecureHostKeys permits API callers to disable upstream host key
 	// verification with insecure_skip_host_key_verify. It is off by default: a
@@ -576,18 +576,18 @@ func defaults() *Config {
 	return &Config{
 		ListenAddr:                      ":8443",
 		DataPlaneAddr:                   "http://127.0.0.1:9090",
-		DataPlaneConfigFile:             "/etc/ssh-proxy/config.ini",
-		SSHProxyAddr:                    "127.0.0.1:2222",
+		DataPlaneConfigFile:             "/etc/audit-proxy/config.ini",
+		AuditProxyAddr:                  "127.0.0.1:2222",
 		AdminUser:                       "admin",
-		AuditLogDir:                     "/var/log/ssh-proxy",
-		RecordingDir:                    "/var/lib/ssh-proxy/recordings",
+		AuditLogDir:                     "/var/log/audit-proxy",
+		RecordingDir:                    "/var/lib/audit-proxy/recordings",
 		RecordingObjectStoragePrefix:    "recordings",
 		AuditArchiveObjectStoragePrefix: "audit",
-		DataDir:                         "/var/lib/ssh-proxy",
+		DataDir:                         "/var/lib/audit-proxy",
 		ConfigStoreBackend:              "file",
 		UserStoreBackend:                "file",
 		AuditStoreBackend:               "file",
-		AuditStoreIndex:                 "ssh-proxy-audit",
+		AuditStoreIndex:                 "audit-proxy-audit",
 		DatabaseMaxOpenConns:            10,
 		DatabaseMaxIdleConns:            5,
 		DatabaseConnMaxLifetime:         "30m",
@@ -668,7 +668,7 @@ func validate(cfg *Config) error {
 	cfg.AuditQueueBackend = auditQueueBackend
 	cfg.AuditStoreIndex = strings.TrimSpace(cfg.AuditStoreIndex)
 	if cfg.AuditStoreIndex == "" {
-		cfg.AuditStoreIndex = "ssh-proxy-audit"
+		cfg.AuditStoreIndex = "audit-proxy-audit"
 	}
 	minSeverity, err := normalizeThreatResponseSeverity(cfg.ThreatResponseMinSeverity)
 	if err != nil {

@@ -1,6 +1,6 @@
 /**
  * @file logger.c
- * @brief SSH Proxy Core - Logging System Implementation
+ * @brief Audit Proxy Core - Logging System Implementation
  */
 
 #include "logger.h"

@@ -1,8 +1,8 @@
-# SSH Proxy Core — 架构设计文档
+# Audit Proxy Core — 架构设计文档
 
 ## 概述
 
-SSH Proxy Core 是一个高性能、可扩展的 SSH 协议代理平台。类似于 HTTP 领域的 Nginx / Envoy，它位于 SSH 客户端与后端服务器之间，提供流量转发、访问控制、会话审计和协议网关等功能。
+Audit Proxy Core 是一个高性能、可扩展的 SSH 协议代理平台。类似于 HTTP 领域的 Nginx / Envoy，它位于 SSH 客户端与后端服务器之间，提供流量转发、访问控制、会话审计和协议网关等功能。
 
 项目采用 **双平面架构**：
 
@@ -110,7 +110,7 @@ Client ──SSH──► Listener ──► Session 创建
 ### 目录结构
 
 ```
-cmd/               # CLI 入口 (sshproxy, terraform-provider)
+cmd/               # CLI 入口 (audit-proxy, terraform-provider)
 internal/
   api/             # REST API 处理器 (核心业务逻辑)
   server/          # HTTP 服务器、TLS、路由注册

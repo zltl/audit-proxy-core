@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cluster"
+	"github.com/zltl/audit-proxy-core/internal/cluster"
 )
 
 type clusterTopologyPayload struct {

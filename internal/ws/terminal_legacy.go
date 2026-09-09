@@ -58,7 +58,7 @@ func (h *TerminalHandler) serveLegacyTCPBridge(w http.ResponseWriter, r *http.Re
 
 	connectedMsg := terminalMsg{
 		Type: "control", Action: "connected",
-		Data:        "Connected to " + host + " via SSH Proxy\r\n",
+		Data:        "Connected to " + host + " via Audit Proxy\r\n",
 		RecordingID: recordingID(recording),
 		DownloadURL: recordingDownloadURL(recording),
 	}

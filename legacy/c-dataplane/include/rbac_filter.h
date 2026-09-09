@@ -1,6 +1,6 @@
 /**
  * @file rbac_filter.h
- * @brief SSH Proxy Core - Role-Based Access Control Filter
+ * @brief Audit Proxy Core - Role-Based Access Control Filter
  *
  * Implements RBAC for controlling access to target hosts based on
  * user identity, roles, and permissions.

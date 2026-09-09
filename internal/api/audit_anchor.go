@@ -10,7 +10,7 @@ import (
 
 	"github.com/minio/minio-go/v7"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/auditchain"
+	"github.com/zltl/audit-proxy-core/internal/auditchain"
 )
 
 const defaultAuditAnchorInterval = 15 * time.Minute

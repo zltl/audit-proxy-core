@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/jit"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 func TestHandleSlackChatOpsApproveJITRequest(t *testing.T) {
@@ -35,7 +35,7 @@ func TestHandleSlackChatOpsApproveJITRequest(t *testing.T) {
 	}
 
 	body := url.Values{
-		"command":   {"/sshproxy"},
+		"command":   {"/audit-proxy"},
 		"user_name": {"admin-bob"},
 		"text":      {"jit approve " + req.ID},
 	}.Encode()
@@ -68,7 +68,7 @@ func TestHandleSlackChatOpsRejectsInvalidSignature(t *testing.T) {
 	api.config.JITChatOpsSlackSigningSecret = "slack-secret"
 
 	body := url.Values{
-		"command":   {"/sshproxy"},
+		"command":   {"/audit-proxy"},
 		"user_name": {"admin-bob"},
 		"text":      {"jit show req-1"},
 	}.Encode()

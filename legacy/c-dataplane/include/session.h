@@ -1,6 +1,6 @@
 /**
  * @file session.h
- * @brief SSH Proxy Core - Session Manager
+ * @brief Audit Proxy Core - Session Manager
  *
  * Manages SSH session lifecycle. Each connection is abstracted as a Session,
  * containing both Client and Upstream endpoints.

@@ -1,6 +1,6 @@
 /**
  * @file session.c
- * @brief SSH Proxy Core - Session Manager Implementation
+ * @brief Audit Proxy Core - Session Manager Implementation
  */
 
 #include "session.h"

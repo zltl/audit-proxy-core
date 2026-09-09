@@ -9,7 +9,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in SSH Proxy Core, please report it
+If you discover a security vulnerability in Audit Proxy Core, please report it
 responsibly. **Do not open a public GitHub issue for security vulnerabilities.**
 
 ### How to Report

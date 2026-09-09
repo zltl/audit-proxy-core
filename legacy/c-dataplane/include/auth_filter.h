@@ -1,6 +1,6 @@
 /**
  * @file auth_filter.h
- * @brief SSH Proxy Core - Authentication Filter
+ * @brief Audit Proxy Core - Authentication Filter
  *
  * Handles user authentication (PublicKey, Password, Keyboard-Interactive).
  * Supports external identity sources (LDAP, OIDC, etc.).

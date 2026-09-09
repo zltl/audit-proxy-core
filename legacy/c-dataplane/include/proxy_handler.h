@@ -1,6 +1,6 @@
 /**
  * @file proxy_handler.h
- * @brief SSH Proxy Core - Connection Handler
+ * @brief Audit Proxy Core - Connection Handler
  *
  * Handles the lifecycle of a single SSH proxy connection:
  * Handshake -> Auth -> Upstream Connect -> Forwarding -> Cleanup

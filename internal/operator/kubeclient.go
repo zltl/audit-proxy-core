@@ -33,8 +33,8 @@ func (c *HTTPClient) EnsureCRD(ctx context.Context) error {
 	return c.Apply(ctx, CRDObject())
 }
 
-func (c *HTTPClient) ListClusters(ctx context.Context, namespace string) ([]SSHProxyCluster, error) {
-	var list SSHProxyClusterList
+func (c *HTTPClient) ListClusters(ctx context.Context, namespace string) ([]AuditProxyCluster, error) {
+	var list AuditProxyClusterList
 	path := fmt.Sprintf("/apis/%s/%s/namespaces/%s/%s", Group, Version, namespace, Plural)
 	if err := c.doJSON(ctx, http.MethodGet, path, "application/json", nil, &list); err != nil {
 		return nil, err
@@ -58,7 +58,7 @@ func (c *HTTPClient) Apply(ctx context.Context, obj map[string]interface{}) erro
 	return c.doJSON(ctx, http.MethodPatch, path, "application/apply-patch+yaml", obj, nil)
 }
 
-func (c *HTTPClient) UpdateStatus(ctx context.Context, namespace, name string, status SSHProxyClusterStatus) error {
+func (c *HTTPClient) UpdateStatus(ctx context.Context, namespace, name string, status AuditProxyClusterStatus) error {
 	body := map[string]interface{}{
 		"status": status,
 	}

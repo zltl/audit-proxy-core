@@ -18,9 +18,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dp"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/pdpclient"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
+	"github.com/zltl/audit-proxy-core/internal/dp"
+	"github.com/zltl/audit-proxy-core/internal/pdpclient"
+	"github.com/zltl/audit-proxy-core/internal/telemetry"
 )
 
 func main() {
@@ -31,12 +31,12 @@ func main() {
 		nodeID       = flag.String("node-id", defaultNodeID(), "identifier for this node in session records")
 		hostKeys     = flag.String("host-keys", "", "comma-separated host key paths (required)")
 		banner       = flag.String("banner", "", "text shown before authentication")
-		recordingDir = flag.String("recording-dir", "/var/lib/ssh-proxy/recordings", "where session recordings are written")
+		recordingDir = flag.String("recording-dir", "/var/lib/audit-proxy/recordings", "where session recordings are written")
 		captureKeys  = flag.Bool("capture-keystrokes", false,
 			"record what users type as well as what they see; keystrokes include passwords typed at upstream prompts")
 		maxSessions = flag.Int("max-sessions", 1000, "concurrent connections this node will serve")
 
-		pdpAddr     = flag.String("pdp", "unix:/run/ssh-proxy/pdp.sock", "policy decision point address, or unix:<path>")
+		pdpAddr     = flag.String("pdp", "unix:/run/audit-proxy/pdp.sock", "policy decision point address, or unix:<path>")
 		pdpInsecure = flag.Bool("pdp-insecure", false, "disable transport security; only valid for a local socket")
 		pdpCA       = flag.String("pdp-ca", "", "CA certificate for verifying the decision point")
 		pdpCert     = flag.String("pdp-cert", "", "client certificate presented to the decision point")
@@ -51,7 +51,7 @@ func main() {
 
 		drainTimeout = flag.Duration("drain-timeout", 30*time.Second,
 			"how long a shutdown waits for sessions to finish before closing them")
-		auditSpoolDir = flag.String("audit-spool-dir", "/var/lib/ssh-proxy/audit-spool",
+		auditSpoolDir = flag.String("audit-spool-dir", "/var/lib/audit-proxy/audit-spool",
 			"where audit events are buffered before delivery")
 		auditSpoolSync = flag.Bool("audit-spool-sync", false,
 			"force each audit event to durable storage before the session continues")
@@ -77,7 +77,7 @@ func main() {
 	shutdownTrace, err := telemetry.Init(ctx, telemetry.Config{
 		Enabled:     strings.TrimSpace(*otelEndpoint) != "",
 		Endpoint:    *otelEndpoint,
-		ServiceName: "ssh-proxy-dataplane",
+		ServiceName: "audit-proxy-dataplane",
 	})
 	if err != nil {
 		log.Printf("telemetry: %v", err)

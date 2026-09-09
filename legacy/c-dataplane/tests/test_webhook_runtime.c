@@ -56,7 +56,7 @@ static int test_runtime_emit_writes_dlq(void)
 {
     char dlq_path[256];
     snprintf(dlq_path, sizeof(dlq_path),
-             "/tmp/sshproxy-webhook-runtime-%ld.jsonl", (long)getpid());
+             "/tmp/audit-proxy-webhook-runtime-%ld.jsonl", (long)getpid());
     unlink(dlq_path);
 
     webhook_config_t config;
@@ -84,7 +84,7 @@ static int test_runtime_reload_can_disable_delivery(void)
 {
     char dlq_path[256];
     snprintf(dlq_path, sizeof(dlq_path),
-             "/tmp/sshproxy-webhook-runtime-reload-%ld.jsonl", (long)getpid());
+             "/tmp/audit-proxy-webhook-runtime-reload-%ld.jsonl", (long)getpid());
     unlink(dlq_path);
 
     webhook_config_t enabled;
@@ -118,7 +118,7 @@ static int test_runtime_emits_config_diff_events(void)
 {
     char dlq_path[256];
     snprintf(dlq_path, sizeof(dlq_path),
-             "/tmp/sshproxy-webhook-runtime-diff-%ld.jsonl", (long)getpid());
+             "/tmp/audit-proxy-webhook-runtime-diff-%ld.jsonl", (long)getpid());
     unlink(dlq_path);
 
     webhook_config_t config;

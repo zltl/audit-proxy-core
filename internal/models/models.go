@@ -1,4 +1,4 @@
-// Package models defines the core data types used throughout the SSH Proxy
+// Package models defines the core data types used throughout the Audit Proxy
 // control plane. All structs include JSON tags for API serialization and are
 // designed to be passed between the server, data-plane client, and templates.
 package models

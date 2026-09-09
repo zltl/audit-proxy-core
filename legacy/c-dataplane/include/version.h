@@ -1,6 +1,6 @@
 /**
  * @file version.h
- * @brief SSH Proxy Core - Version Information
+ * @brief Audit Proxy Core - Version Information
  *
  * SPDX-License-Identifier: GPL-3.0-only
  */
@@ -13,6 +13,6 @@
 #define SSH_PROXY_VERSION_PATCH 0
 
 #define SSH_PROXY_VERSION_STRING "0.3.0"
-#define SSH_PROXY_VERSION_FULL "ssh-proxy-core/" SSH_PROXY_VERSION_STRING
+#define SSH_PROXY_VERSION_FULL "audit-proxy-core/" SSH_PROXY_VERSION_STRING
 
 #endif /* SSH_PROXY_VERSION_H */

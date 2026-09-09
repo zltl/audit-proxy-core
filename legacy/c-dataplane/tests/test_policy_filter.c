@@ -70,7 +70,7 @@ static void port_forward_callback(const port_forward_record_t *record, void *use
 static int test_port_forward_log_file(void) {
     TEST_START();
 
-    char dir_template[] = "/tmp/sshproxy-policy-portforward-XXXXXX";
+    char dir_template[] = "/tmp/audit-proxy-policy-portforward-XXXXXX";
     char *dir = mkdtemp(dir_template);
     ASSERT_NOT_NULL(dir);
 

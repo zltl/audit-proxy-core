@@ -3,7 +3,7 @@ package dp
 import (
 	"log"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
+	"github.com/zltl/audit-proxy-core/internal/store"
 )
 
 // transferPolicy derives file-transfer rules from the capabilities the session

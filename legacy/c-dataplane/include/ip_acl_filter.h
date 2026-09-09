@@ -1,6 +1,6 @@
 /**
  * @file ip_acl_filter.h
- * @brief SSH Proxy Core - IP Access Control List Filter
+ * @brief Audit Proxy Core - IP Access Control List Filter
  *
  * Provides IP-based whitelist/blacklist filtering with CIDR support.
  * Runs as the first filter in the chain to reject connections early.

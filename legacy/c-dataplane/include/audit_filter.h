@@ -1,6 +1,6 @@
 /**
  * @file audit_filter.h
- * @brief SSH Proxy Core - Audit Filter
+ * @brief Audit Proxy Core - Audit Filter
  *
  * Provides session auditing including command logging, I/O recording
  * (asciicast format), and metadata logging.

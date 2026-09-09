@@ -1,6 +1,6 @@
 /**
  * @file audit_filter.c
- * @brief SSH Proxy Core - Audit Filter Implementation
+ * @brief Audit Proxy Core - Audit Filter Implementation
  */
 
 #include "audit_filter.h"

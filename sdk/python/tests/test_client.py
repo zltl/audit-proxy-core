@@ -7,7 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from sshproxy import SSHProxyClient, SSHProxyError  # noqa: E402
+from auditproxy import AuditProxyClient, AuditProxyError  # noqa: E402
 
 
 class FakeResponse:
@@ -25,10 +25,10 @@ class FakeResponse:
         return False
 
 
-class SSHProxyClientTests(unittest.TestCase):
+class AuditProxyClientTests(unittest.TestCase):
     def test_invalid_base_url(self):
         with self.assertRaises(ValueError):
-            SSHProxyClient("not-a-url")
+            AuditProxyClient("not-a-url")
 
     @mock.patch("urllib.request.urlopen")
     def test_list_users(self, mock_urlopen):
@@ -43,7 +43,7 @@ class SSHProxyClientTests(unittest.TestCase):
 
         mock_urlopen.side_effect = fake_urlopen
 
-        client = SSHProxyClient("https://proxy.example.com", token="token-123")
+        client = AuditProxyClient("https://proxy.example.com", token="token-123")
         page = client.list_users()
 
         self.assertEqual(1, page.total)
@@ -61,7 +61,7 @@ class SSHProxyClientTests(unittest.TestCase):
 
         mock_urlopen.side_effect = fake_urlopen
 
-        client = SSHProxyClient("https://proxy.example.com")
+        client = AuditProxyClient("https://proxy.example.com")
         page = client.list_sessions(status="active", user="alice", page=2, per_page=10)
 
         self.assertEqual(2, page.page)
@@ -82,7 +82,7 @@ class SSHProxyClientTests(unittest.TestCase):
 
         mock_urlopen.side_effect = fake_urlopen
 
-        client = SSHProxyClient("https://proxy.example.com")
+        client = AuditProxyClient("https://proxy.example.com")
         cert = client.sign_user_certificate(
             {
                 "public_key": "ssh-ed25519 AAAAalice",
@@ -104,8 +104,8 @@ class SSHProxyClientTests(unittest.TestCase):
             fp=io.BytesIO(b'{"success": false, "error": "bad request"}'),
         )
 
-        client = SSHProxyClient("https://proxy.example.com")
-        with self.assertRaises(SSHProxyError) as ctx:
+        client = AuditProxyClient("https://proxy.example.com")
+        with self.assertRaises(AuditProxyError) as ctx:
             client.list_users()
 
         self.assertIn("bad request", str(ctx.exception))

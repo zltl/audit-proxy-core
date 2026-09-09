@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dlp"
+	"github.com/zltl/audit-proxy-core/internal/dlp"
 )
 
 func TestTerminalHandlerBridgesTextBinaryAndControls(t *testing.T) {

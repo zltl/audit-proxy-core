@@ -25,8 +25,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/telemetry"
 )
 
 // FailMode decides what happens when the decision point cannot be reached.
@@ -128,7 +128,7 @@ func isLocalSocket(address string) bool {
 type Client struct {
 	config Config
 	conn   *grpc.ClientConn
-	api    sshproxyv1.AccessDecisionServiceClient
+	api    auditproxyv1.AccessDecisionServiceClient
 
 	cache *decisionCache
 
@@ -174,7 +174,7 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	return &Client{
 		config:      cfg,
 		conn:        conn,
-		api:         sshproxyv1.NewAccessDecisionServiceClient(conn),
+		api:         auditproxyv1.NewAccessDecisionServiceClient(conn),
 		cache:       newDecisionCache(cfg.CacheTTL),
 		healthy:     true,
 		iniFallback: newINIFallback(cfg.FallbackConfigPath),
@@ -188,7 +188,7 @@ func NewWithConn(conn *grpc.ClientConn, cfg Config) *Client {
 	return &Client{
 		config:      cfg,
 		conn:        conn,
-		api:         sshproxyv1.NewAccessDecisionServiceClient(conn),
+		api:         auditproxyv1.NewAccessDecisionServiceClient(conn),
 		cache:       newDecisionCache(cfg.CacheTTL),
 		healthy:     true,
 		iniFallback: newINIFallback(cfg.FallbackConfigPath),

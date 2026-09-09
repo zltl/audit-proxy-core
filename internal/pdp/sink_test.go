@@ -11,7 +11,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
 )
 
 func readSinkLines(t *testing.T, dir string) []map[string]interface{} {
@@ -49,7 +49,7 @@ func TestFileEventSinkWritesReadableRecords(t *testing.T) {
 	defer func() { _ = sink.Close() }()
 
 	now := time.Now().UTC()
-	err = sink.Publish(context.Background(), []*sshproxyv1.AuditEvent{
+	err = sink.Publish(context.Background(), []*auditproxyv1.AuditEvent{
 		{
 			Id: "e1", Timestamp: timestamppb.New(now), EventType: "session.start",
 			Username: "alice", SourceIp: "10.0.0.5", TargetHost: "web-1", TargetPort: 22,
@@ -106,17 +106,17 @@ func TestFileEventSinkRendersTypedRecords(t *testing.T) {
 	}
 	defer func() { _ = sink.Close() }()
 
-	err = sink.Publish(context.Background(), []*sshproxyv1.AuditEvent{
+	err = sink.Publish(context.Background(), []*auditproxyv1.AuditEvent{
 		{
 			Id: "t1", EventType: "file.transfer", Username: "alice", Decision: "allow",
-			FileTransfer: &sshproxyv1.FileTransferRecord{
+			FileTransfer: &auditproxyv1.FileTransferRecord{
 				Direction: "upload", Path: "/srv/app/x.tar", Filename: "x.tar",
 				Size: 1024, Protocol: "sftp", Allowed: true,
 			},
 		},
 		{
 			Id: "p1", EventType: "port.forward", Username: "alice", Decision: "deny",
-			PortForward: &sshproxyv1.PortForwardRecord{
+			PortForward: &auditproxyv1.PortForwardRecord{
 				Kind: "local", DestHost: "10.0.0.9", DestPort: 5432,
 			},
 		},
@@ -159,7 +159,7 @@ func TestFileEventSinkAppendsAcrossCalls(t *testing.T) {
 	defer func() { _ = sink.Close() }()
 
 	for i := 0; i < 3; i++ {
-		if err := sink.Publish(context.Background(), []*sshproxyv1.AuditEvent{
+		if err := sink.Publish(context.Background(), []*auditproxyv1.AuditEvent{
 			{Id: "e", EventType: "session.start", Username: "alice"},
 		}); err != nil {
 			t.Fatalf("Publish: %v", err)
@@ -200,7 +200,7 @@ func TestSinkFilePermissions(t *testing.T) {
 	}
 	defer func() { _ = sink.Close() }()
 
-	if err := sink.Publish(context.Background(), []*sshproxyv1.AuditEvent{
+	if err := sink.Publish(context.Background(), []*auditproxyv1.AuditEvent{
 		{Id: "e", EventType: "session.start", Username: "alice", Command: "cat /etc/shadow"},
 	}); err != nil {
 		t.Fatalf("Publish: %v", err)

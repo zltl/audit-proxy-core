@@ -30,8 +30,8 @@ func TestValidateSeedReferenceSupportsDiscoverySchemes(t *testing.T) {
 	valid := []string{
 		"10.0.0.10:9444",
 		"dns://proxy.internal:9444",
-		"k8s://ssh-proxy.default:9444",
-		"consul://127.0.0.1:8500/ssh-proxy?tag=prod",
+		"k8s://audit-proxy.default:9444",
+		"consul://127.0.0.1:8500/audit-proxy?tag=prod",
 	}
 	for _, seed := range valid {
 		if err := ValidateSeedReference(seed); err != nil {
@@ -49,12 +49,12 @@ func TestResolveSeedReferencesWithDNSAndKubernetes(t *testing.T) {
 		context.Background(),
 		[]string{
 			"dns://proxy.internal:9444",
-			"k8s://ssh-proxy.default:9444",
+			"k8s://audit-proxy.default:9444",
 		},
 		stubHostResolver{
 			hosts: map[string][]string{
 				"proxy.internal":                      {"10.0.0.10", "10.0.0.11"},
-				"ssh-proxy.default.svc.cluster.local": {"10.3.0.21"},
+				"audit-proxy.default.svc.cluster.local": {"10.3.0.21"},
 			},
 		},
 		nil,
@@ -73,7 +73,7 @@ func TestResolveSeedReferencesWithDNSAndKubernetes(t *testing.T) {
 
 func TestResolveSeedReferencesWithConsul(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/health/service/ssh-proxy" {
+		if r.URL.Path != "/v1/health/service/audit-proxy" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
 		if got := r.URL.Query().Get("passing"); got != "1" {
@@ -101,7 +101,7 @@ func TestResolveSeedReferencesWithConsul(t *testing.T) {
 
 	addresses, err := resolveSeedReferencesWith(
 		context.Background(),
-		[]string{fmt.Sprintf("consul://%s/ssh-proxy?tag=prod", parsed.Host)},
+		[]string{fmt.Sprintf("consul://%s/audit-proxy?tag=prod", parsed.Host)},
 		stubHostResolver{},
 		server.Client(),
 	)
@@ -168,7 +168,7 @@ func TestDiscoveryLoopRetriesConsulSeeds(t *testing.T) {
 
 	cfg2 := testConfig("node-2", "Node 2", "127.0.0.1:0")
 	cfg2.SyncInterval = 100 * time.Millisecond
-	cfg2.Seeds = []string{fmt.Sprintf("consul://%s/ssh-proxy", parsed.Host)}
+	cfg2.Seeds = []string{fmt.Sprintf("consul://%s/audit-proxy", parsed.Host)}
 	m2 := startManager(t, cfg2)
 
 	time.Sleep(350 * time.Millisecond)

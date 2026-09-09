@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cluster"
+	"github.com/zltl/audit-proxy-core/internal/cluster"
 )
 
 func testAPIClusterConfig(id, bind string) *cluster.ClusterConfig {

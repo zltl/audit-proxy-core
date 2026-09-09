@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/collab"
+	"github.com/zltl/audit-proxy-core/internal/collab"
 )
 
 func TestCollabFourEyesGrantControlFlow(t *testing.T) {

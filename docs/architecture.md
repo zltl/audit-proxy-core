@@ -56,7 +56,7 @@ flowchart TB
 
 ## 决策点会被问到什么
 
-数据面在这些时刻发起 gRPC 调用（`api/proto/sshproxy/v1/access.proto`）：
+数据面在这些时刻发起 gRPC 调用（`api/proto/auditproxy/v1/access.proto`）：
 
 | 时机 | 调用 | 拒绝的后果 |
 |---|---|---|
@@ -87,7 +87,7 @@ flowchart TB
 
 策略求值 **fail closed**：没有规则匹配的请求被拒绝。授权策略写错不应该等于开放访问。
 
-`config.ini` 降级为可选的引导来源，用 `sshproxy migrate ini2db` 导入。导入保留语义：
+`config.ini` 降级为可选的引导来源，用 `audit-proxy migrate ini2db` 导入。导入保留语义：
 旧的 `port_forward` 关键字覆盖本地/远程/动态三种转发，因此映射到三者；没有匹配策略的路由
 保留旧数据面的宽松行为，但显式写进规则而不是留作隐式默认；通配路由排在具体路由之后。
 `$6$`/`$5$` crypt 口令可继续登录，并在首次登录时升级为 argon2id。
@@ -98,7 +98,7 @@ flowchart TB
 
 ```bash
 # 主机密钥：不要让代理每次启动自己生成，否则用户会被训练成忽略主机密钥告警
-ssh-keygen -t ed25519 -f /etc/ssh-proxy/host_key -N ""
+ssh-keygen -t ed25519 -f /etc/audit-proxy/host_key -N ""
 
 # 凭据信封加密密钥、审计链密钥、录像加密密钥
 openssl rand -hex 32   # secrets_encryption_key
@@ -112,12 +112,12 @@ openssl rand -hex 32   # recording-encryption-key
 {
   "listen_addr": ":8443",
   "session_secret": "…",
-  "data_dir": "/var/lib/ssh-proxy",
-  "audit_log_dir": "/var/log/ssh-proxy",
+  "data_dir": "/var/lib/audit-proxy",
+  "audit_log_dir": "/var/log/audit-proxy",
 
-  "pdp_listen_addr": "unix:/run/ssh-proxy/pdp.sock",
-  "secrets_encryption_key": "file:/etc/ssh-proxy/secrets.key",
-  "audit_chain_key": "file:/etc/ssh-proxy/chain.key",
+  "pdp_listen_addr": "unix:/run/audit-proxy/pdp.sock",
+  "secrets_encryption_key": "file:/etc/audit-proxy/secrets.key",
+  "audit_chain_key": "file:/etc/audit-proxy/chain.key",
 
   "postgres_database_url": "postgres://…",
   "audit_store_backend": "clickhouse",
@@ -132,10 +132,10 @@ openssl rand -hex 32   # recording-encryption-key
 ### 3. 从 config.ini 导入（可选）
 
 ```bash
-sshproxy migrate ini2db \
-  --config /etc/ssh-proxy/config.ini \
+audit-proxy migrate ini2db \
+  --config /etc/audit-proxy/config.ini \
   --driver postgres --dsn "$DSN" \
-  --encryption-key file:/etc/ssh-proxy/secrets.key \
+  --encryption-key file:/etc/audit-proxy/secrets.key \
   --dry-run          # 先看报告，再去掉 --dry-run 实际写入
 ```
 
@@ -147,10 +147,10 @@ sshproxy migrate ini2db \
 dataplane \
   --node-id "$(hostname)" \
   --listen 0.0.0.0:2222 \
-  --host-keys /etc/ssh-proxy/host_key \
-  --pdp unix:/run/ssh-proxy/pdp.sock --pdp-insecure \
+  --host-keys /etc/audit-proxy/host_key \
+  --pdp unix:/run/audit-proxy/pdp.sock --pdp-insecure \
   --fail-mode closed \
-  --audit-chain-key file:/etc/ssh-proxy/chain.key \
+  --audit-chain-key file:/etc/audit-proxy/chain.key \
   --recording-encryption-key "$RECORDING_KEY" \
   --metrics-addr 127.0.0.1:9100
 ```
@@ -236,10 +236,10 @@ curl "…/api/v2/audit/verify?from=2026-01-01T00:00:00Z"
 `--metrics-addr` 暴露 `/metrics`、`/healthz`、`/readyz`。指标刻意侧重**拒绝**而非吞吐：
 一个已经不再执行任何策略的节点，在流量图上看起来非常健康。值得告警的是：
 
-- `ssh_proxy_policy_unavailable_total` — 策略无法咨询的次数
-- `ssh_proxy_host_keys_refused_total` — 上游 host key 被拒（要么是轮换，要么是中间人）
-- `ssh_proxy_audit_spool_bytes` — 审计积压
-- `ssh_proxy_channels_refused_total` / `ssh_proxy_commands_blocked_total`
+- `audit_proxy_policy_unavailable_total` — 策略无法咨询的次数
+- `audit_proxy_host_keys_refused_total` — 上游 host key 被拒（要么是轮换，要么是中间人）
+- `audit_proxy_audit_spool_bytes` — 审计积压
+- `audit_proxy_channels_refused_total` / `audit_proxy_commands_blocked_total`
 
 `/readyz` 在 drain 期间和控制面不可达时返回 503，让负载均衡把节点移出轮转。
 

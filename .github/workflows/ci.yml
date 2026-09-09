@@ -50,10 +50,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build dataplane image
-        run: docker build -f deploy/docker/Dockerfile.dataplane -t ssh-proxy-dataplane:ci .
+        run: docker build -f deploy/docker/Dockerfile.dataplane -t audit-proxy-dataplane:ci .
 
       - name: Build control-plane image
-        run: docker build -f deploy/docker/Dockerfile.control-plane -t ssh-proxy-control-plane:ci .
+        run: docker build -f deploy/docker/Dockerfile.control-plane -t audit-proxy-control-plane:ci .
 
   legacy-c:
     runs-on: ubuntu-latest

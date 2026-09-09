@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/web"
+	"github.com/zltl/audit-proxy-core/web"
 )
 
 func TestDashboardPageUsesCurrentAPIs(t *testing.T) {

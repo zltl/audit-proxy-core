@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/compliance"
+	"github.com/zltl/audit-proxy-core/internal/compliance"
 )
 
 var errReportTemplateNotFound = errors.New("report template not found")

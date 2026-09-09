@@ -17,20 +17,20 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dp"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/pdp"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/dp"
+	"github.com/zltl/audit-proxy-core/internal/pdp"
+	"github.com/zltl/audit-proxy-core/internal/telemetry"
 )
 
 // PolicyClient is the subset of the decision point a web terminal needs.
 type PolicyClient interface {
-	AuthorizeSession(context.Context, *sshproxyv1.AuthorizeSessionRequest) (*sshproxyv1.AuthorizeSessionResponse, error)
-	OpenSession(context.Context, *sshproxyv1.OpenSessionRequest) (*sshproxyv1.OpenSessionResponse, error)
-	CloseSession(context.Context, *sshproxyv1.CloseSessionRequest) (*sshproxyv1.CloseSessionResponse, error)
-	HeartbeatSession(context.Context, *sshproxyv1.HeartbeatSessionRequest) (*sshproxyv1.HeartbeatSessionResponse, error)
-	IssueUpstreamCredential(context.Context, *sshproxyv1.IssueUpstreamCredentialRequest) (*sshproxyv1.IssueUpstreamCredentialResponse, error)
-	ResolveHostKey(context.Context, *sshproxyv1.ResolveHostKeyRequest) (*sshproxyv1.ResolveHostKeyResponse, error)
+	AuthorizeSession(context.Context, *auditproxyv1.AuthorizeSessionRequest) (*auditproxyv1.AuthorizeSessionResponse, error)
+	OpenSession(context.Context, *auditproxyv1.OpenSessionRequest) (*auditproxyv1.OpenSessionResponse, error)
+	CloseSession(context.Context, *auditproxyv1.CloseSessionRequest) (*auditproxyv1.CloseSessionResponse, error)
+	HeartbeatSession(context.Context, *auditproxyv1.HeartbeatSessionRequest) (*auditproxyv1.HeartbeatSessionResponse, error)
+	IssueUpstreamCredential(context.Context, *auditproxyv1.IssueUpstreamCredentialRequest) (*auditproxyv1.IssueUpstreamCredentialResponse, error)
+	ResolveHostKey(context.Context, *auditproxyv1.ResolveHostKeyRequest) (*auditproxyv1.ResolveHostKeyResponse, error)
 }
 
 // Bridge opens in-process SSH sessions that follow the same policy path as the
@@ -101,11 +101,11 @@ func (b *Bridge) Connect(ctx context.Context, req ConnectRequest) (*Session, err
 	}
 	host, port := splitHostPort(target, 22)
 
-	decision, err := cfg.PDP.AuthorizeSession(ctx, &sshproxyv1.AuthorizeSessionRequest{
-		Client: &sshproxyv1.ClientInfo{
+	decision, err := cfg.PDP.AuthorizeSession(ctx, &auditproxyv1.AuthorizeSessionRequest{
+		Client: &auditproxyv1.ClientInfo{
 			NodeId:         cfg.NodeID,
 			SourceIp:       req.SourceIP,
-			ClientVersion:  "ssh-proxy-web-terminal/1.0",
+			ClientVersion:  "audit-proxy-web-terminal/1.0",
 		},
 		Username:      req.Username,
 		Roles:         req.Roles,
@@ -127,11 +127,11 @@ func (b *Bridge) Connect(ctx context.Context, req ConnectRequest) (*Session, err
 		return nil, fmt.Errorf("policy does not permit an interactive shell on this target")
 	}
 
-	opened, err := cfg.PDP.OpenSession(ctx, &sshproxyv1.OpenSessionRequest{
-		Client: &sshproxyv1.ClientInfo{
+	opened, err := cfg.PDP.OpenSession(ctx, &auditproxyv1.OpenSessionRequest{
+		Client: &auditproxyv1.ClientInfo{
 			NodeId:        cfg.NodeID,
 			SourceIp:      req.SourceIP,
-			ClientVersion: "ssh-proxy-web-terminal/1.0",
+			ClientVersion: "audit-proxy-web-terminal/1.0",
 		},
 		Username:      req.Username,
 		TargetId:      decision.GetTargetId(),
@@ -156,7 +156,7 @@ func (b *Bridge) Connect(ctx context.Context, req ConnectRequest) (*Session, err
 
 	client, err := dialUpstream(ctx, cfg.PDP, upTarget, cfg.UpstreamDialTimeout)
 	if err != nil {
-		_, _ = cfg.PDP.CloseSession(context.Background(), &sshproxyv1.CloseSessionRequest{
+		_, _ = cfg.PDP.CloseSession(context.Background(), &auditproxyv1.CloseSessionRequest{
 			SessionId: opened.GetSessionId(), TerminationInfo: "upstream dial failed",
 		})
 		return nil, err
@@ -165,7 +165,7 @@ func (b *Bridge) Connect(ctx context.Context, req ConnectRequest) (*Session, err
 	shell, err := client.NewSession()
 	if err != nil {
 		_ = client.Close()
-		_, _ = cfg.PDP.CloseSession(context.Background(), &sshproxyv1.CloseSessionRequest{
+		_, _ = cfg.PDP.CloseSession(context.Background(), &auditproxyv1.CloseSessionRequest{
 			SessionId: opened.GetSessionId(), TerminationInfo: "shell open failed",
 		})
 		return nil, fmt.Errorf("terminal: open shell: %w", err)
@@ -186,7 +186,7 @@ func (b *Bridge) Connect(ctx context.Context, req ConnectRequest) (*Session, err
 	if err := shell.RequestPty("xterm-256color", rows, cols, modes); err != nil {
 		_ = shell.Close()
 		_ = client.Close()
-		_, _ = cfg.PDP.CloseSession(context.Background(), &sshproxyv1.CloseSessionRequest{
+		_, _ = cfg.PDP.CloseSession(context.Background(), &auditproxyv1.CloseSessionRequest{
 			SessionId: opened.GetSessionId(), TerminationInfo: "pty request failed",
 		})
 		return nil, fmt.Errorf("terminal: request pty: %w", err)
@@ -195,7 +195,7 @@ func (b *Bridge) Connect(ctx context.Context, req ConnectRequest) (*Session, err
 	if err != nil {
 		_ = shell.Close()
 		_ = client.Close()
-		_, _ = cfg.PDP.CloseSession(context.Background(), &sshproxyv1.CloseSessionRequest{
+		_, _ = cfg.PDP.CloseSession(context.Background(), &auditproxyv1.CloseSessionRequest{
 			SessionId: opened.GetSessionId(), TerminationInfo: "stdin pipe failed",
 		})
 		return nil, err
@@ -204,7 +204,7 @@ func (b *Bridge) Connect(ctx context.Context, req ConnectRequest) (*Session, err
 	if err != nil {
 		_ = shell.Close()
 		_ = client.Close()
-		_, _ = cfg.PDP.CloseSession(context.Background(), &sshproxyv1.CloseSessionRequest{
+		_, _ = cfg.PDP.CloseSession(context.Background(), &auditproxyv1.CloseSessionRequest{
 			SessionId: opened.GetSessionId(), TerminationInfo: "stdout pipe failed",
 		})
 		return nil, err
@@ -214,7 +214,7 @@ func (b *Bridge) Connect(ctx context.Context, req ConnectRequest) (*Session, err
 		if err := shell.Start("sh"); err != nil {
 			_ = shell.Close()
 			_ = client.Close()
-			_, _ = cfg.PDP.CloseSession(context.Background(), &sshproxyv1.CloseSessionRequest{
+			_, _ = cfg.PDP.CloseSession(context.Background(), &auditproxyv1.CloseSessionRequest{
 				SessionId: opened.GetSessionId(), TerminationInfo: "shell start failed",
 			})
 			return nil, fmt.Errorf("terminal: start shell: %w", err)
@@ -248,8 +248,8 @@ func (b *Bridge) Connect(ctx context.Context, req ConnectRequest) (*Session, err
 	return s, nil
 }
 
-func (s *Session) startRecording(cfg Bridge, decision *sshproxyv1.AuthorizeSessionResponse, cols, rows int) *dp.Recorder {
-	if strings.TrimSpace(cfg.RecordingDir) == "" || decision.GetRecordPolicy() == sshproxyv1.RecordPolicy_RECORD_POLICY_NONE {
+func (s *Session) startRecording(cfg Bridge, decision *auditproxyv1.AuthorizeSessionResponse, cols, rows int) *dp.Recorder {
+	if strings.TrimSpace(cfg.RecordingDir) == "" || decision.GetRecordPolicy() == auditproxyv1.RecordPolicy_RECORD_POLICY_NONE {
 		return nil
 	}
 	started := time.Now()
@@ -300,7 +300,7 @@ func (s *Session) heartbeatLoop(ctx context.Context, sourceIP string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			resp, err := s.pdp.HeartbeatSession(ctx, &sshproxyv1.HeartbeatSessionRequest{
+			resp, err := s.pdp.HeartbeatSession(ctx, &auditproxyv1.HeartbeatSessionRequest{
 				SessionId: s.ID,
 				BytesIn:   s.bytesIn,
 				BytesOut:  s.bytesOut,
@@ -375,7 +375,7 @@ func (s *Session) Close(reason string) error {
 		if s.client != nil {
 			_ = s.client.Close()
 		}
-		_, err = s.pdp.CloseSession(context.Background(), &sshproxyv1.CloseSessionRequest{
+		_, err = s.pdp.CloseSession(context.Background(), &auditproxyv1.CloseSessionRequest{
 			SessionId:       s.ID,
 			TerminationInfo: reason,
 			BytesIn:         s.bytesIn,
@@ -439,7 +439,7 @@ func dialUpstream(ctx context.Context, pdp PolicyClient, target upstreamTarget, 
 	if err != nil {
 		return nil, err
 	}
-	cred, err := pdp.IssueUpstreamCredential(ctx, &sshproxyv1.IssueUpstreamCredentialRequest{
+	cred, err := pdp.IssueUpstreamCredential(ctx, &auditproxyv1.IssueUpstreamCredentialRequest{
 		SessionId:     target.SessionID,
 		TargetId:      target.TargetID,
 		UpstreamLogin: target.Login,
@@ -476,7 +476,7 @@ func dialUpstream(ctx context.Context, pdp PolicyClient, target upstreamTarget, 
 
 func hostKeyCallback(ctx context.Context, pdp PolicyClient, target upstreamTarget) ssh.HostKeyCallback {
 	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
-		req := &sshproxyv1.ResolveHostKeyRequest{
+		req := &auditproxyv1.ResolveHostKeyRequest{
 			TargetId:    target.TargetID,
 			TargetHost:  target.Host,
 			TargetPort:  int32(target.Port),
@@ -495,17 +495,17 @@ func hostKeyCallback(ctx context.Context, pdp PolicyClient, target upstreamTarge
 	}
 }
 
-func buildAuthMethods(cred *sshproxyv1.IssueUpstreamCredentialResponse, ephemeral ssh.Signer) ([]ssh.AuthMethod, error) {
+func buildAuthMethods(cred *auditproxyv1.IssueUpstreamCredentialResponse, ephemeral ssh.Signer) ([]ssh.AuthMethod, error) {
 	switch cred.GetKind() {
-	case sshproxyv1.CredentialKind_CREDENTIAL_KIND_PASSWORD:
+	case auditproxyv1.CredentialKind_CREDENTIAL_KIND_PASSWORD:
 		return []ssh.AuthMethod{ssh.Password(cred.GetPassword())}, nil
-	case sshproxyv1.CredentialKind_CREDENTIAL_KIND_PRIVATE_KEY:
+	case auditproxyv1.CredentialKind_CREDENTIAL_KIND_PRIVATE_KEY:
 		signer, err := ssh.ParsePrivateKey([]byte(cred.GetPrivateKey()))
 		if err != nil {
 			return nil, err
 		}
 		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, nil
-	case sshproxyv1.CredentialKind_CREDENTIAL_KIND_CERTIFICATE:
+	case auditproxyv1.CredentialKind_CREDENTIAL_KIND_CERTIFICATE:
 		parsed, _, _, _, err := ssh.ParseAuthorizedKey([]byte(cred.GetCertificate()))
 		if err != nil {
 			return nil, err

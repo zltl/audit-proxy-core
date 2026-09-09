@@ -13,9 +13,9 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/authn"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/authn"
+	"github.com/zltl/audit-proxy-core/internal/store"
 )
 
 // Config tunes a Server.
@@ -78,12 +78,12 @@ type CommandApprover interface {
 
 // EventSink receives audit records reported by the data plane.
 type EventSink interface {
-	Publish(ctx context.Context, events []*sshproxyv1.AuditEvent) error
+	Publish(ctx context.Context, events []*auditproxyv1.AuditEvent) error
 }
 
 // Server implements the AccessDecisionService.
 type Server struct {
-	sshproxyv1.UnimplementedAccessDecisionServiceServer
+	auditproxyv1.UnimplementedAccessDecisionServiceServer
 
 	store  *store.Store
 	config Config
@@ -172,7 +172,7 @@ func (s *Server) SetClock(now func() time.Time) {
 // --------------------------------------------------------------------------
 
 // Authenticate runs one step of the SSH authentication exchange.
-func (s *Server) Authenticate(ctx context.Context, req *sshproxyv1.AuthenticateRequest) (*sshproxyv1.AuthenticateResponse, error) {
+func (s *Server) Authenticate(ctx context.Context, req *auditproxyv1.AuthenticateRequest) (*auditproxyv1.AuthenticateResponse, error) {
 	username := strings.TrimSpace(req.GetUsername())
 	if username == "" {
 		return authFailure("username is required"), nil
@@ -192,19 +192,19 @@ func (s *Server) Authenticate(ctx context.Context, req *sshproxyv1.AuthenticateR
 	}
 
 	switch req.GetMethod() {
-	case sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD:
+	case auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD:
 		return s.authenticatePassword(ctx, req)
-	case sshproxyv1.AuthMethod_AUTH_METHOD_PUBLIC_KEY,
-		sshproxyv1.AuthMethod_AUTH_METHOD_CERTIFICATE:
+	case auditproxyv1.AuthMethod_AUTH_METHOD_PUBLIC_KEY,
+		auditproxyv1.AuthMethod_AUTH_METHOD_CERTIFICATE:
 		return s.authenticatePublicKey(ctx, req)
-	case sshproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE:
+	case auditproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE:
 		return s.authenticateKeyboardInteractive(ctx, req)
 	default:
 		return authFailure("authentication method is not supported"), nil
 	}
 }
 
-func (s *Server) authenticatePassword(_ context.Context, req *sshproxyv1.AuthenticateRequest) (*sshproxyv1.AuthenticateResponse, error) {
+func (s *Server) authenticatePassword(_ context.Context, req *auditproxyv1.AuthenticateRequest) (*auditproxyv1.AuthenticateResponse, error) {
 	username := strings.TrimSpace(req.GetUsername())
 	user, err := s.store.GetUser(username)
 	if err != nil {
@@ -232,7 +232,7 @@ func (s *Server) authenticatePassword(_ context.Context, req *sshproxyv1.Authent
 	return s.completeOrChallenge(user)
 }
 
-func (s *Server) authenticatePublicKey(_ context.Context, req *sshproxyv1.AuthenticateRequest) (*sshproxyv1.AuthenticateResponse, error) {
+func (s *Server) authenticatePublicKey(_ context.Context, req *auditproxyv1.AuthenticateRequest) (*auditproxyv1.AuthenticateResponse, error) {
 	// The data plane verifies the client's signature during the SSH handshake;
 	// without that proof a fingerprint is only a claim, so the decision point
 	// refuses rather than trusting the caller to have checked.
@@ -272,7 +272,7 @@ func (s *Server) authenticatePublicKey(_ context.Context, req *sshproxyv1.Authen
 	return s.completeOrChallenge(user)
 }
 
-func (s *Server) authenticateKeyboardInteractive(_ context.Context, req *sshproxyv1.AuthenticateRequest) (*sshproxyv1.AuthenticateResponse, error) {
+func (s *Server) authenticateKeyboardInteractive(_ context.Context, req *auditproxyv1.AuthenticateRequest) (*auditproxyv1.AuthenticateResponse, error) {
 	state, err := parseState(s.config.StateSecret, req.GetStateToken(), s.now())
 	if err != nil {
 		return authFailure("this login attempt has expired; start again"), nil
@@ -319,7 +319,7 @@ func (s *Server) authenticateKeyboardInteractive(_ context.Context, req *sshprox
 
 // completeOrChallenge finishes authentication, or asks for a second factor when
 // the account has one enrolled.
-func (s *Server) completeOrChallenge(user store.User) (*sshproxyv1.AuthenticateResponse, error) {
+func (s *Server) completeOrChallenge(user store.User) (*auditproxyv1.AuthenticateResponse, error) {
 	if user.MFAType != store.MFATOTP || user.MFASecretRef == "" || user.MFAPending {
 		return s.authSuccess(user)
 	}
@@ -332,17 +332,17 @@ func (s *Server) completeOrChallenge(user store.User) (*sshproxyv1.AuthenticateR
 	if err != nil {
 		return nil, status(err, "issue authentication state")
 	}
-	return &sshproxyv1.AuthenticateResponse{
-		Result:           sshproxyv1.AuthResult_AUTH_RESULT_PARTIAL,
+	return &auditproxyv1.AuthenticateResponse{
+		Result:           auditproxyv1.AuthResult_AUTH_RESULT_PARTIAL,
 		Username:         user.Username,
-		RemainingMethods: []sshproxyv1.AuthMethod{sshproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE},
+		RemainingMethods: []auditproxyv1.AuthMethod{auditproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE},
 		Instruction:      "Two-factor authentication",
-		Prompts:          []*sshproxyv1.AuthPrompt{{Prompt: "Verification code: ", Echo: false}},
+		Prompts:          []*auditproxyv1.AuthPrompt{{Prompt: "Verification code: ", Echo: false}},
 		StateToken:       token,
 	}, nil
 }
 
-func (s *Server) authSuccess(user store.User) (*sshproxyv1.AuthenticateResponse, error) {
+func (s *Server) authSuccess(user store.User) (*auditproxyv1.AuthenticateResponse, error) {
 	roles, err := s.store.RolesForUser(user.Username)
 	if err != nil {
 		return nil, status(err, "load roles")
@@ -350,17 +350,17 @@ func (s *Server) authSuccess(user store.User) (*sshproxyv1.AuthenticateResponse,
 	if err := s.store.RecordLogin(user.Username, s.now()); err != nil {
 		log.Printf("pdp: record login for %s: %v", user.Username, err)
 	}
-	return &sshproxyv1.AuthenticateResponse{
-		Result:                 sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS,
+	return &auditproxyv1.AuthenticateResponse{
+		Result:                 auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS,
 		Username:               user.Username,
 		Roles:                  roles,
 		PasswordChangeRequired: user.PasswordChangeRequired,
 	}, nil
 }
 
-func authFailure(reason string) *sshproxyv1.AuthenticateResponse {
-	return &sshproxyv1.AuthenticateResponse{
-		Result: sshproxyv1.AuthResult_AUTH_RESULT_FAILURE,
+func authFailure(reason string) *auditproxyv1.AuthenticateResponse {
+	return &auditproxyv1.AuthenticateResponse{
+		Result: auditproxyv1.AuthResult_AUTH_RESULT_FAILURE,
 		Reason: reason,
 	}
 }

@@ -19,16 +19,16 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata wget \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd -r sshproxy \
-    && useradd -r -g sshproxy -d /nonexistent -s /usr/sbin/nologin sshproxy \
-    && mkdir -p /etc/ssh-proxy /data /run \
-    && chown sshproxy:sshproxy /etc/ssh-proxy /data /run
+    && groupadd -r audit-proxy \
+    && useradd -r -g audit-proxy -d /nonexistent -s /usr/sbin/nologin audit-proxy \
+    && mkdir -p /etc/audit-proxy /data /run \
+    && chown audit-proxy:audit-proxy /etc/audit-proxy /data /run
 
 COPY --from=builder /build/control-plane /usr/local/bin/control-plane
 
 # Compose test overrides user to root so the shared PDP unix socket (0660)
 # is reachable by the dataplane on the same volume.
-USER sshproxy
+USER audit-proxy
 
 EXPOSE 8443
 

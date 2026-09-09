@@ -161,7 +161,7 @@ func Build() Document {
 	return Document{
 		OpenAPI: "3.0.3",
 		Info: Info{
-			Title:       "SSH Proxy Core Control Plane API",
+			Title:       "Audit Proxy Core Control Plane API",
 			Description: "Generated OpenAPI description for the currently exposed REST management API. Authenticate in the web UI first; Swagger UI reuses the browser session cookie and injects the CSRF token automatically for state-changing requests.",
 			Version:     "v2",
 		},

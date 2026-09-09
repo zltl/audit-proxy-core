@@ -8,9 +8,9 @@ import (
 
 type Client interface {
 	EnsureCRD(context.Context) error
-	ListClusters(context.Context, string) ([]SSHProxyCluster, error)
+	ListClusters(context.Context, string) ([]AuditProxyCluster, error)
 	Apply(context.Context, map[string]interface{}) error
-	UpdateStatus(context.Context, string, string, SSHProxyClusterStatus) error
+	UpdateStatus(context.Context, string, string, AuditProxyClusterStatus) error
 }
 
 type Reconciler struct {
@@ -39,7 +39,7 @@ func (r *Reconciler) ReconcileAll(ctx context.Context) error {
 	return nil
 }
 
-func (r *Reconciler) ReconcileCluster(ctx context.Context, cluster SSHProxyCluster) error {
+func (r *Reconciler) ReconcileCluster(ctx context.Context, cluster AuditProxyCluster) error {
 	if r == nil || r.Client == nil {
 		return fmt.Errorf("operator client is required")
 	}
@@ -49,7 +49,7 @@ func (r *Reconciler) ReconcileCluster(ctx context.Context, cluster SSHProxyClust
 		now = r.Now().UTC()
 	}
 	if err := cluster.Validate(); err != nil {
-		status := SSHProxyClusterStatus{
+		status := AuditProxyClusterStatus{
 			ObservedGeneration: cluster.Metadata.Generation,
 			Phase:              "Error",
 			Message:            err.Error(),
@@ -60,7 +60,7 @@ func (r *Reconciler) ReconcileCluster(ctx context.Context, cluster SSHProxyClust
 	}
 	rendered, err := RenderResources(cluster)
 	if err != nil {
-		status := SSHProxyClusterStatus{
+		status := AuditProxyClusterStatus{
 			ObservedGeneration: cluster.Metadata.Generation,
 			Phase:              "Error",
 			Message:            err.Error(),
@@ -71,7 +71,7 @@ func (r *Reconciler) ReconcileCluster(ctx context.Context, cluster SSHProxyClust
 	}
 	for _, obj := range rendered.Objects {
 		if err := r.Client.Apply(ctx, obj); err != nil {
-			status := SSHProxyClusterStatus{
+			status := AuditProxyClusterStatus{
 				ObservedGeneration: cluster.Metadata.Generation,
 				Phase:              "Error",
 				Message:            err.Error(),
@@ -82,7 +82,7 @@ func (r *Reconciler) ReconcileCluster(ctx context.Context, cluster SSHProxyClust
 			return err
 		}
 	}
-	status := SSHProxyClusterStatus{
+	status := AuditProxyClusterStatus{
 		ObservedGeneration: cluster.Metadata.Generation,
 		Phase:              "Ready",
 		Message:            "Reconciled successfully",

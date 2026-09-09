@@ -1,6 +1,6 @@
-# SSH Proxy Core — Quick Start Guide
+# Audit Proxy Core — Quick Start Guide
 
-Get up and running with SSH Proxy Core in minutes.
+Get up and running with Audit Proxy Core in minutes.
 
 ---
 
@@ -58,8 +58,8 @@ pkg-config --modversion libssh   # 0.9+
 Clone the repository and build both the C data-plane and Go control-plane:
 
 ```bash
-git clone https://github.com/ssh-proxy-core/ssh-proxy-core.git
-cd ssh-proxy-core
+git clone https://github.com/zltl/audit-proxy-core.git
+cd audit-proxy-core
 ```
 
 ### Build the C Data-Plane
@@ -85,7 +85,7 @@ Build artefacts are written to `build/`.  Key targets:
 
 ```bash
 go build -o build/control-plane ./cmd/control-plane
-go build -o build/sshproxy      ./cmd/sshproxy
+go build -o build/audit-proxy      ./cmd/audit-proxy
 ```
 
 Or build everything at once:
@@ -97,14 +97,14 @@ go build ./...
 ### Build the Docker Image (optional)
 
 ```bash
-docker build -t ssh-proxy-core .
+docker build -t audit-proxy-core .
 ```
 
 ---
 
 ## 3. Configuration
 
-SSH Proxy Core uses a simple INI-format configuration file. A sample is
+Audit Proxy Core uses a simple INI-format configuration file. A sample is
 provided at `config.ini` in the repository root; a more complete example lives
 at `docs/config.example.ini`.
 
@@ -114,11 +114,11 @@ at `docs/config.example.ini`.
 [server]
 bind_addr = 0.0.0.0
 port = 2222
-host_key = /etc/ssh-proxy/host_key
+host_key = /etc/audit-proxy/host_key
 
 [logging]
 level = info
-audit_dir = /var/log/ssh-proxy
+audit_dir = /var/log/audit-proxy
 
 [limits]
 max_sessions = 100
@@ -182,7 +182,7 @@ network ranges once and let policies reference those source types:
 [network_sources]
 office_cidrs = 10.0.0.0/8,192.168.0.0/16
 vpn_cidrs = 100.64.0.0/10
-geoip_data_file = /etc/ssh-proxy/geoip.json
+geoip_data_file = /etc/audit-proxy/geoip.json
 
 [policy:admin@10.0.1.10]
 allowed_source_types = office, vpn
@@ -203,7 +203,7 @@ half-open recovery probe is allowed back through at a time.
 
 ```ini
 [network_sources]
-geoip_data_file = /etc/ssh-proxy/geoip.json
+geoip_data_file = /etc/audit-proxy/geoip.json
 
 [route:admin]
 upstream = sfo-bastion.example.com
@@ -237,33 +237,33 @@ The Go control-plane reads a separate JSON configuration. Key fields:
   "hsts_enabled": true,
   "hsts_include_subdomains": false,
   "data_plane_addr": "http://127.0.0.1:9090",
-  "data_plane_config_file": "/etc/ssh-proxy/config.ini",
+  "data_plane_config_file": "/etc/audit-proxy/config.ini",
   "grpc_listen_addr": "127.0.0.1:9445",
   "config_approval_enabled": true,
   "config_store_backend": "file",
   "user_store_backend": "file",
-  "postgres_database_url": "postgres://sshproxy:change-me@db.example.com:5432/sshproxy?sslmode=require",
-  "postgres_read_database_urls": "postgres://sshproxy:change-me@db-ro-1.example.com:5432/sshproxy?sslmode=require,postgres://sshproxy:change-me@db-ro-2.example.com:5432/sshproxy?sslmode=require",
+  "postgres_database_url": "postgres://audit-proxy:change-me@db.example.com:5432/audit-proxy?sslmode=require",
+  "postgres_read_database_urls": "postgres://audit-proxy:change-me@db-ro-1.example.com:5432/audit-proxy?sslmode=require,postgres://audit-proxy:change-me@db-ro-2.example.com:5432/audit-proxy?sslmode=require",
   "database_max_open_conns": 24,
   "database_max_idle_conns": 12,
   "database_conn_max_lifetime": "30m",
   "database_conn_max_idle_time": "5m",
   "database_read_after_write_window": "2s",
-  "audit_log_dir": "/var/log/ssh-proxy",
+  "audit_log_dir": "/var/log/audit-proxy",
   "audit_store_backend": "file",
-  "audit_store_database_url": "postgres://sshproxy:change-me@db.example.com:5432/sshproxy?sslmode=require",
-  "audit_store_read_database_urls": "postgres://sshproxy:change-me@audit-ro.example.com:5432/sshproxy?sslmode=require",
+  "audit_store_database_url": "postgres://audit-proxy:change-me@db.example.com:5432/audit-proxy?sslmode=require",
+  "audit_store_read_database_urls": "postgres://audit-proxy:change-me@audit-ro.example.com:5432/audit-proxy?sslmode=require",
   "audit_archive_object_storage_enabled": true,
   "audit_archive_object_storage_endpoint": "https://minio.example.com",
-  "audit_archive_object_storage_bucket": "ssh-proxy-audit",
+  "audit_archive_object_storage_bucket": "audit-proxy-audit",
   "audit_archive_object_storage_access_key": "minio-access-key",
   "audit_archive_object_storage_secret_key": "minio-secret-key",
   "audit_archive_object_storage_region": "us-east-1",
   "audit_archive_object_storage_prefix": "audit",
-  "recording_dir": "/var/lib/ssh-proxy/recordings",
+  "recording_dir": "/var/lib/audit-proxy/recordings",
   "recording_object_storage_enabled": true,
   "recording_object_storage_endpoint": "https://minio.example.com",
-  "recording_object_storage_bucket": "ssh-proxy-recordings",
+  "recording_object_storage_bucket": "audit-proxy-recordings",
   "recording_object_storage_access_key": "minio-access-key",
   "recording_object_storage_secret_key": "minio-secret-key",
   "recording_object_storage_region": "us-east-1",
@@ -285,12 +285,12 @@ The Go control-plane reads a separate JSON configuration. Key fields:
   "dlp_transfer_approval_roles": "admin,security",
   "dlp_transfer_approval_timeout": "30m",
   "dlp_clipboard_audit_enabled": true,
-  "geoip_data_file": "/etc/ssh-proxy/geoip.json",
+  "geoip_data_file": "/etc/audit-proxy/geoip.json",
   "saml_enabled": true,
   "saml_root_url": "https://proxy.example.com",
   "saml_idp_metadata_url": "https://idp.example.com/metadata",
-  "saml_sp_cert": "/etc/ssh-proxy/saml-sp.pem",
-  "saml_sp_key": "/etc/ssh-proxy/saml-sp.key",
+  "saml_sp_cert": "/etc/audit-proxy/saml-sp.pem",
+  "saml_sp_key": "/etc/audit-proxy/saml-sp.key",
   "saml_username_attribute": "email",
   "saml_roles_attribute": "groups",
   "saml_role_mappings": {
@@ -322,7 +322,7 @@ The Go control-plane reads a separate JSON configuration. Key fields:
 ```
 
 Set `grpc_listen_addr` when you want the control-plane to expose the internal
-gRPC bridge generated from `api/proto/sshproxy/v1/control_plane.proto`. The
+gRPC bridge generated from `api/proto/auditproxy/v1/control_plane.proto`. The
 bridge proxies runtime data-plane operations such as health, session listing,
 server inventory, and config reload over gRPC.
 
@@ -375,7 +375,7 @@ configured index in the background. For SQL backends, if
 For Elasticsearch/OpenSearch, set `audit_store_endpoint` to the cluster base
 URL and optionally `audit_store_token` or `audit_store_username` +
 `audit_store_password` for auth. `audit_store_index` defaults to
-`ssh-proxy-audit`, and `audit_store_insecure_tls=true` can be used for
+`audit-proxy-audit`, and `audit_store_insecure_tls=true` can be used for
 lab/self-signed clusters.
 
 When you have PostgreSQL replicas available, set
@@ -414,8 +414,8 @@ To run file-backed state migration explicitly before switching traffic, start
 the control-plane in one-shot migration mode:
 
 ```bash
-control-plane -config /etc/ssh-proxy/control-plane.json -migrate
-control-plane -config /etc/ssh-proxy/control-plane.json -migrate -migrate-targets config,users,audit
+control-plane -config /etc/audit-proxy/control-plane.json -migrate
+control-plane -config /etc/audit-proxy/control-plane.json -migrate -migrate-targets config,users,audit
 ```
 
 The migration command applies SQL schema upgrades first, then imports
@@ -427,9 +427,9 @@ version state.
 To create or restore a logical control-plane backup bundle, use:
 
 ```bash
-control-plane -config /etc/ssh-proxy/control-plane.json -backup /var/backups/ssh-proxy/backup.json
-control-plane -config /etc/ssh-proxy/control-plane.json -restore /var/backups/ssh-proxy/backup.json
-control-plane -config /etc/ssh-proxy/control-plane.json -backup /var/backups/ssh-proxy/config-users.json -backup-targets config,users
+control-plane -config /etc/audit-proxy/control-plane.json -backup /var/backups/audit-proxy/backup.json
+control-plane -config /etc/audit-proxy/control-plane.json -restore /var/backups/audit-proxy/backup.json
+control-plane -config /etc/audit-proxy/control-plane.json -backup /var/backups/audit-proxy/config-users.json -backup-targets config,users
 ```
 
 The backup bundle is JSON and captures logical state rather than vendor-specific
@@ -473,9 +473,9 @@ For example:
 "cluster_election_timeout": "30s",
 "cluster_sync_interval": "12s",
 "cluster_seeds": [
-  "dns://ssh-proxy.internal:9444",
-  "k8s://ssh-proxy.default:9444",
-  "consul://consul.service.consul:8500/ssh-proxy?tag=prod"
+  "dns://audit-proxy.internal:9444",
+  "k8s://audit-proxy.default:9444",
+  "consul://consul.service.consul:8500/audit-proxy?tag=prod"
 ]
 ```
 
@@ -491,19 +491,19 @@ for WAN deployments where the default 5s / 15s / 10s timings are too aggressive.
 
 If you prefer a CRD-driven Kubernetes deployment flow instead of Helm, apply
 the operator assets under `deploy/operator/` and create an
-`SSHProxyCluster.proxy.sshproxy.io/v1alpha1` resource:
+`AuditProxyCluster.proxy.auditproxy.io/v1alpha1` resource:
 
 ```bash
 kubectl apply -f deploy/operator/crd.yaml
 kubectl apply -f deploy/operator/rbac.yaml
 kubectl apply -f deploy/operator/deployment.yaml
-kubectl apply -f deploy/operator/example-sshproxycluster.yaml
+kubectl apply -f deploy/operator/example-auditproxycluster.yaml
 ```
 
-The operator reconciles a namespaced `SSHProxyCluster` into a ServiceAccount,
+The operator reconciles a namespaced `AuditProxyCluster` into a ServiceAccount,
 ConfigMap, Secret, Services, Deployments, and optional PVC. The CR stores raw
 `controlPlaneJSON` and `dataPlaneINI`. Values under `spec.secrets` are mounted
-as `/etc/ssh-proxy/secrets/*` files for the data-plane and also projected into
+as `/etc/audit-proxy/secrets/*` files for the data-plane and also projected into
 the control-plane as `SSH_PROXY_CP_<KEY>` environment variables, so
 `session_secret`, `admin_user`, `admin_pass_hash`, and similar control-plane
 settings can stay out of the CR body.
@@ -529,7 +529,7 @@ other healthy peer remains. After the node comes back, disable drain mode with
 
 Set `data_plane_config_file` when the control plane needs to verify signed
 data-plane webhooks or inspect the managed `config.ini` directly. The default
-value follows the C data-plane default: `/etc/ssh-proxy/config.ini`.
+value follows the C data-plane default: `/etc/audit-proxy/config.ini`.
 
 Set `geoip_data_file` to enable file-backed GeoIP enrichment for threat
 detection. The file is a JSON array (or `{ "entries": [...] }`) of CIDR records:
@@ -656,7 +656,7 @@ export SSH_PROXY_CP_SESSION_SECRET="my-secret"
 ### Start the C Data-Plane
 
 ```bash
-./build/ssh_proxy -c config.ini
+./build/audit-proxy -c config.ini
 ```
 
 The data-plane exposes an admin API on port 9090 by default.

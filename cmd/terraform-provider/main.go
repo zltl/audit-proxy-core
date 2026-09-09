@@ -1,10 +1,10 @@
-// Command terraform-provider-sshproxy is a CLI bridge between Terraform
+// Command terraform-provider-audit-proxy is a CLI bridge between Terraform
 // (using the external data source / local-exec provisioner pattern) and
-// the SSH Proxy control-plane API.
+// the Audit Proxy control-plane API.
 //
 // Usage:
 //
-//	terraform-provider-sshproxy <action> [args...]
+//	terraform-provider-audit-proxy <action> [args...]
 //
 // Actions:
 //
@@ -33,8 +33,8 @@
 //
 // Environment variables:
 //
-//	SSHPROXY_SERVER — control-plane base URL  (e.g. https://proxy.example.com:8443)
-//	SSHPROXY_TOKEN  — API authentication token
+//	AUDITPROXY_SERVER — control-plane base URL  (e.g. https://proxy.example.com:8443)
+//	AUDITPROXY_TOKEN  — API authentication token
 package main
 
 import (
@@ -50,7 +50,7 @@ import (
 	"time"
 )
 
-// apiClient wraps HTTP calls to the SSH Proxy control-plane API.
+// apiClient wraps HTTP calls to the Audit Proxy control-plane API.
 type apiClient struct {
 	baseURL    string
 	token      string
@@ -65,26 +65,26 @@ type apiResponse struct {
 }
 
 func newClient() (*apiClient, error) {
-	server := os.Getenv("SSHPROXY_SERVER")
+	server := os.Getenv("AUDITPROXY_SERVER")
 	if server == "" {
-		return nil, fmt.Errorf("SSHPROXY_SERVER environment variable is not set")
+		return nil, fmt.Errorf("AUDITPROXY_SERVER environment variable is not set")
 	}
 
 	parsed, err := neturl.Parse(server)
 	if err != nil {
-		return nil, fmt.Errorf("parse SSHPROXY_SERVER: %w", err)
+		return nil, fmt.Errorf("parse AUDITPROXY_SERVER: %w", err)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, fmt.Errorf("SSHPROXY_SERVER must use http or https")
+		return nil, fmt.Errorf("AUDITPROXY_SERVER must use http or https")
 	}
 	if parsed.Host == "" {
-		return nil, fmt.Errorf("SSHPROXY_SERVER must include a host")
+		return nil, fmt.Errorf("AUDITPROXY_SERVER must include a host")
 	}
 	server = strings.TrimRight(parsed.String(), "/")
 
 	return &apiClient{
 		baseURL: server,
-		token:   os.Getenv("SSHPROXY_TOKEN"),
+		token:   os.Getenv("AUDITPROXY_TOKEN"),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -646,7 +646,7 @@ func dispatch(action string, args []string, stdin io.Reader, client *apiClient) 
 
 // usage prints usage instructions to stderr.
 func usage() {
-	fmt.Fprintln(os.Stderr, `Usage: terraform-provider-sshproxy <action> [args...]
+	fmt.Fprintln(os.Stderr, `Usage: terraform-provider-audit-proxy <action> [args...]
 
 Actions:
   read-users        Output users as JSON
@@ -673,8 +673,8 @@ Actions:
   apply-config      Apply config from JSON stdin
 
 Environment:
-  SSHPROXY_SERVER   Control-plane base URL (required)
-  SSHPROXY_TOKEN    API authentication token`)
+  AUDITPROXY_SERVER   Control-plane base URL (required)
+  AUDITPROXY_TOKEN    API authentication token`)
 }
 
 func run(args []string, stdin io.Reader) (int, string) {

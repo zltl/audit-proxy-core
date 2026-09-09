@@ -10,7 +10,7 @@ import (
 // Supported forms:
 //   - 64-char hex literal
 //   - file:/path/to/key
-//   - vault:path=secret/data/ssh-proxy;addr=https://vault:8200;key=kek (token from VAULT_TOKEN)
+//   - vault:path=secret/data/audit-proxy;addr=https://vault:8200;key=kek (token from VAULT_TOKEN)
 func LoadProvider(spec string) (Provider, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {

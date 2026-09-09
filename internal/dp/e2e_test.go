@@ -24,18 +24,18 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/pdpclient"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/pdpclient"
 )
 
 // scriptedPDP is a decision point whose answers the test controls.
 type scriptedPDP struct {
-	sshproxyv1.UnimplementedAccessDecisionServiceServer
+	auditproxyv1.UnimplementedAccessDecisionServiceServer
 
 	mu sync.Mutex
 
 	// authResult decides every Authenticate call.
-	authResult sshproxyv1.AuthResult
+	authResult auditproxyv1.AuthResult
 
 	sessionAllowed  bool
 	sessionReason   string
@@ -44,7 +44,7 @@ type scriptedPDP struct {
 	targetPort      int
 	upstreamLogin   string
 	commandPolicyID string
-	recordPolicy    sshproxyv1.RecordPolicy
+	recordPolicy    auditproxyv1.RecordPolicy
 	// idleTimeoutSeconds and maxSessionSeconds are the limits the decision
 	// point hands back with an authorization.
 	idleTimeoutSeconds int64
@@ -53,22 +53,22 @@ type scriptedPDP struct {
 	// channelDenied names request payloads or channel types to refuse.
 	channelDenied map[string]string
 
-	commandResponses map[string]*sshproxyv1.AuthorizeCommandResponse
+	commandResponses map[string]*auditproxyv1.AuthorizeCommandResponse
 
 	hostKeyProceed bool
 	hostKeyReason  string
 	// seenHostKeys records fingerprints presented, proving the check happened.
 	seenHostKeys []string
 
-	credential *sshproxyv1.IssueUpstreamCredentialResponse
+	credential *auditproxyv1.IssueUpstreamCredentialResponse
 
 	openedSessions  []string
-	closedSessions  []*sshproxyv1.CloseSessionRequest
+	closedSessions  []*auditproxyv1.CloseSessionRequest
 	heartbeatRevoke bool
 	heartbeatReason string
 
-	revocations chan *sshproxyv1.Revocation
-	events      []*sshproxyv1.AuditEvent
+	revocations chan *auditproxyv1.Revocation
+	events      []*auditproxyv1.AuditEvent
 	// rejectEvents makes the control plane refuse audit batches, so a test can
 	// prove the records survive an outage rather than being dropped.
 	rejectEvents bool
@@ -76,41 +76,41 @@ type scriptedPDP struct {
 
 func newScriptedPDP() *scriptedPDP {
 	return &scriptedPDP{
-		authResult:       sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS,
+		authResult:       auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS,
 		sessionAllowed:   true,
 		sessionFeatures:  []string{"shell", "exec", "pty", "env", "sftp", "subsystem"},
 		hostKeyProceed:   true,
-		recordPolicy:     sshproxyv1.RecordPolicy_RECORD_POLICY_FULL,
+		recordPolicy:     auditproxyv1.RecordPolicy_RECORD_POLICY_FULL,
 		channelDenied:    make(map[string]string),
-		commandResponses: make(map[string]*sshproxyv1.AuthorizeCommandResponse),
-		revocations:      make(chan *sshproxyv1.Revocation, 8),
-		credential: &sshproxyv1.IssueUpstreamCredentialResponse{
-			Kind:     sshproxyv1.CredentialKind_CREDENTIAL_KIND_PASSWORD,
+		commandResponses: make(map[string]*auditproxyv1.AuthorizeCommandResponse),
+		revocations:      make(chan *auditproxyv1.Revocation, 8),
+		credential: &auditproxyv1.IssueUpstreamCredentialResponse{
+			Kind:     auditproxyv1.CredentialKind_CREDENTIAL_KIND_PASSWORD,
 			Password: "upstream-password",
 		},
 	}
 }
 
-func (p *scriptedPDP) Authenticate(_ context.Context, req *sshproxyv1.AuthenticateRequest) (*sshproxyv1.AuthenticateResponse, error) {
+func (p *scriptedPDP) Authenticate(_ context.Context, req *auditproxyv1.AuthenticateRequest) (*auditproxyv1.AuthenticateResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.authResult != sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
-		return &sshproxyv1.AuthenticateResponse{Result: p.authResult, Reason: "refused by test"}, nil
+	if p.authResult != auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+		return &auditproxyv1.AuthenticateResponse{Result: p.authResult, Reason: "refused by test"}, nil
 	}
-	return &sshproxyv1.AuthenticateResponse{
-		Result:   sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS,
+	return &auditproxyv1.AuthenticateResponse{
+		Result:   auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS,
 		Username: req.GetUsername(),
 		Roles:    []string{"operator"},
 	}, nil
 }
 
-func (p *scriptedPDP) AuthorizeSession(_ context.Context, _ *sshproxyv1.AuthorizeSessionRequest) (*sshproxyv1.AuthorizeSessionResponse, error) {
+func (p *scriptedPDP) AuthorizeSession(_ context.Context, _ *auditproxyv1.AuthorizeSessionRequest) (*auditproxyv1.AuthorizeSessionResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !p.sessionAllowed {
-		return &sshproxyv1.AuthorizeSessionResponse{Allowed: false, Reason: p.sessionReason}, nil
+		return &auditproxyv1.AuthorizeSessionResponse{Allowed: false, Reason: p.sessionReason}, nil
 	}
-	return &sshproxyv1.AuthorizeSessionResponse{
+	return &auditproxyv1.AuthorizeSessionResponse{
 		Allowed:            true,
 		TargetId:           "tgt-1",
 		TargetHost:         p.targetHost,
@@ -125,72 +125,72 @@ func (p *scriptedPDP) AuthorizeSession(_ context.Context, _ *sshproxyv1.Authoriz
 	}, nil
 }
 
-func (p *scriptedPDP) AuthorizeChannel(_ context.Context, req *sshproxyv1.AuthorizeChannelRequest) (*sshproxyv1.AuthorizeChannelResponse, error) {
+func (p *scriptedPDP) AuthorizeChannel(_ context.Context, req *auditproxyv1.AuthorizeChannelRequest) (*auditproxyv1.AuthorizeChannelResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	key := req.GetChannelType().String()
 	if reason, denied := p.channelDenied[key]; denied {
-		return &sshproxyv1.AuthorizeChannelResponse{Allowed: false, Reason: reason}, nil
+		return &auditproxyv1.AuthorizeChannelResponse{Allowed: false, Reason: reason}, nil
 	}
 	key = req.GetRequestType().String()
 	if reason, denied := p.channelDenied[key]; denied {
-		return &sshproxyv1.AuthorizeChannelResponse{Allowed: false, Reason: reason}, nil
+		return &auditproxyv1.AuthorizeChannelResponse{Allowed: false, Reason: reason}, nil
 	}
-	return &sshproxyv1.AuthorizeChannelResponse{Allowed: true}, nil
+	return &auditproxyv1.AuthorizeChannelResponse{Allowed: true}, nil
 }
 
-func (p *scriptedPDP) AuthorizeCommand(req *sshproxyv1.AuthorizeCommandRequest, stream sshproxyv1.AccessDecisionService_AuthorizeCommandServer) error {
+func (p *scriptedPDP) AuthorizeCommand(req *auditproxyv1.AuthorizeCommandRequest, stream auditproxyv1.AccessDecisionService_AuthorizeCommandServer) error {
 	p.mu.Lock()
 	resp, ok := p.commandResponses[req.GetCommand()]
 	p.mu.Unlock()
 	if !ok {
-		resp = &sshproxyv1.AuthorizeCommandResponse{
-			Decision: sshproxyv1.CommandDecision_COMMAND_DECISION_ALLOW,
+		resp = &auditproxyv1.AuthorizeCommandResponse{
+			Decision: auditproxyv1.CommandDecision_COMMAND_DECISION_ALLOW,
 		}
 	}
 	return stream.Send(resp)
 }
 
-func (p *scriptedPDP) ResolveHostKey(_ context.Context, req *sshproxyv1.ResolveHostKeyRequest) (*sshproxyv1.ResolveHostKeyResponse, error) {
+func (p *scriptedPDP) ResolveHostKey(_ context.Context, req *auditproxyv1.ResolveHostKeyRequest) (*auditproxyv1.ResolveHostKeyResponse, error) {
 	p.mu.Lock()
 	p.seenHostKeys = append(p.seenHostKeys, req.GetFingerprint())
 	proceed, reason := p.hostKeyProceed, p.hostKeyReason
 	p.mu.Unlock()
-	verdict := sshproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_TRUSTED
+	verdict := auditproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_TRUSTED
 	if !proceed {
-		verdict = sshproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_REJECTED
+		verdict = auditproxyv1.HostKeyVerdict_HOST_KEY_VERDICT_REJECTED
 	}
-	return &sshproxyv1.ResolveHostKeyResponse{Verdict: verdict, Reason: reason, Proceed: proceed}, nil
+	return &auditproxyv1.ResolveHostKeyResponse{Verdict: verdict, Reason: reason, Proceed: proceed}, nil
 }
 
-func (p *scriptedPDP) IssueUpstreamCredential(_ context.Context, _ *sshproxyv1.IssueUpstreamCredentialRequest) (*sshproxyv1.IssueUpstreamCredentialResponse, error) {
+func (p *scriptedPDP) IssueUpstreamCredential(_ context.Context, _ *auditproxyv1.IssueUpstreamCredentialRequest) (*auditproxyv1.IssueUpstreamCredentialResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.credential, nil
 }
 
-func (p *scriptedPDP) OpenSession(_ context.Context, _ *sshproxyv1.OpenSessionRequest) (*sshproxyv1.OpenSessionResponse, error) {
+func (p *scriptedPDP) OpenSession(_ context.Context, _ *auditproxyv1.OpenSessionRequest) (*auditproxyv1.OpenSessionResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	id := fmt.Sprintf("sess-%d", len(p.openedSessions)+1)
 	p.openedSessions = append(p.openedSessions, id)
-	return &sshproxyv1.OpenSessionResponse{SessionId: id, Allowed: true}, nil
+	return &auditproxyv1.OpenSessionResponse{SessionId: id, Allowed: true}, nil
 }
 
-func (p *scriptedPDP) HeartbeatSession(_ context.Context, _ *sshproxyv1.HeartbeatSessionRequest) (*sshproxyv1.HeartbeatSessionResponse, error) {
+func (p *scriptedPDP) HeartbeatSession(_ context.Context, _ *auditproxyv1.HeartbeatSessionRequest) (*auditproxyv1.HeartbeatSessionResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return &sshproxyv1.HeartbeatSessionResponse{Revoked: p.heartbeatRevoke, Reason: p.heartbeatReason}, nil
+	return &auditproxyv1.HeartbeatSessionResponse{Revoked: p.heartbeatRevoke, Reason: p.heartbeatReason}, nil
 }
 
-func (p *scriptedPDP) CloseSession(_ context.Context, req *sshproxyv1.CloseSessionRequest) (*sshproxyv1.CloseSessionResponse, error) {
+func (p *scriptedPDP) CloseSession(_ context.Context, req *auditproxyv1.CloseSessionRequest) (*auditproxyv1.CloseSessionResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closedSessions = append(p.closedSessions, req)
-	return &sshproxyv1.CloseSessionResponse{}, nil
+	return &auditproxyv1.CloseSessionResponse{}, nil
 }
 
-func (p *scriptedPDP) StreamRevocations(_ *sshproxyv1.StreamRevocationsRequest, stream sshproxyv1.AccessDecisionService_StreamRevocationsServer) error {
+func (p *scriptedPDP) StreamRevocations(_ *auditproxyv1.StreamRevocationsRequest, stream auditproxyv1.AccessDecisionService_StreamRevocationsServer) error {
 	for {
 		select {
 		case <-stream.Context().Done():
@@ -203,12 +203,12 @@ func (p *scriptedPDP) StreamRevocations(_ *sshproxyv1.StreamRevocationsRequest, 
 	}
 }
 
-func (p *scriptedPDP) ReportEvents(stream sshproxyv1.AccessDecisionService_ReportEventsServer) error {
+func (p *scriptedPDP) ReportEvents(stream auditproxyv1.AccessDecisionService_ReportEventsServer) error {
 	var accepted int64
 	for {
 		batch, err := stream.Recv()
 		if err == io.EOF {
-			return stream.SendAndClose(&sshproxyv1.ReportEventsResponse{Accepted: accepted})
+			return stream.SendAndClose(&auditproxyv1.ReportEventsResponse{Accepted: accepted})
 		}
 		if err != nil {
 			return err
@@ -226,16 +226,16 @@ func (p *scriptedPDP) ReportEvents(stream sshproxyv1.AccessDecisionService_Repor
 	}
 }
 
-func (p *scriptedPDP) auditEvents() []*sshproxyv1.AuditEvent {
+func (p *scriptedPDP) auditEvents() []*auditproxyv1.AuditEvent {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]*sshproxyv1.AuditEvent(nil), p.events...)
+	return append([]*auditproxyv1.AuditEvent(nil), p.events...)
 }
 
-func (p *scriptedPDP) closedRequests() []*sshproxyv1.CloseSessionRequest {
+func (p *scriptedPDP) closedRequests() []*auditproxyv1.CloseSessionRequest {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]*sshproxyv1.CloseSessionRequest(nil), p.closedSessions...)
+	return append([]*auditproxyv1.CloseSessionRequest(nil), p.closedSessions...)
 }
 
 func (p *scriptedPDP) hostKeysSeen() []string {
@@ -315,11 +315,11 @@ func newHarness(t *testing.T, configure func(*Config, *scriptedPDP)) *harness {
 	}
 }
 
-func dialScriptedPDP(t *testing.T, impl sshproxyv1.AccessDecisionServiceServer) *pdpclient.Client {
+func dialScriptedPDP(t *testing.T, impl auditproxyv1.AccessDecisionServiceServer) *pdpclient.Client {
 	t.Helper()
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
-	sshproxyv1.RegisterAccessDecisionServiceServer(server, impl)
+	auditproxyv1.RegisterAccessDecisionServiceServer(server, impl)
 	go func() { _ = server.Serve(listener) }()
 
 	conn, err := grpc.NewClient("passthrough:///bufnet",
@@ -581,7 +581,7 @@ func TestProxyWritesARecording(t *testing.T) {
 
 func TestRecordingDisabledByPolicy(t *testing.T) {
 	h := newHarness(t, func(_ *Config, pdp *scriptedPDP) {
-		pdp.recordPolicy = sshproxyv1.RecordPolicy_RECORD_POLICY_NONE
+		pdp.recordPolicy = auditproxyv1.RecordPolicy_RECORD_POLICY_NONE
 	})
 	client := h.mustConnect("alice@web-1")
 
@@ -703,8 +703,8 @@ func TestLocalForwardIsGatedAndProxied(t *testing.T) {
 func TestCommandDenyBlocksBeforeReachingTheTarget(t *testing.T) {
 	h := newHarness(t, func(_ *Config, pdp *scriptedPDP) {
 		pdp.commandPolicyID = "cp-1"
-		pdp.commandResponses["rm -rf /"] = &sshproxyv1.AuthorizeCommandResponse{
-			Decision: sshproxyv1.CommandDecision_COMMAND_DECISION_DENY,
+		pdp.commandResponses["rm -rf /"] = &auditproxyv1.AuthorizeCommandResponse{
+			Decision: auditproxyv1.CommandDecision_COMMAND_DECISION_DENY,
 			Reason:   "refusing a recursive delete of the root filesystem",
 		}
 	})
@@ -728,8 +728,8 @@ func TestCommandDenyBlocksBeforeReachingTheTarget(t *testing.T) {
 func TestCommandRewriteChangesWhatRuns(t *testing.T) {
 	h := newHarness(t, func(_ *Config, pdp *scriptedPDP) {
 		pdp.commandPolicyID = "cp-1"
-		pdp.commandResponses["shutdown -h now"] = &sshproxyv1.AuthorizeCommandResponse{
-			Decision:         sshproxyv1.CommandDecision_COMMAND_DECISION_REWRITE,
+		pdp.commandResponses["shutdown -h now"] = &auditproxyv1.AuthorizeCommandResponse{
+			Decision:         auditproxyv1.CommandDecision_COMMAND_DECISION_REWRITE,
 			RewrittenCommand: "echo refused",
 		}
 	})
@@ -774,7 +774,7 @@ func TestRevocationDisconnectsTheSession(t *testing.T) {
 	h.pdp.mu.Lock()
 	sessionID := h.pdp.openedSessions[0]
 	h.pdp.mu.Unlock()
-	h.pdp.revocations <- &sshproxyv1.Revocation{
+	h.pdp.revocations <- &auditproxyv1.Revocation{
 		SessionId: sessionID, Reason: "terminated by an administrator",
 	}
 
@@ -872,7 +872,7 @@ func TestDrainStopsNewConnectionsButKeepsExistingOnes(t *testing.T) {
 
 func TestAuthenticationFailureIsRejected(t *testing.T) {
 	h := newHarness(t, func(_ *Config, pdp *scriptedPDP) {
-		pdp.authResult = sshproxyv1.AuthResult_AUTH_RESULT_FAILURE
+		pdp.authResult = auditproxyv1.AuthResult_AUTH_RESULT_FAILURE
 	})
 
 	if _, err := h.connect("alice@web-1"); err == nil {
@@ -1185,7 +1185,7 @@ func waitForTransfer(t *testing.T, h *harness, path string) FileTransfer {
 }
 
 // waitForEvents polls until the expected event types have been delivered.
-func waitForEvents(t *testing.T, h *harness, types ...string) []*sshproxyv1.AuditEvent {
+func waitForEvents(t *testing.T, h *harness, types ...string) []*auditproxyv1.AuditEvent {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -1230,7 +1230,7 @@ func TestAuditEventsReachTheControlPlane(t *testing.T) {
 
 	events := waitForEvents(t, h, EventSessionStart, EventSessionEnd)
 
-	var start, end *sshproxyv1.AuditEvent
+	var start, end *auditproxyv1.AuditEvent
 	for _, event := range events {
 		switch event.GetEventType() {
 		case EventSessionStart:

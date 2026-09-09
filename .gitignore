@@ -7,7 +7,7 @@ build-*/
 *.dylib
 
 # Executables
-ssh-proxy-core
+audit-proxy-core
 test_runner
 
 # Dependency files

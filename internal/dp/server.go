@@ -22,8 +22,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/pdpclient"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/pdpclient"
 )
 
 // Server is a data-plane node.
@@ -317,7 +317,7 @@ func (s *Server) closeAllConnections(reason string) {
 }
 
 // applyRevocation disconnects a session an operator asked to terminate.
-func (s *Server) applyRevocation(rev *sshproxyv1.Revocation) {
+func (s *Server) applyRevocation(rev *auditproxyv1.Revocation) {
 	s.connectionsMu.Lock()
 	var match *connection
 	for c := range s.connections {

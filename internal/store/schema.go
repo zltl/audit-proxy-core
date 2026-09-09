@@ -1,6 +1,6 @@
 package store
 
-import "github.com/ssh-proxy-core/ssh-proxy-core/internal/dbx"
+import "github.com/zltl/audit-proxy-core/internal/dbx"
 
 // component is the migration key for this schema. It is separate from the
 // control plane's own components so the two can evolve independently.

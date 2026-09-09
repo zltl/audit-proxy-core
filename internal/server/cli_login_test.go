@@ -22,8 +22,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/oidc"
+	"github.com/zltl/audit-proxy-core/internal/config"
+	"github.com/zltl/audit-proxy-core/internal/oidc"
 )
 
 func TestCLILoginFlowBridgesSessionAndCertificate(t *testing.T) {
@@ -49,7 +49,7 @@ func TestCLILoginFlowBridgesSessionAndCertificate(t *testing.T) {
 		DataDir:          t.TempDir(),
 		OIDCEnabled:      true,
 		OIDCIssuer:       idp.URL,
-		OIDCClientID:     "sshproxy-cli",
+		OIDCClientID:     "audit-proxy-cli",
 		OIDCClientSecret: "",
 		OIDCRedirectURL:  baseURL + "/auth/callback",
 	}
@@ -248,7 +248,7 @@ func newOIDCTestProvider(t *testing.T) *httptest.Server {
 
 		idToken := signedOIDCTestJWT(t, privateKey, map[string]interface{}{
 			"iss":   srv.URL,
-			"aud":   "sshproxy-cli",
+			"aud":   "audit-proxy-cli",
 			"sub":   "user-123",
 			"email": "cli@example.com",
 			"exp":   time.Now().Add(time.Hour).Unix(),

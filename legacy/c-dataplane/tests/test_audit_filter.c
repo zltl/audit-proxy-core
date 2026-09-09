@@ -282,7 +282,7 @@ static void set_file_age_days(const char *path, int days) {
 static int test_event_log_rotation(void) {
     TEST_START();
 
-    char dir_template[] = "/tmp/sshproxy-audit-events-XXXXXX";
+    char dir_template[] = "/tmp/audit-proxy-audit-events-XXXXXX";
     char *dir = mkdtemp(dir_template);
     ASSERT_NOT_NULL(dir);
 
@@ -338,7 +338,7 @@ static int test_event_log_rotation(void) {
 static int test_command_log_rotation(void) {
     TEST_START();
 
-    char dir_template[] = "/tmp/sshproxy-audit-commands-XXXXXX";
+    char dir_template[] = "/tmp/audit-proxy-audit-commands-XXXXXX";
     char *dir = mkdtemp(dir_template);
     ASSERT_NOT_NULL(dir);
 
@@ -382,7 +382,7 @@ static int test_command_log_rotation(void) {
 static int test_event_log_rejects_symlink_target(void) {
     TEST_START();
 
-    char dir_template[] = "/tmp/sshproxy-audit-symlink-XXXXXX";
+    char dir_template[] = "/tmp/audit-proxy-audit-symlink-XXXXXX";
     char *dir = mkdtemp(dir_template);
     ASSERT_NOT_NULL(dir);
 
@@ -436,7 +436,7 @@ static int test_event_log_rejects_symlink_target(void) {
 static int test_event_log_encryption(void) {
     TEST_START();
 
-    char dir_template[] = "/tmp/sshproxy-audit-encrypted-events-XXXXXX";
+    char dir_template[] = "/tmp/audit-proxy-audit-encrypted-events-XXXXXX";
     char *dir = mkdtemp(dir_template);
     ASSERT_NOT_NULL(dir);
 
@@ -490,7 +490,7 @@ static int test_event_log_encryption(void) {
 static int test_command_log_encryption(void) {
     TEST_START();
 
-    char dir_template[] = "/tmp/sshproxy-audit-encrypted-commands-XXXXXX";
+    char dir_template[] = "/tmp/audit-proxy-audit-encrypted-commands-XXXXXX";
     char *dir = mkdtemp(dir_template);
     ASSERT_NOT_NULL(dir);
 
@@ -536,7 +536,7 @@ static int test_command_log_encryption(void) {
 static int test_event_log_retention_days(void) {
     TEST_START();
 
-    char dir_template[] = "/tmp/sshproxy-audit-retention-days-XXXXXX";
+    char dir_template[] = "/tmp/audit-proxy-audit-retention-days-XXXXXX";
     char *dir = mkdtemp(dir_template);
     ASSERT_NOT_NULL(dir);
 
@@ -583,7 +583,7 @@ static int test_event_log_retention_days(void) {
 static int test_event_log_retention_archived_count(void) {
     TEST_START();
 
-    char dir_template[] = "/tmp/sshproxy-audit-retention-count-XXXXXX";
+    char dir_template[] = "/tmp/audit-proxy-audit-retention-count-XXXXXX";
     char *dir = mkdtemp(dir_template);
     ASSERT_NOT_NULL(dir);
 

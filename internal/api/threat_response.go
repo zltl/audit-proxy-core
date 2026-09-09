@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/threat"
+	"github.com/zltl/audit-proxy-core/internal/jit"
+	"github.com/zltl/audit-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/threat"
 )
 
 // ThreatResponseConfig controls how automatic response reacts to fresh threat alerts.
@@ -240,7 +240,7 @@ func threatSeverityRank(value threat.Severity) int {
 
 func renderThreatResponseNotification(alert *threat.Alert, actions, failures []string) (string, string) {
 	if alert == nil {
-		return "[SSH Proxy] Threat response", "Threat response executed."
+		return "[Audit Proxy] Threat response", "Threat response executed."
 	}
 	ruleName := strings.TrimSpace(alert.RuleName)
 	if ruleName == "" {
@@ -250,7 +250,7 @@ func renderThreatResponseNotification(alert *threat.Alert, actions, failures []s
 		ruleName = "threat alert"
 	}
 
-	subject := fmt.Sprintf("[SSH Proxy] Threat response for %s", ruleName)
+	subject := fmt.Sprintf("[Audit Proxy] Threat response for %s", ruleName)
 	lines := []string{
 		subject,
 		"",

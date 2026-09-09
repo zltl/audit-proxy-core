@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
 )
 
 // FileEventSink appends reported events to the audit log directory.
@@ -44,7 +44,7 @@ func NewFileEventSink(dir string, syncWrites bool) (*FileEventSink, error) {
 }
 
 // Publish appends a batch.
-func (s *FileEventSink) Publish(_ context.Context, events []*sshproxyv1.AuditEvent) error {
+func (s *FileEventSink) Publish(_ context.Context, events []*auditproxyv1.AuditEvent) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -116,7 +116,7 @@ func (s *FileEventSink) Close() error {
 // The typed sub-records are flattened into the details field so that an
 // existing reader keeps working, while the structured form is preserved
 // alongside for anything that understands it.
-func auditEventJSON(event *sshproxyv1.AuditEvent) map[string]interface{} {
+func auditEventJSON(event *auditproxyv1.AuditEvent) map[string]interface{} {
 	out := map[string]interface{}{
 		"id":         event.GetId(),
 		"event_type": event.GetEventType(),
@@ -189,7 +189,7 @@ func auditEventJSON(event *sshproxyv1.AuditEvent) map[string]interface{} {
 
 // describeEvent renders a one-line summary, because the audit views and most
 // alerting read a sentence rather than a structure.
-func describeEvent(event *sshproxyv1.AuditEvent) string {
+func describeEvent(event *auditproxyv1.AuditEvent) string {
 	if details := event.GetDetails(); details != "" {
 		return details
 	}

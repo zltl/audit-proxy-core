@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/api"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/api"
+	"github.com/zltl/audit-proxy-core/internal/models"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -18,10 +18,10 @@ import (
 
 // BridgeServer exposes a minimal gRPC surface backed by the existing data-plane client.
 type BridgeServer struct {
-	sshproxyv1.UnimplementedSystemServiceServer
-	sshproxyv1.UnimplementedSessionServiceServer
-	sshproxyv1.UnimplementedServerServiceServer
-	sshproxyv1.UnimplementedConfigServiceServer
+	auditproxyv1.UnimplementedSystemServiceServer
+	auditproxyv1.UnimplementedSessionServiceServer
+	auditproxyv1.UnimplementedServerServiceServer
+	auditproxyv1.UnimplementedConfigServiceServer
 
 	dp        api.DataPlaneClient
 	startedAt time.Time
@@ -37,10 +37,10 @@ func NewBridgeServer(dp api.DataPlaneClient) *BridgeServer {
 
 // Register attaches every supported service to the provided gRPC registrar.
 func Register(registrar grpc.ServiceRegistrar, srv *BridgeServer) {
-	sshproxyv1.RegisterSystemServiceServer(registrar, srv)
-	sshproxyv1.RegisterSessionServiceServer(registrar, srv)
-	sshproxyv1.RegisterServerServiceServer(registrar, srv)
-	sshproxyv1.RegisterConfigServiceServer(registrar, srv)
+	auditproxyv1.RegisterSystemServiceServer(registrar, srv)
+	auditproxyv1.RegisterSessionServiceServer(registrar, srv)
+	auditproxyv1.RegisterServerServiceServer(registrar, srv)
+	auditproxyv1.RegisterConfigServiceServer(registrar, srv)
 }
 
 func (s *BridgeServer) requireDataPlane() error {
@@ -131,8 +131,8 @@ func sanitizeConfigMap(cfg map[string]interface{}) {
 	}
 }
 
-func toProtoSession(item models.Session) *sshproxyv1.Session {
-	return &sshproxyv1.Session{
+func toProtoSession(item models.Session) *auditproxyv1.Session {
+	return &auditproxyv1.Session{
 		Id:            item.ID,
 		Username:      item.Username,
 		SourceIp:      item.SourceIP,
@@ -147,8 +147,8 @@ func toProtoSession(item models.Session) *sshproxyv1.Session {
 	}
 }
 
-func toProtoServer(item models.Server) *sshproxyv1.Server {
-	return &sshproxyv1.Server{
+func toProtoServer(item models.Server) *auditproxyv1.Server {
+	return &auditproxyv1.Server{
 		Id:          item.ID,
 		Host:        item.Host,
 		Port:        int32(item.Port),
@@ -165,8 +165,8 @@ func toProtoServer(item models.Server) *sshproxyv1.Server {
 	}
 }
 
-// GetHealth implements sshproxy.v1.SystemService.
-func (s *BridgeServer) GetHealth(ctx context.Context, _ *emptypb.Empty) (*sshproxyv1.SystemHealth, error) {
+// GetHealth implements audit-proxy.v1.SystemService.
+func (s *BridgeServer) GetHealth(ctx context.Context, _ *emptypb.Empty) (*auditproxyv1.SystemHealth, error) {
 	if err := s.requireDataPlane(); err != nil {
 		return nil, err
 	}
@@ -176,7 +176,7 @@ func (s *BridgeServer) GetHealth(ctx context.Context, _ *emptypb.Empty) (*sshpro
 		return nil, status.Errorf(codes.Unavailable, "get data-plane health: %v", err)
 	}
 
-	return &sshproxyv1.SystemHealth{
+	return &auditproxyv1.SystemHealth{
 		Status:        "healthy",
 		DataPlane:     health.Status,
 		UptimeSeconds: int64(time.Since(s.startedAt).Seconds()),
@@ -184,8 +184,8 @@ func (s *BridgeServer) GetHealth(ctx context.Context, _ *emptypb.Empty) (*sshpro
 	}, nil
 }
 
-// ListSessions implements sshproxy.v1.SessionService.
-func (s *BridgeServer) ListSessions(ctx context.Context, req *sshproxyv1.ListSessionsRequest) (*sshproxyv1.ListSessionsResponse, error) {
+// ListSessions implements audit-proxy.v1.SessionService.
+func (s *BridgeServer) ListSessions(ctx context.Context, req *auditproxyv1.ListSessionsRequest) (*auditproxyv1.ListSessionsResponse, error) {
 	if err := s.requireDataPlane(); err != nil {
 		return nil, err
 	}
@@ -199,14 +199,14 @@ func (s *BridgeServer) ListSessions(ctx context.Context, req *sshproxyv1.ListSes
 	filtered := filterSessions(sessions, req.GetStatus(), req.GetUser(), req.GetIp())
 	page, perPage, start, end := paginate(len(filtered), int(req.GetPage()), int(req.GetPerPage()))
 
-	out := make([]*sshproxyv1.Session, 0, end-start)
+	out := make([]*auditproxyv1.Session, 0, end-start)
 	for _, item := range filtered[start:end] {
 		out = append(out, toProtoSession(item))
 	}
 
-	return &sshproxyv1.ListSessionsResponse{
+	return &auditproxyv1.ListSessionsResponse{
 		Sessions: out,
-		Page: &sshproxyv1.PageInfo{
+		Page: &auditproxyv1.PageInfo{
 			Total:   int32(len(filtered)),
 			Page:    int32(page),
 			PerPage: int32(perPage),
@@ -214,8 +214,8 @@ func (s *BridgeServer) ListSessions(ctx context.Context, req *sshproxyv1.ListSes
 	}, nil
 }
 
-// GetSession implements sshproxy.v1.SessionService.
-func (s *BridgeServer) GetSession(ctx context.Context, req *sshproxyv1.ResourceID) (*sshproxyv1.Session, error) {
+// GetSession implements audit-proxy.v1.SessionService.
+func (s *BridgeServer) GetSession(ctx context.Context, req *auditproxyv1.ResourceID) (*auditproxyv1.Session, error) {
 	if err := s.requireDataPlane(); err != nil {
 		return nil, err
 	}
@@ -237,8 +237,8 @@ func (s *BridgeServer) GetSession(ctx context.Context, req *sshproxyv1.ResourceI
 	return nil, status.Error(codes.NotFound, "session not found")
 }
 
-// KillSession implements sshproxy.v1.SessionService.
-func (s *BridgeServer) KillSession(ctx context.Context, req *sshproxyv1.ResourceID) (*sshproxyv1.OperationStatus, error) {
+// KillSession implements audit-proxy.v1.SessionService.
+func (s *BridgeServer) KillSession(ctx context.Context, req *auditproxyv1.ResourceID) (*auditproxyv1.OperationStatus, error) {
 	if err := s.requireDataPlane(); err != nil {
 		return nil, err
 	}
@@ -250,11 +250,11 @@ func (s *BridgeServer) KillSession(ctx context.Context, req *sshproxyv1.Resource
 	if err := s.dp.KillSession(req.GetId()); err != nil {
 		return nil, status.Errorf(codes.Unavailable, "kill session: %v", err)
 	}
-	return &sshproxyv1.OperationStatus{Message: "session " + req.GetId() + " terminated"}, nil
+	return &auditproxyv1.OperationStatus{Message: "session " + req.GetId() + " terminated"}, nil
 }
 
-// ListServers implements sshproxy.v1.ServerService.
-func (s *BridgeServer) ListServers(ctx context.Context, req *sshproxyv1.ListServersRequest) (*sshproxyv1.ListServersResponse, error) {
+// ListServers implements audit-proxy.v1.ServerService.
+func (s *BridgeServer) ListServers(ctx context.Context, req *auditproxyv1.ListServersRequest) (*auditproxyv1.ListServersResponse, error) {
 	if err := s.requireDataPlane(); err != nil {
 		return nil, err
 	}
@@ -266,14 +266,14 @@ func (s *BridgeServer) ListServers(ctx context.Context, req *sshproxyv1.ListServ
 	}
 	page, perPage, start, end := paginate(len(servers), int(req.GetPage()), int(req.GetPerPage()))
 
-	out := make([]*sshproxyv1.Server, 0, end-start)
+	out := make([]*auditproxyv1.Server, 0, end-start)
 	for _, item := range servers[start:end] {
 		out = append(out, toProtoServer(item))
 	}
 
-	return &sshproxyv1.ListServersResponse{
+	return &auditproxyv1.ListServersResponse{
 		Servers: out,
-		Page: &sshproxyv1.PageInfo{
+		Page: &auditproxyv1.PageInfo{
 			Total:   int32(len(servers)),
 			Page:    int32(page),
 			PerPage: int32(perPage),
@@ -281,8 +281,8 @@ func (s *BridgeServer) ListServers(ctx context.Context, req *sshproxyv1.ListServ
 	}, nil
 }
 
-// GetHealthSummary implements sshproxy.v1.ServerService.
-func (s *BridgeServer) GetHealthSummary(ctx context.Context, _ *emptypb.Empty) (*sshproxyv1.ServerHealthSummary, error) {
+// GetHealthSummary implements audit-proxy.v1.ServerService.
+func (s *BridgeServer) GetHealthSummary(ctx context.Context, _ *emptypb.Empty) (*auditproxyv1.ServerHealthSummary, error) {
 	if err := s.requireDataPlane(); err != nil {
 		return nil, err
 	}
@@ -305,7 +305,7 @@ func (s *BridgeServer) GetHealthSummary(ctx context.Context, _ *emptypb.Empty) (
 		}
 	}
 
-	return &sshproxyv1.ServerHealthSummary{
+	return &auditproxyv1.ServerHealthSummary{
 		Total:       int32(len(servers)),
 		Healthy:     healthy,
 		Unhealthy:   unhealthy,
@@ -313,8 +313,8 @@ func (s *BridgeServer) GetHealthSummary(ctx context.Context, _ *emptypb.Empty) (
 	}, nil
 }
 
-// GetConfig implements sshproxy.v1.ConfigService.
-func (s *BridgeServer) GetConfig(ctx context.Context, _ *emptypb.Empty) (*sshproxyv1.ConfigDocument, error) {
+// GetConfig implements audit-proxy.v1.ConfigService.
+func (s *BridgeServer) GetConfig(ctx context.Context, _ *emptypb.Empty) (*auditproxyv1.ConfigDocument, error) {
 	if err := s.requireDataPlane(); err != nil {
 		return nil, err
 	}
@@ -330,11 +330,11 @@ func (s *BridgeServer) GetConfig(ctx context.Context, _ *emptypb.Empty) (*sshpro
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "marshal config: %v", err)
 	}
-	return &sshproxyv1.ConfigDocument{Config: payload}, nil
+	return &auditproxyv1.ConfigDocument{Config: payload}, nil
 }
 
-// ReloadConfig implements sshproxy.v1.ConfigService.
-func (s *BridgeServer) ReloadConfig(ctx context.Context, _ *emptypb.Empty) (*sshproxyv1.OperationStatus, error) {
+// ReloadConfig implements audit-proxy.v1.ConfigService.
+func (s *BridgeServer) ReloadConfig(ctx context.Context, _ *emptypb.Empty) (*auditproxyv1.OperationStatus, error) {
 	if err := s.requireDataPlane(); err != nil {
 		return nil, err
 	}
@@ -343,5 +343,5 @@ func (s *BridgeServer) ReloadConfig(ctx context.Context, _ *emptypb.Empty) (*ssh
 	if err := s.dp.ReloadConfig(); err != nil {
 		return nil, status.Errorf(codes.Unavailable, "reload config: %v", err)
 	}
-	return &sshproxyv1.OperationStatus{Message: "configuration reloaded"}, nil
+	return &auditproxyv1.OperationStatus{Message: "configuration reloaded"}, nil
 }

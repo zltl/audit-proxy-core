@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/authn"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/authn"
+	"github.com/zltl/audit-proxy-core/internal/config"
+	"github.com/zltl/audit-proxy-core/internal/middleware"
+	"github.com/zltl/audit-proxy-core/internal/models"
 	"golang.org/x/crypto/bcrypt"
 )
 

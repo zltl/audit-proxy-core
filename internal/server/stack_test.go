@@ -21,11 +21,11 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/authn"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dp"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/pdpclient"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
+	"github.com/zltl/audit-proxy-core/internal/authn"
+	"github.com/zltl/audit-proxy-core/internal/config"
+	"github.com/zltl/audit-proxy-core/internal/dp"
+	"github.com/zltl/audit-proxy-core/internal/pdpclient"
+	"github.com/zltl/audit-proxy-core/internal/store"
 )
 
 // TestFullStack runs the real thing: a control plane serving the decision point

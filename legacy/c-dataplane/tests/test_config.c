@@ -12,7 +12,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#define TEST_CONFIG_PATH "/tmp/test_ssh_proxy.conf"
+#define TEST_CONFIG_PATH "/tmp/test_audit_proxy.conf"
 #define TEST_CA_KEYS_PATH "/tmp/test_trusted_user_ca_keys.pub"
 #define TEST_MASTER_KEY_PATH "/tmp/test_master_key.hex"
 #define TEST_GEOIP_PATH "/tmp/test_geoip.json"
@@ -186,7 +186,7 @@ static int test_config_create(void) {
         return 0;
     }
     if (strcmp(config->webhook.dead_letter_path,
-               "/tmp/ssh_proxy_audit/webhook-dlq.jsonl") != 0) {
+               "/tmp/audit_proxy_audit/webhook-dlq.jsonl") != 0) {
         config_destroy(config);
         return 0;
     }
@@ -264,8 +264,8 @@ static int test_config_load_admin(void) {
                           "auth_token = hmac:supersecret\n"
                           "token_expiry = 7200\n"
                           "tls_enabled = true\n"
-                          "tls_cert = /etc/ssh-proxy/cert.pem\n"
-                          "tls_key = /etc/ssh-proxy/key.pem\n";
+                          "tls_cert = /etc/audit-proxy/cert.pem\n"
+                          "tls_key = /etc/audit-proxy/key.pem\n";
 
     if (create_test_config(content) != 0)
         return 0;
@@ -276,8 +276,8 @@ static int test_config_load_admin(void) {
 
     if (!config->admin_api_enabled || strcmp(config->admin_auth_token, "hmac:supersecret") != 0 ||
         config->admin_token_expiry_sec != 7200 || !config->admin_tls_enabled ||
-        strcmp(config->admin_tls_cert_path, "/etc/ssh-proxy/cert.pem") != 0 ||
-        strcmp(config->admin_tls_key_path, "/etc/ssh-proxy/key.pem") != 0) {
+        strcmp(config->admin_tls_cert_path, "/etc/audit-proxy/cert.pem") != 0 ||
+        strcmp(config->admin_tls_key_path, "/etc/audit-proxy/key.pem") != 0) {
         config_destroy(config);
         return 0;
     }

@@ -1,5 +1,5 @@
 // Package server wires together the HTTP server, template engine, route
-// registration, and middleware chain for the SSH Proxy control-plane.
+// registration, and middleware chain for the Audit Proxy control-plane.
 package server
 
 import (
@@ -16,27 +16,27 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/api"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cluster"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cmdctrl"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/collab"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/compliance"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dataplane"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dlp"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/grpcapi"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/oidc"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/pdp"
-	samlprovider "github.com/ssh-proxy-core/ssh-proxy-core/internal/saml"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/threat"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/terminal"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/ws"
-	"github.com/ssh-proxy-core/ssh-proxy-core/web"
+	"github.com/zltl/audit-proxy-core/internal/api"
+	"github.com/zltl/audit-proxy-core/internal/cluster"
+	"github.com/zltl/audit-proxy-core/internal/cmdctrl"
+	"github.com/zltl/audit-proxy-core/internal/collab"
+	"github.com/zltl/audit-proxy-core/internal/compliance"
+	"github.com/zltl/audit-proxy-core/internal/config"
+	"github.com/zltl/audit-proxy-core/internal/dataplane"
+	"github.com/zltl/audit-proxy-core/internal/dlp"
+	"github.com/zltl/audit-proxy-core/internal/grpcapi"
+	"github.com/zltl/audit-proxy-core/internal/jit"
+	"github.com/zltl/audit-proxy-core/internal/middleware"
+	"github.com/zltl/audit-proxy-core/internal/oidc"
+	"github.com/zltl/audit-proxy-core/internal/pdp"
+	samlprovider "github.com/zltl/audit-proxy-core/internal/saml"
+	"github.com/zltl/audit-proxy-core/internal/sshca"
+	"github.com/zltl/audit-proxy-core/internal/store"
+	"github.com/zltl/audit-proxy-core/internal/telemetry"
+	"github.com/zltl/audit-proxy-core/internal/threat"
+	"github.com/zltl/audit-proxy-core/internal/terminal"
+	"github.com/zltl/audit-proxy-core/internal/ws"
+	"github.com/zltl/audit-proxy-core/web"
 	"google.golang.org/grpc"
 )
 
@@ -145,7 +145,7 @@ func New(cfg *config.Config) (*Server, error) {
 
 	handler := middleware.Chain(
 		s.mux,
-		telemetry.HTTPMiddleware("ssh-proxy-control-plane"),
+		telemetry.HTTPMiddleware("audit-proxy-control-plane"),
 		middleware.HSTS(cfg.HSTSEnabled, cfg.HSTSIncludeSubdomains, cfg.HSTSPreload),
 		middleware.Recovery,
 		middleware.Logger,
@@ -649,11 +649,14 @@ func (s *Server) routes() error {
 	s.mux.HandleFunc("GET /settings", s.handlePage("pages/settings.html", "Settings", "settings"))
 	s.mux.HandleFunc("GET /terminal", s.handlePage("pages/terminal.html", "Terminal", "terminal"))
 	s.mux.HandleFunc("GET /dp", s.handlePage("pages/dp.html", "Data Plane", "dp"))
+	s.mux.HandleFunc("GET /demo/ascii-stream", s.handlePage("pages/demo_ascii.html", "ASCII Stream Demo", "demo-ascii"))
+	s.mux.HandleFunc("GET /api/v2/demo/ascii-stream.cast", s.handleAsciiDemoCastDownload)
 
 	// WebSocket terminal endpoint.
 	s.mux.Handle("GET /ws/dashboard", s.handleDashboardStream())
 	s.mux.Handle("GET /ws/sessions", s.handleSessionsStream())
 	s.mux.Handle("GET /ws/sessions/{id}/live", s.handleSessionLiveStream())
+	s.mux.Handle("GET /ws/demo/ascii-stream", s.handleAsciiDemoStream())
 	terminalHandler := &ws.TerminalHandler{
 		RecordingDir:            s.config.RecordingDir,
 		RecordingBasePath:       terminalRecordingBasePath,
@@ -685,7 +688,7 @@ func (s *Server) routes() error {
 			CompressRecordings: true,
 		}
 	} else {
-		terminalHandler.ProxyAddr = s.config.SSHProxyAddr
+		terminalHandler.ProxyAddr = s.config.AuditProxyAddr
 	}
 	s.mux.Handle("GET /ws/terminal", terminalHandler)
 	s.mux.HandleFunc("GET /api/v2/terminal/recordings/{id}/download", s.handleTerminalRecordingDownload(terminalHandler))

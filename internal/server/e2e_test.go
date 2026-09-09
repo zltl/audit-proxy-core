@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/config"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/config"
+	"github.com/zltl/audit-proxy-core/internal/middleware"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 type requestLog struct {
@@ -183,7 +183,7 @@ func TestControlPlaneDataPlaneE2E(t *testing.T) {
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/metrics":
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			_, _ = io.WriteString(w, "ssh_proxy_active_sessions 1\n")
+			_, _ = io.WriteString(w, "audit_proxy_active_sessions 1\n")
 		case r.Method == http.MethodGet && r.URL.Path == "/sessions":
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode([]models.Session{
@@ -267,7 +267,7 @@ func TestControlPlaneDataPlaneE2E(t *testing.T) {
 		}
 
 		body := string(mustReadBody(t, resp))
-		if !strings.Contains(body, "ssh_proxy_active_sessions 1") {
+		if !strings.Contains(body, "audit_proxy_active_sessions 1") {
 			t.Fatalf("metrics body = %q, want dataplane metric", body)
 		}
 	})

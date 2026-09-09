@@ -967,7 +967,7 @@ func TestNotifierChannelPayloads(t *testing.T) {
 	if !strings.Contains(pagerDutyReq.body, `"routing_key":"pagerduty-key"`) || !strings.Contains(pagerDutyReq.body, `"severity":"info"`) {
 		t.Fatalf("pagerduty payload = %s", pagerDutyReq.body)
 	}
-	if !strings.Contains(opsgenieReq.body, `"message":"[SSH Proxy] JIT approval requested for prod-db"`) || opsgenieReq.authorization != "GenieKey opsgenie-key" {
+	if !strings.Contains(opsgenieReq.body, `"message":"[Audit Proxy] JIT approval requested for prod-db"`) || opsgenieReq.authorization != "GenieKey opsgenie-key" {
 		t.Fatalf("opsgenie request = body:%s auth:%s", opsgenieReq.body, opsgenieReq.authorization)
 	}
 }
@@ -1023,7 +1023,7 @@ func TestNotifierEmailUsesConfiguredEnvelope(t *testing.T) {
 	if len(gotTo) != 2 || gotTo[0] != "ops@example.com" || gotTo[1] != "security@example.com" {
 		t.Fatalf("to = %#v", gotTo)
 	}
-	if !strings.Contains(gotMsg, "Subject: [SSH Proxy] JIT request approved for prod-db") {
+	if !strings.Contains(gotMsg, "Subject: [Audit Proxy] JIT request approved for prod-db") {
 		t.Fatalf("email subject/message = %s", gotMsg)
 	}
 	if !strings.Contains(gotMsg, "Actor: admin") {
@@ -1084,7 +1084,7 @@ func TestNotifierMessagePayloads(t *testing.T) {
 		pagerDutyEnqueueURL = originalPagerDutyURL
 	}()
 
-	if err := n.NotifyMessage(context.Background(), "[SSH Proxy] Threat response", "Blocked 203.0.113.7 and terminated sessions."); err != nil {
+	if err := n.NotifyMessage(context.Background(), "[Audit Proxy] Threat response", "Blocked 203.0.113.7 and terminated sessions."); err != nil {
 		t.Fatalf("NotifyMessage() error = %v", err)
 	}
 
@@ -1103,7 +1103,7 @@ func TestNotifierMessagePayloads(t *testing.T) {
 	if !strings.Contains(pagerDutyReq.body, `"routing_key":"pagerduty-key"`) || !strings.Contains(pagerDutyReq.body, `"severity":"warning"`) {
 		t.Fatalf("pagerduty payload = %s", pagerDutyReq.body)
 	}
-	if !strings.Contains(opsgenieReq.body, `"message":"[SSH Proxy] Threat response"`) || opsgenieReq.authorization != "GenieKey opsgenie-key" {
+	if !strings.Contains(opsgenieReq.body, `"message":"[Audit Proxy] Threat response"`) || opsgenieReq.authorization != "GenieKey opsgenie-key" {
 		t.Fatalf("opsgenie request = body:%s auth:%s", opsgenieReq.body, opsgenieReq.authorization)
 	}
 }
@@ -1124,11 +1124,11 @@ func TestNotifierMessageEmailUsesProvidedSubject(t *testing.T) {
 		return nil
 	}
 
-	if err := n.NotifyMessage(context.Background(), "[SSH Proxy] Threat response", "Blocked 203.0.113.7 and terminated sessions."); err != nil {
+	if err := n.NotifyMessage(context.Background(), "[Audit Proxy] Threat response", "Blocked 203.0.113.7 and terminated sessions."); err != nil {
 		t.Fatalf("NotifyMessage() error = %v", err)
 	}
 
-	if !strings.Contains(gotMsg, "Subject: [SSH Proxy] Threat response") {
+	if !strings.Contains(gotMsg, "Subject: [Audit Proxy] Threat response") {
 		t.Fatalf("email subject/message = %s", gotMsg)
 	}
 	if !strings.Contains(gotMsg, "Blocked 203.0.113.7 and terminated sessions.") {
@@ -1196,11 +1196,11 @@ func TestNotifierCustomMessageTemplates(t *testing.T) {
 		return nil
 	}
 
-	if err := n.NotifyMessage(context.Background(), "[SSH Proxy] Threat response", "Blocked 203.0.113.7 and terminated sessions."); err != nil {
+	if err := n.NotifyMessage(context.Background(), "[Audit Proxy] Threat response", "Blocked 203.0.113.7 and terminated sessions."); err != nil {
 		t.Fatalf("NotifyMessage() error = %v", err)
 	}
 
-	if !strings.Contains(gotMsg, "Subject: MSG [SSH Proxy] Threat response") {
+	if !strings.Contains(gotMsg, "Subject: MSG [Audit Proxy] Threat response") {
 		t.Fatalf("custom message subject/message = %s", gotMsg)
 	}
 	if !strings.Contains(gotMsg, "BODY Blocked 203.0.113.7 and terminated sessions.") {

@@ -1,14 +1,14 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: sshproxyclusters.proxy.sshproxy.io
+  name: auditproxyclusters.proxy.auditproxy.io
 spec:
-  group: proxy.sshproxy.io
+  group: proxy.auditproxy.io
   scope: Namespaced
   names:
-    plural: sshproxyclusters
-    singular: sshproxycluster
-    kind: SSHProxyCluster
+    plural: auditproxyclusters
+    singular: auditproxycluster
+    kind: AuditProxyCluster
     shortNames:
       - spc
   versions:

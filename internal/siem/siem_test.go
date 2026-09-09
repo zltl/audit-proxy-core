@@ -16,7 +16,7 @@ import (
 func testEvent(severity string) Event {
 	return Event{
 		Timestamp: time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC),
-		Source:    "ssh-proxy",
+		Source:    "audit-proxy",
 		EventType: "auth.login",
 		Severity:  severity,
 		Data: map[string]interface{}{
@@ -40,8 +40,8 @@ func TestNewForwarder_Defaults(t *testing.T) {
 	if fwd.config.FlushInterval != 5*time.Second {
 		t.Errorf("flush interval = %v, want 5s", fwd.config.FlushInterval)
 	}
-	if fwd.config.Source != "ssh-proxy" {
-		t.Errorf("source = %q, want ssh-proxy", fwd.config.Source)
+	if fwd.config.Source != "audit-proxy" {
+		t.Errorf("source = %q, want audit-proxy", fwd.config.Source)
 	}
 }
 
@@ -137,7 +137,7 @@ func TestWebhookFormat(t *testing.T) {
 	if len(payload.Events) != 1 {
 		t.Errorf("events = %d, want 1", len(payload.Events))
 	}
-	if payload.Source != "ssh-proxy" {
+	if payload.Source != "audit-proxy" {
 		t.Errorf("source = %q", payload.Source)
 	}
 }
@@ -161,15 +161,15 @@ func TestSplunkHECFormat(t *testing.T) {
 		Endpoint: srv.URL,
 		Token:    "hec-token",
 		Index:    "main",
-		Source:   "ssh-proxy-test",
+		Source:   "audit-proxy-test",
 	})
 
 	fwd.Send(testEvent("error"))
 	fwd.Flush()
 
-	// body should contain "sourcetype":"ssh_proxy" and "index":"main"
+	// body should contain "sourcetype":"audit_proxy" and "index":"main"
 	s := string(body)
-	if !strings.Contains(s, `"sourcetype":"ssh_proxy"`) {
+	if !strings.Contains(s, `"sourcetype":"audit_proxy"`) {
 		t.Errorf("missing sourcetype in splunk payload: %s", s)
 	}
 	if !strings.Contains(s, `"index":"main"`) {
@@ -184,7 +184,7 @@ func TestSplunkHECFormatFunction(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(data)
-	if !strings.Contains(s, `"sourcetype":"ssh_proxy"`) {
+	if !strings.Contains(s, `"sourcetype":"audit_proxy"`) {
 		t.Error("missing sourcetype")
 	}
 	if !strings.Contains(s, `"index":"test-index"`) {
@@ -198,7 +198,7 @@ func TestDatadogFormat(t *testing.T) {
 		if r.Header.Get("DD-API-KEY") != "dd-api-key" {
 			t.Errorf("DD-API-KEY = %q", r.Header.Get("DD-API-KEY"))
 		}
-		if r.Header.Get("DD-Source") != "ssh-proxy-test" {
+		if r.Header.Get("DD-Source") != "audit-proxy-test" {
 			t.Errorf("DD-Source = %q", r.Header.Get("DD-Source"))
 		}
 		body, _ = io.ReadAll(r.Body)
@@ -210,7 +210,7 @@ func TestDatadogFormat(t *testing.T) {
 		Type:     SIEMDatadog,
 		Endpoint: srv.URL,
 		Token:    "dd-api-key",
-		Source:   "ssh-proxy-test",
+		Source:   "audit-proxy-test",
 	})
 
 	fwd.Send(testEvent("warning"))
@@ -226,13 +226,13 @@ func TestDatadogFormat(t *testing.T) {
 	if payload[0]["message"] != "auth.login" {
 		t.Fatalf("datadog message = %v", payload[0]["message"])
 	}
-	if payload[0]["service"] != "ssh-proxy-test" {
+	if payload[0]["service"] != "audit-proxy-test" {
 		t.Fatalf("datadog service = %v", payload[0]["service"])
 	}
 }
 
 func TestDatadogFormatFunction(t *testing.T) {
-	data, err := FormatDatadogLogs([]Event{testEvent("error")}, "ssh-proxy-test")
+	data, err := FormatDatadogLogs([]Event{testEvent("error")}, "audit-proxy-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,10 +295,10 @@ func TestElasticBulkFormatFunction(t *testing.T) {
 func TestSumoFormat(t *testing.T) {
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Sumo-Category") != "ssh-proxy-test" {
+		if r.Header.Get("X-Sumo-Category") != "audit-proxy-test" {
 			t.Errorf("X-Sumo-Category = %q", r.Header.Get("X-Sumo-Category"))
 		}
-		if r.Header.Get("X-Sumo-Host") != "ssh-proxy" {
+		if r.Header.Get("X-Sumo-Host") != "audit-proxy" {
 			t.Errorf("X-Sumo-Host = %q", r.Header.Get("X-Sumo-Host"))
 		}
 		body, _ = io.ReadAll(r.Body)
@@ -309,7 +309,7 @@ func TestSumoFormat(t *testing.T) {
 	fwd, _ := NewForwarder(&SIEMConfig{
 		Type:     SIEMSumo,
 		Endpoint: srv.URL,
-		Source:   "ssh-proxy-test",
+		Source:   "audit-proxy-test",
 	})
 
 	fwd.Send(testEvent("info"))
@@ -442,7 +442,7 @@ func TestCEFFormat(t *testing.T) {
 		t.Fatalf("msgs = %d, want 1", len(msgs))
 	}
 	msg := msgs[0]
-	if !strings.Contains(msg, "CEF:0|SSH Proxy|Core|2.0.0|auth.login|auth.login|3|") {
+	if !strings.Contains(msg, "CEF:0|Audit Proxy|Core|2.0.0|auth.login|auth.login|3|") {
 		t.Fatalf("CEF payload = %q", msg)
 	}
 	if !strings.Contains(msg, "user=admin") || !strings.Contains(msg, "ip=10.0.0.1") {
@@ -456,7 +456,7 @@ func TestLEEFFormat(t *testing.T) {
 		t.Fatalf("msgs = %d, want 1", len(msgs))
 	}
 	msg := msgs[0]
-	if !strings.Contains(msg, "LEEF:2.0|SSH Proxy|Core|2.0.0|auth.login") {
+	if !strings.Contains(msg, "LEEF:2.0|Audit Proxy|Core|2.0.0|auth.login") {
 		t.Fatalf("LEEF payload = %q", msg)
 	}
 	if !strings.Contains(msg, "user=admin") || !strings.Contains(msg, "ip=10.0.0.1") {
@@ -564,7 +564,7 @@ func TestQRadarUsesLEEF(t *testing.T) {
 		t.Fatal("timeout waiting for qradar data")
 	}
 
-	if !strings.Contains(string(received), "LEEF:2.0|SSH Proxy|Core|2.0.0|auth.login") {
+	if !strings.Contains(string(received), "LEEF:2.0|Audit Proxy|Core|2.0.0|auth.login") {
 		t.Fatalf("qradar payload = %q", string(received))
 	}
 }
@@ -720,7 +720,7 @@ func TestEventTimestampDefault(t *testing.T) {
 	if stored.Timestamp.IsZero() {
 		t.Error("timestamp should be auto-set")
 	}
-	if stored.Source != "ssh-proxy" {
-		t.Errorf("source = %q, want ssh-proxy", stored.Source)
+	if stored.Source != "audit-proxy" {
+		t.Errorf("source = %q, want audit-proxy", stored.Source)
 	}
 }

@@ -1,6 +1,6 @@
 /**
  * @file password_policy.c
- * @brief SSH Proxy Core - Password Policy Implementation
+ * @brief Audit Proxy Core - Password Policy Implementation
  *
  * Validates passwords against configurable complexity requirements.
  */

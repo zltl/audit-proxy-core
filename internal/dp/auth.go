@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
 )
 
 // errAuthFailed is what every rejection returns. SSH surfaces the error text to
@@ -61,7 +61,7 @@ func (t *authStateTable) release(sessionID []byte) {
 }
 
 // clientInfo describes the connecting peer for the decision point.
-func clientInfo(conn ssh.ConnMetadata, nodeID string) *sshproxyv1.ClientInfo {
+func clientInfo(conn ssh.ConnMetadata, nodeID string) *auditproxyv1.ClientInfo {
 	host, portText, err := net.SplitHostPort(conn.RemoteAddr().String())
 	if err != nil {
 		host = conn.RemoteAddr().String()
@@ -70,7 +70,7 @@ func clientInfo(conn ssh.ConnMetadata, nodeID string) *sshproxyv1.ClientInfo {
 	if portText != "" {
 		port = atoi(portText)
 	}
-	return &sshproxyv1.ClientInfo{
+	return &auditproxyv1.ClientInfo{
 		SourceIp:      host,
 		SourcePort:    int32(port),
 		ClientVersion: string(conn.ClientVersion()),
@@ -130,10 +130,10 @@ func (s *Server) passwordCallback(conn ssh.ConnMetadata, password []byte) (*ssh.
 	ctx, cancel := context.WithTimeout(context.Background(), s.config.AuthTimeout)
 	defer cancel()
 
-	resp, err := s.pdp.Authenticate(ctx, &sshproxyv1.AuthenticateRequest{
+	resp, err := s.pdp.Authenticate(ctx, &auditproxyv1.AuthenticateRequest{
 		Client:   clientInfo(conn, s.config.NodeID),
 		Username: principalOf(conn),
-		Method:   sshproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
+		Method:   auditproxyv1.AuthMethod_AUTH_METHOD_PASSWORD,
 		Password: string(password),
 	})
 	if err != nil {
@@ -162,14 +162,14 @@ func (s *Server) verifiedPublicKeyCallback(conn ssh.ConnMetadata, key ssh.Public
 	ctx, cancel := context.WithTimeout(context.Background(), s.config.AuthTimeout)
 	defer cancel()
 
-	method := sshproxyv1.AuthMethod_AUTH_METHOD_PUBLIC_KEY
+	method := auditproxyv1.AuthMethod_AUTH_METHOD_PUBLIC_KEY
 	fingerprint := ssh.FingerprintSHA256(key)
 	if cert, ok := key.(*ssh.Certificate); ok {
-		method = sshproxyv1.AuthMethod_AUTH_METHOD_CERTIFICATE
+		method = auditproxyv1.AuthMethod_AUTH_METHOD_CERTIFICATE
 		fingerprint = ssh.FingerprintSHA256(cert.Key)
 	}
 
-	resp, err := s.pdp.Authenticate(ctx, &sshproxyv1.AuthenticateRequest{
+	resp, err := s.pdp.Authenticate(ctx, &auditproxyv1.AuthenticateRequest{
 		Client:               clientInfo(conn, s.config.NodeID),
 		Username:             principalOf(conn),
 		Method:               method,
@@ -207,10 +207,10 @@ func (s *Server) keyboardInteractiveCallback(conn ssh.ConnMetadata, challenge ss
 		if err != nil {
 			return nil, errAuthFailed
 		}
-		resp, err := s.pdp.Authenticate(ctx, &sshproxyv1.AuthenticateRequest{
+		resp, err := s.pdp.Authenticate(ctx, &auditproxyv1.AuthenticateRequest{
 			Client:     clientInfo(conn, s.config.NodeID),
 			Username:   principalOf(conn),
-			Method:     sshproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE,
+			Method:     auditproxyv1.AuthMethod_AUTH_METHOD_KEYBOARD_INTERACTIVE,
 			StateToken: token,
 			Responses:  answers,
 		})
@@ -218,7 +218,7 @@ func (s *Server) keyboardInteractiveCallback(conn ssh.ConnMetadata, challenge ss
 			log.Printf("dp: second factor for %s could not be checked: %v", principalOf(conn), err)
 			return nil, errAuthFailed
 		}
-		if resp.GetResult() == sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
+		if resp.GetResult() == auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS {
 			return s.applyAuthResult(conn, resp)
 		}
 		// The decision point re-issues state with the attempt counted; when it
@@ -236,11 +236,11 @@ func (s *Server) keyboardInteractiveCallback(conn ssh.ConnMetadata, challenge ss
 }
 
 // applyAuthResult turns a decision-point answer into an SSH outcome.
-func (s *Server) applyAuthResult(conn ssh.ConnMetadata, resp *sshproxyv1.AuthenticateResponse) (*ssh.Permissions, error) {
+func (s *Server) applyAuthResult(conn ssh.ConnMetadata, resp *auditproxyv1.AuthenticateResponse) (*ssh.Permissions, error) {
 	state := s.authState.get(conn.SessionID())
 
 	switch resp.GetResult() {
-	case sshproxyv1.AuthResult_AUTH_RESULT_SUCCESS:
+	case auditproxyv1.AuthResult_AUTH_RESULT_SUCCESS:
 		state.mu.Lock()
 		state.username = resp.GetUsername()
 		state.roles = resp.GetRoles()
@@ -253,7 +253,7 @@ func (s *Server) applyAuthResult(conn ssh.ConnMetadata, resp *sshproxyv1.Authent
 			},
 		}, nil
 
-	case sshproxyv1.AuthResult_AUTH_RESULT_PARTIAL:
+	case auditproxyv1.AuthResult_AUTH_RESULT_PARTIAL:
 		state.mu.Lock()
 		state.stateToken = resp.GetStateToken()
 		state.username = resp.GetUsername()

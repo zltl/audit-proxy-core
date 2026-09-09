@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 // helper: create a temp dir with a minimal config file
@@ -63,7 +63,7 @@ rules = 10.0.0.0/8:allow
 
 [logging]
 level = info
-audit_dir = /var/log/ssh-proxy
+audit_dir = /var/log/audit-proxy
 
 [webhook]
 enabled = true

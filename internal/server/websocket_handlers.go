@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dp"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/ws"
+	"github.com/zltl/audit-proxy-core/internal/dp"
+	"github.com/zltl/audit-proxy-core/internal/ws"
 )
 
 const (

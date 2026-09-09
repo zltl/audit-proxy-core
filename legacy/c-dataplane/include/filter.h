@@ -1,6 +1,6 @@
 /**
  * @file filter.h
- * @brief SSH Proxy Core - Filter Chain Architecture
+ * @brief Audit Proxy Core - Filter Chain Architecture
  *
  * Implements an Envoy-style filter chain for processing SSH connections.
  * Filters can intercept authentication, routing, and data flow.

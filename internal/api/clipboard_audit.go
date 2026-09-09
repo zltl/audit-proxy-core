@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 const terminalClipboardAuditFile = "terminal_clipboard.jsonl"

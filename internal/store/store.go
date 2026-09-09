@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dbx"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/secrets"
+	"github.com/zltl/audit-proxy-core/internal/dbx"
+	"github.com/zltl/audit-proxy-core/internal/secrets"
 )
 
 // Sentinel errors callers are expected to branch on.

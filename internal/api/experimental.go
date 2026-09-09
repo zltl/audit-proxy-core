@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/features"
+	"github.com/zltl/audit-proxy-core/internal/features"
 )
 
 // featureGate tracks which experimental subsystems the operator opted into.

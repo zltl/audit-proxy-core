@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/auditchain"
+	"github.com/zltl/audit-proxy-core/internal/auditchain"
 )
 
 // handleVerifyAuditChain checks the tamper-evidence chain over stored records.

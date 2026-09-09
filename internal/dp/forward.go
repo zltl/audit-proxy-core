@@ -8,7 +8,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
 )
 
 // directTCPIPPayload is the channel-open payload for client-initiated
@@ -49,8 +49,8 @@ func (c *connection) handleDirectTCPIP(ctx context.Context, newChannel ssh.NewCh
 		return
 	}
 
-	if err := c.authorizeChannel(ctx, &sshproxyv1.AuthorizeChannelRequest{
-		ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_DIRECT_TCPIP,
+	if err := c.authorizeChannel(ctx, &auditproxyv1.AuthorizeChannelRequest{
+		ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_DIRECT_TCPIP,
 		DestHost:    payload.DestHost,
 		DestPort:    int32(payload.DestPort),
 	}); err != nil {
@@ -101,9 +101,9 @@ func (c *connection) handleRemoteForwardRequest(ctx context.Context, req *ssh.Re
 		return
 	}
 
-	if err := c.authorizeChannel(ctx, &sshproxyv1.AuthorizeChannelRequest{
-		ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_FORWARDED_TCPIP,
-		RequestType: sshproxyv1.ChannelRequestType_CHANNEL_REQUEST_TCPIP_FORWARD,
+	if err := c.authorizeChannel(ctx, &auditproxyv1.AuthorizeChannelRequest{
+		ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_FORWARDED_TCPIP,
+		RequestType: auditproxyv1.ChannelRequestType_CHANNEL_REQUEST_TCPIP_FORWARD,
 		DestHost:    payload.BindHost,
 		DestPort:    int32(payload.BindPort),
 	}); err != nil {
@@ -124,17 +124,17 @@ func (c *connection) handleRemoteForwardRequest(ctx context.Context, req *ssh.Re
 // Without this, `ssh -R` would appear to succeed and then never deliver
 // anything, because the target's inbound channel would have nowhere to go.
 func (c *connection) serveUpstreamChannels(ctx context.Context) {
-	kinds := map[string]sshproxyv1.ChannelType{
-		"forwarded-tcpip":        sshproxyv1.ChannelType_CHANNEL_TYPE_FORWARDED_TCPIP,
-		"x11":                    sshproxyv1.ChannelType_CHANNEL_TYPE_X11,
-		"auth-agent@openssh.com": sshproxyv1.ChannelType_CHANNEL_TYPE_AGENT,
+	kinds := map[string]auditproxyv1.ChannelType{
+		"forwarded-tcpip":        auditproxyv1.ChannelType_CHANNEL_TYPE_FORWARDED_TCPIP,
+		"x11":                    auditproxyv1.ChannelType_CHANNEL_TYPE_X11,
+		"auth-agent@openssh.com": auditproxyv1.ChannelType_CHANNEL_TYPE_AGENT,
 	}
 	for name, kind := range kinds {
 		channels := c.upstream.HandleChannelOpen(name)
 		if channels == nil {
 			continue
 		}
-		go func(name string, kind sshproxyv1.ChannelType, channels <-chan ssh.NewChannel) {
+		go func(name string, kind auditproxyv1.ChannelType, channels <-chan ssh.NewChannel) {
 			for newChannel := range channels {
 				if name == "forwarded-tcpip" {
 					go c.handleForwardedTCPIP(ctx, newChannel)
@@ -152,8 +152,8 @@ func (c *connection) handleForwardedTCPIP(ctx context.Context, newChannel ssh.Ne
 		_ = newChannel.Reject(ssh.ConnectionFailed, "malformed forwarded-tcpip request")
 		return
 	}
-	if err := c.authorizeChannel(ctx, &sshproxyv1.AuthorizeChannelRequest{
-		ChannelType: sshproxyv1.ChannelType_CHANNEL_TYPE_FORWARDED_TCPIP,
+	if err := c.authorizeChannel(ctx, &auditproxyv1.AuthorizeChannelRequest{
+		ChannelType: auditproxyv1.ChannelType_CHANNEL_TYPE_FORWARDED_TCPIP,
 		DestHost:    payload.DestHost,
 		DestPort:    int32(payload.DestPort),
 	}); err != nil {
@@ -163,8 +163,8 @@ func (c *connection) handleForwardedTCPIP(ctx context.Context, newChannel ssh.Ne
 	c.bridgeUpstreamChannel(newChannel, "forwarded-tcpip")
 }
 
-func (c *connection) handleUpstreamOriginated(ctx context.Context, newChannel ssh.NewChannel, kind sshproxyv1.ChannelType) {
-	if err := c.authorizeChannel(ctx, &sshproxyv1.AuthorizeChannelRequest{
+func (c *connection) handleUpstreamOriginated(ctx context.Context, newChannel ssh.NewChannel, kind auditproxyv1.ChannelType) {
+	if err := c.authorizeChannel(ctx, &auditproxyv1.AuthorizeChannelRequest{
 		ChannelType: kind,
 	}); err != nil {
 		_ = newChannel.Reject(ssh.Prohibited, err.Error())

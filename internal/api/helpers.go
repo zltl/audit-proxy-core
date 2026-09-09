@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/middleware"
+	"github.com/zltl/audit-proxy-core/internal/middleware"
 )
 
 // APIResponse is the standard envelope for all API responses.

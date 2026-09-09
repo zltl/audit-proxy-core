@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/dlp"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/terminal"
+	"github.com/zltl/audit-proxy-core/internal/dlp"
+	"github.com/zltl/audit-proxy-core/internal/terminal"
 )
 
 // TerminalHandler handles WebSocket connections for the web terminal feature.

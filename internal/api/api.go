@@ -9,13 +9,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/cluster"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/collab"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/jit"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/threat"
+	"github.com/zltl/audit-proxy-core/internal/cluster"
+	"github.com/zltl/audit-proxy-core/internal/collab"
+	"github.com/zltl/audit-proxy-core/internal/jit"
+	"github.com/zltl/audit-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/sshca"
+	"github.com/zltl/audit-proxy-core/internal/store"
+	"github.com/zltl/audit-proxy-core/internal/threat"
 )
 
 // Config holds API-specific configuration.

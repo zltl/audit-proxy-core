@@ -1,6 +1,6 @@
 /**
  * @file rate_limit_filter.h
- * @brief SSH Proxy Core - Rate Limiting Filter
+ * @brief Audit Proxy Core - Rate Limiting Filter
  *
  * Implements connection rate limiting and concurrency control.
  */

@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
 )
 
 // upstreamDialer connects to a target on behalf of a session.
@@ -52,7 +52,7 @@ func (d *upstreamDialer) dial(ctx context.Context, target upstreamTarget) (*ssh.
 		return nil, err
 	}
 
-	credential, err := d.proxy.pdp.IssueUpstreamCredential(ctx, &sshproxyv1.IssueUpstreamCredentialRequest{
+	credential, err := d.proxy.pdp.IssueUpstreamCredential(ctx, &auditproxyv1.IssueUpstreamCredentialRequest{
 		SessionId:     target.SessionID,
 		TargetId:      target.TargetID,
 		UpstreamLogin: target.Login,
@@ -97,7 +97,7 @@ func (d *upstreamDialer) dial(ctx context.Context, target upstreamTarget) (*ssh.
 // hostKeyCallback asks the decision point about the key the upstream presented.
 func (d *upstreamDialer) hostKeyCallback(ctx context.Context, target upstreamTarget) ssh.HostKeyCallback {
 	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
-		req := &sshproxyv1.ResolveHostKeyRequest{
+		req := &auditproxyv1.ResolveHostKeyRequest{
 			TargetId:    target.TargetID,
 			TargetHost:  target.Host,
 			TargetPort:  int32(target.Port),
@@ -127,19 +127,19 @@ func (d *upstreamDialer) hostKeyCallback(ctx context.Context, target upstreamTar
 }
 
 // buildAuthMethods turns an issued credential into SSH authentication methods.
-func buildAuthMethods(cred *sshproxyv1.IssueUpstreamCredentialResponse, ephemeral ssh.Signer) ([]ssh.AuthMethod, error) {
+func buildAuthMethods(cred *auditproxyv1.IssueUpstreamCredentialResponse, ephemeral ssh.Signer) ([]ssh.AuthMethod, error) {
 	switch cred.GetKind() {
-	case sshproxyv1.CredentialKind_CREDENTIAL_KIND_PASSWORD:
+	case auditproxyv1.CredentialKind_CREDENTIAL_KIND_PASSWORD:
 		return []ssh.AuthMethod{ssh.Password(cred.GetPassword())}, nil
 
-	case sshproxyv1.CredentialKind_CREDENTIAL_KIND_PRIVATE_KEY:
+	case auditproxyv1.CredentialKind_CREDENTIAL_KIND_PRIVATE_KEY:
 		signer, err := ssh.ParsePrivateKey([]byte(cred.GetPrivateKey()))
 		if err != nil {
 			return nil, fmt.Errorf("dp: parse upstream private key: %w", err)
 		}
 		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, nil
 
-	case sshproxyv1.CredentialKind_CREDENTIAL_KIND_CERTIFICATE:
+	case auditproxyv1.CredentialKind_CREDENTIAL_KIND_CERTIFICATE:
 		parsed, _, _, _, err := ssh.ParseAuthorizedKey([]byte(cred.GetCertificate()))
 		if err != nil {
 			return nil, fmt.Errorf("dp: parse issued certificate: %w", err)
@@ -154,7 +154,7 @@ func buildAuthMethods(cred *sshproxyv1.IssueUpstreamCredentialResponse, ephemera
 		}
 		return []ssh.AuthMethod{ssh.PublicKeys(certSigner)}, nil
 
-	case sshproxyv1.CredentialKind_CREDENTIAL_KIND_AGENT:
+	case auditproxyv1.CredentialKind_CREDENTIAL_KIND_AGENT:
 		return nil, fmt.Errorf("dp: agent-based upstream authentication requires agent forwarding, which this session does not have")
 
 	default:

@@ -14,11 +14,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /build/operator ./cmd/
 FROM alpine:3.19
 
 RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -S sshproxy \
-    && adduser -S -G sshproxy -H -D -s /sbin/nologin sshproxy
+    && addgroup -S audit-proxy \
+    && adduser -S -G audit-proxy -H -D -s /sbin/nologin audit-proxy
 
 COPY --from=builder /build/operator /usr/local/bin/operator
 
-USER sshproxy
+USER audit-proxy
 
 ENTRYPOINT ["operator"]

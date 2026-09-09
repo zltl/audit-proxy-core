@@ -19,7 +19,7 @@ import (
 	crewsaml "github.com/crewjam/saml"
 	"github.com/crewjam/saml/samlsp"
 	dsig "github.com/russellhaering/goxmldsig"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/oidc"
+	"github.com/zltl/audit-proxy-core/internal/oidc"
 )
 
 const (

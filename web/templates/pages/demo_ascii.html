@@ -1,0 +1,235 @@
+{{template "base" .}}
+
+{{define "title"}}ASCII Stream Demo{{end}}
+
+{{define "page-title"}}ASCII Stream Demo{{end}}
+
+{{define "content"}}
+<style>
+.ascii-demo-layout {
+    display: grid;
+    gap: 24px;
+}
+.ascii-demo-lead {
+    color: var(--color-text-secondary);
+    max-width: 60rem;
+    line-height: 1.5;
+}
+.ascii-demo-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin: 12px 0 16px;
+}
+.ascii-demo-terminal {
+    background: #0b1220;
+    color: #d7e0ea;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.25;
+    padding: 16px;
+    border-radius: var(--radius-md);
+    min-height: 420px;
+    max-height: 70vh;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    border: 1px solid rgba(255,255,255,0.06);
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.35);
+}
+.ascii-demo-player {
+    background: #0b1220;
+    border-radius: var(--radius-md);
+    padding: 8px;
+    min-height: 280px;
+}
+.ascii-demo-status {
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
+}
+.ascii-demo-section-title {
+    margin: 0 0 8px;
+    font-size: 1rem;
+}
+</style>
+
+<div class="ascii-demo-layout">
+    <div>
+        <p class="ascii-demo-lead">
+            Storyboarded ASCII “video stream” in the same asciicast v2 format as real session recordings.
+            Live drip uses the <code>session.live.chunk</code> protocol; playback is the sealed cast.
+        </p>
+        <div class="ascii-demo-actions">
+            <button class="btn btn-primary btn-sm" id="ascii-demo-live-btn" type="button">▶ Start live stream</button>
+            <button class="btn btn-secondary btn-sm" id="ascii-demo-stop-btn" type="button" disabled>⏹ Stop</button>
+            <label class="ascii-demo-status">
+                Speed
+                <select id="ascii-demo-speed" class="form-control" style="display:inline-block;width:auto;margin-left:6px;">
+                    <option value="1">1×</option>
+                    <option value="2" selected>2×</option>
+                    <option value="4">4×</option>
+                    <option value="8">8×</option>
+                </select>
+            </label>
+            <a class="btn btn-ghost btn-sm" href="/api/v2/demo/ascii-stream.cast">⬇ Download .cast</a>
+            <span class="ascii-demo-status" id="ascii-demo-live-status">Idle</span>
+        </div>
+    </div>
+
+    <section>
+        <h2 class="ascii-demo-section-title">Live Stream</h2>
+        <pre id="ascii-demo-live-output" class="ascii-demo-terminal" aria-live="polite">Press “Start live stream” to drip the storyboard over WebSocket…</pre>
+    </section>
+
+    <section>
+        <h2 class="ascii-demo-section-title">Recording Playback</h2>
+        <div id="ascii-demo-player" class="ascii-demo-player"></div>
+        <div class="ascii-demo-status" id="ascii-demo-player-status" style="margin-top:8px;">Loading embedded playback…</div>
+    </section>
+</div>
+
+<script>
+(function() {
+    var liveSocket = null;
+    var liveEnabled = false;
+    var asciinemaAssetsPromise = null;
+    var liveBtn = document.getElementById('ascii-demo-live-btn');
+    var stopBtn = document.getElementById('ascii-demo-stop-btn');
+    var statusEl = document.getElementById('ascii-demo-live-status');
+    var output = document.getElementById('ascii-demo-live-output');
+    var speedEl = document.getElementById('ascii-demo-speed');
+
+    function setStatus(text) {
+        statusEl.textContent = text;
+    }
+
+    function closeLive() {
+        liveEnabled = false;
+        if (liveSocket && typeof liveSocket.close === 'function') {
+            liveSocket.close();
+        }
+        liveSocket = null;
+        liveBtn.disabled = false;
+        stopBtn.disabled = true;
+    }
+
+    function appendChunk(chunk) {
+        if (output.dataset.placeholder === 'true') {
+            output.textContent = '';
+            output.dataset.placeholder = 'false';
+        }
+        output.textContent += chunk;
+        output.scrollTop = output.scrollHeight;
+    }
+
+    function startLive() {
+        closeLive();
+        output.textContent = '';
+        output.dataset.placeholder = 'false';
+        liveEnabled = true;
+        liveBtn.disabled = true;
+        stopBtn.disabled = false;
+        setStatus('Connecting…');
+
+        var speed = encodeURIComponent(speedEl.value || '2');
+        liveSocket = App.ws('/ws/demo/ascii-stream?speed=' + speed, {
+            onMessage: function(message) {
+                if (!liveEnabled || !message) {
+                    return;
+                }
+                if (message.type === 'session.live.chunk' && message.data && message.data.chunk) {
+                    appendChunk(message.data.chunk);
+                    setStatus('Streaming…');
+                    return;
+                }
+                if (message.type === 'session.live.status' && message.data && message.data.state) {
+                    setStatus('Ended (' + message.data.state + ')');
+                    closeLive();
+                    return;
+                }
+                if (message.type === 'error') {
+                    setStatus('Error: ' + (message.error || 'live stream failed'));
+                    appendChunk('\n\n[error] ' + (message.error || 'live stream failed') + '\n');
+                    closeLive();
+                }
+            },
+            onClose: function() {
+                if (liveEnabled) {
+                    setStatus('Disconnected');
+                    closeLive();
+                }
+            },
+            maxReconnect: 0
+        });
+    }
+
+    function ensureStylesheet(id, href) {
+        if (document.getElementById(id)) {
+            return;
+        }
+        var link = document.createElement('link');
+        link.id = id;
+        link.rel = 'stylesheet';
+        link.href = href;
+        document.head.appendChild(link);
+    }
+
+    function ensureAsciinemaPlayer() {
+        if (window.AsciinemaPlayer) {
+            return Promise.resolve(window.AsciinemaPlayer);
+        }
+        if (asciinemaAssetsPromise) {
+            return asciinemaAssetsPromise;
+        }
+        ensureStylesheet(
+            'asciinema-player-css',
+            'https://unpkg.com/asciinema-player@3.0.1/dist/bundle/asciinema-player.css'
+        );
+        asciinemaAssetsPromise = new Promise(function(resolve, reject) {
+            var script = document.createElement('script');
+            script.id = 'asciinema-player-js';
+            script.src = 'https://unpkg.com/asciinema-player@3.0.1/dist/bundle/asciinema-player.min.js';
+            script.onload = function() {
+                if (window.AsciinemaPlayer) {
+                    resolve(window.AsciinemaPlayer);
+                } else {
+                    reject(new Error('player runtime unavailable'));
+                }
+            };
+            script.onerror = function() {
+                reject(new Error('failed to load asciinema-player assets'));
+            };
+            document.head.appendChild(script);
+        });
+        return asciinemaAssetsPromise;
+    }
+
+    function loadPlayback() {
+        var container = document.getElementById('ascii-demo-player');
+        var status = document.getElementById('ascii-demo-player-status');
+        ensureAsciinemaPlayer().then(function(AsciinemaPlayer) {
+            container.innerHTML = '';
+            AsciinemaPlayer.create('/api/v2/demo/ascii-stream.cast', container, {
+                fit: false,
+                cols: 80,
+                rows: 24,
+                autoPlay: false,
+                preload: true,
+                terminalFontSize: '13px'
+            });
+            status.textContent = 'Embedded playback ready.';
+        }).catch(function(err) {
+            status.textContent = 'Embedded playback unavailable: ' + err.message;
+        });
+    }
+
+    liveBtn.addEventListener('click', startLive);
+    stopBtn.addEventListener('click', function() {
+        setStatus('Stopped');
+        closeLive();
+    });
+    loadPlayback();
+})();
+</script>
+{{end}}

@@ -134,7 +134,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Semantic version management (`include/version.h`)
 - GitHub Actions CI/CD pipeline (`.github/workflows/ci.yml`)
 - Dockerfile for container-based deployment
-- systemd service file (`deploy/ssh-proxy.service`)
+- systemd service file (`deploy/audit-proxy.service`)
 - SECURITY.md security disclosure policy
 - CONTRIBUTING.md contributor guidelines
 - CHANGELOG.md (this file)

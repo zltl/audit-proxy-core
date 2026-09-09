@@ -94,26 +94,26 @@ func (m *Metrics) snapshot() []metric {
 		help  string
 		value int64
 	}{
-		{"ssh_proxy_sessions_started_total", "Sessions that were authorized and connected.", m.SessionsStarted.Load()},
-		{"ssh_proxy_sessions_rejected_total", "Connections refused before a session was established.", m.SessionsRejected.Load()},
-		{"ssh_proxy_sessions_terminated_total", "Sessions ended by policy rather than by the user.", m.SessionsTerminated.Load()},
-		{"ssh_proxy_auth_attempts_total", "Authentication attempts of any method.", m.AuthAttempts.Load()},
-		{"ssh_proxy_auth_failures_total", "Authentication attempts that were refused.", m.AuthFailures.Load()},
-		{"ssh_proxy_channels_opened_total", "Channels opened across all sessions.", m.ChannelsOpened.Load()},
-		{"ssh_proxy_channels_refused_total", "Channels refused by policy.", m.ChannelsRefused.Load()},
-		{"ssh_proxy_commands_screened_total", "Commands submitted to the command policy.", m.CommandsScreened.Load()},
-		{"ssh_proxy_commands_blocked_total", "Commands the policy refused.", m.CommandsBlocked.Load()},
-		{"ssh_proxy_transfers_total", "File transfers observed.", m.TransfersRecorded.Load()},
-		{"ssh_proxy_transfers_refused_total", "File transfers refused by policy.", m.TransfersRefused.Load()},
-		{"ssh_proxy_forwards_total", "Port forwards opened.", m.ForwardsOpened.Load()},
-		{"ssh_proxy_forwards_refused_total", "Port forwards refused by policy.", m.ForwardsRefused.Load()},
-		{"ssh_proxy_host_keys_refused_total", "Upstream connections refused over an untrusted host key.", m.HostKeysRefused.Load()},
-		{"ssh_proxy_policy_unavailable_total", "Decisions that could not be obtained from the control plane.", m.PolicyUnavailable.Load()},
-		{"ssh_proxy_audit_events_emitted_total", "Audit events produced.", m.AuditEventsEmitted.Load()},
-		{"ssh_proxy_audit_events_delivered_total", "Audit events accepted by the control plane.", m.AuditEventsDelivered.Load()},
-		{"ssh_proxy_audit_events_dropped_total", "Audit events discarded to stay within the spool budget.", m.AuditEventsDropped.Load()},
-		{"ssh_proxy_recordings_started_total", "Session recordings started.", m.RecordingsStarted.Load()},
-		{"ssh_proxy_recordings_failed_total", "Session recordings that could not be started.", m.RecordingsFailed.Load()},
+		{"audit_proxy_sessions_started_total", "Sessions that were authorized and connected.", m.SessionsStarted.Load()},
+		{"audit_proxy_sessions_rejected_total", "Connections refused before a session was established.", m.SessionsRejected.Load()},
+		{"audit_proxy_sessions_terminated_total", "Sessions ended by policy rather than by the user.", m.SessionsTerminated.Load()},
+		{"audit_proxy_auth_attempts_total", "Authentication attempts of any method.", m.AuthAttempts.Load()},
+		{"audit_proxy_auth_failures_total", "Authentication attempts that were refused.", m.AuthFailures.Load()},
+		{"audit_proxy_channels_opened_total", "Channels opened across all sessions.", m.ChannelsOpened.Load()},
+		{"audit_proxy_channels_refused_total", "Channels refused by policy.", m.ChannelsRefused.Load()},
+		{"audit_proxy_commands_screened_total", "Commands submitted to the command policy.", m.CommandsScreened.Load()},
+		{"audit_proxy_commands_blocked_total", "Commands the policy refused.", m.CommandsBlocked.Load()},
+		{"audit_proxy_transfers_total", "File transfers observed.", m.TransfersRecorded.Load()},
+		{"audit_proxy_transfers_refused_total", "File transfers refused by policy.", m.TransfersRefused.Load()},
+		{"audit_proxy_forwards_total", "Port forwards opened.", m.ForwardsOpened.Load()},
+		{"audit_proxy_forwards_refused_total", "Port forwards refused by policy.", m.ForwardsRefused.Load()},
+		{"audit_proxy_host_keys_refused_total", "Upstream connections refused over an untrusted host key.", m.HostKeysRefused.Load()},
+		{"audit_proxy_policy_unavailable_total", "Decisions that could not be obtained from the control plane.", m.PolicyUnavailable.Load()},
+		{"audit_proxy_audit_events_emitted_total", "Audit events produced.", m.AuditEventsEmitted.Load()},
+		{"audit_proxy_audit_events_delivered_total", "Audit events accepted by the control plane.", m.AuditEventsDelivered.Load()},
+		{"audit_proxy_audit_events_dropped_total", "Audit events discarded to stay within the spool budget.", m.AuditEventsDropped.Load()},
+		{"audit_proxy_recordings_started_total", "Session recordings started.", m.RecordingsStarted.Load()},
+		{"audit_proxy_recordings_failed_total", "Session recordings that could not be started.", m.RecordingsFailed.Load()},
 	}
 
 	out := make([]metric, 0, len(counters)+4)
@@ -165,19 +165,19 @@ func (s *Server) Metrics() *Metrics { return s.metrics }
 
 // registerGauges wires the values that are read rather than counted.
 func (s *Server) registerGauges() {
-	s.metrics.SetGauge("ssh_proxy_sessions_active", func() float64 {
+	s.metrics.SetGauge("audit_proxy_sessions_active", func() float64 {
 		return float64(s.connectionCount())
 	})
-	s.metrics.SetGauge("ssh_proxy_audit_spool_bytes", func() float64 {
+	s.metrics.SetGauge("audit_proxy_audit_spool_bytes", func() float64 {
 		return float64(s.audit.Pending())
 	})
-	s.metrics.SetGauge("ssh_proxy_draining", func() float64 {
+	s.metrics.SetGauge("audit_proxy_draining", func() float64 {
 		if s.draining.Load() {
 			return 1
 		}
 		return 0
 	})
-	s.metrics.SetGauge("ssh_proxy_control_plane_healthy", func() float64 {
+	s.metrics.SetGauge("audit_proxy_control_plane_healthy", func() float64 {
 		if healthy, _ := s.pdp.Healthy(); healthy {
 			return 1
 		}

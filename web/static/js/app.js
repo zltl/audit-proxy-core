@@ -1,5 +1,5 @@
 /* ============================================================
-   SSH Proxy Core — App JavaScript
+   Audit Proxy Core — App JavaScript
    Vanilla JS with App namespace
    ============================================================ */
 

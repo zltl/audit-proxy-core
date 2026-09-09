@@ -13,8 +13,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/telemetry"
 )
 
 // connection is one authenticated client connection and its upstream.
@@ -33,7 +33,7 @@ type connection struct {
 	upstreamLogin string
 	features      map[string]bool
 	commandPolicy string
-	recordPolicy  sshproxyv1.RecordPolicy
+	recordPolicy  auditproxyv1.RecordPolicy
 
 	bytesIn  atomic.Int64
 	bytesOut atomic.Int64
@@ -122,7 +122,7 @@ func (s *Server) handle(ctx context.Context, rawConn net.Conn) {
 func (c *connection) authorizeAndConnect(ctx context.Context) error {
 	spec := parseLoginSpec(c.client.User())
 
-	decision, err := c.proxy.pdp.AuthorizeSession(ctx, &sshproxyv1.AuthorizeSessionRequest{
+	decision, err := c.proxy.pdp.AuthorizeSession(ctx, &auditproxyv1.AuthorizeSessionRequest{
 		Client:        clientInfo(c.client, c.proxy.config.NodeID),
 		Username:      c.username,
 		Roles:         c.roles,
@@ -155,7 +155,7 @@ func (c *connection) authorizeAndConnect(ctx context.Context) error {
 		c.features[feature] = true
 	}
 
-	opened, err := c.proxy.pdp.OpenSession(ctx, &sshproxyv1.OpenSessionRequest{
+	opened, err := c.proxy.pdp.OpenSession(ctx, &auditproxyv1.OpenSessionRequest{
 		Client:        clientInfo(c.client, c.proxy.config.NodeID),
 		Username:      c.username,
 		TargetId:      c.targetID,
@@ -295,7 +295,7 @@ func (c *connection) forwardGlobalRequest(req *ssh.Request) {
 }
 
 // authorizeChannel asks the decision point about a channel or channel request.
-func (c *connection) authorizeChannel(ctx context.Context, req *sshproxyv1.AuthorizeChannelRequest) error {
+func (c *connection) authorizeChannel(ctx context.Context, req *auditproxyv1.AuthorizeChannelRequest) error {
 	req.SessionId = c.sessionID
 	resp, err := c.proxy.pdp.AuthorizeChannel(ctx, req)
 	if err != nil {
@@ -384,7 +384,7 @@ func (c *connection) terminate(reason string) {
 	}
 	c.channelsMu.Unlock()
 
-	notice := "\r\n[ssh-proxy] " + reason + "\r\n"
+	notice := "\r\n[audit-proxy] " + reason + "\r\n"
 	for _, ch := range channels {
 		_, _ = (*ch).Write([]byte(notice))
 		_ = (*ch).Close()
@@ -443,7 +443,7 @@ func (c *connection) close(ctx context.Context) {
 		// record of how it ended is the part that must not be lost.
 		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := c.proxy.pdp.CloseSession(closeCtx, &sshproxyv1.CloseSessionRequest{
+		if err := c.proxy.pdp.CloseSession(closeCtx, &auditproxyv1.CloseSessionRequest{
 			SessionId:       c.sessionID,
 			BytesIn:         c.bytesIn.Load(),
 			BytesOut:        c.bytesOut.Load(),

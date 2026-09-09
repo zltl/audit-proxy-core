@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
 )
 
 func TestINIFallbackAllowsKnownRoute(t *testing.T) {
@@ -23,7 +23,7 @@ user = alice
 		t.Fatal(err)
 	}
 	fb := newINIFallback(path)
-	resp, ok := fb.evaluate(&sshproxyv1.AuthorizeSessionRequest{
+	resp, ok := fb.evaluate(&auditproxyv1.AuthorizeSessionRequest{
 		Username: "alice",
 		Target:   "10.0.0.1:22",
 	})
@@ -39,7 +39,7 @@ func TestINIFallbackDeniesUnknownUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	fb := newINIFallback(path)
-	resp, ok := fb.evaluate(&sshproxyv1.AuthorizeSessionRequest{Username: "alice", Target: "10.0.0.1:22"})
+	resp, ok := fb.evaluate(&auditproxyv1.AuthorizeSessionRequest{Username: "alice", Target: "10.0.0.1:22"})
 	if !ok || resp.GetAllowed() {
 		t.Fatalf("expected deny for unknown user")
 	}

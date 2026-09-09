@@ -1,4 +1,14 @@
-# SSH Proxy Core
+# Audit Proxy Core
+
+<p align="center">
+  <img src="docs/assets/ascii-stream-demo.gif" alt="ASCII terminal recording stream demo" width="720"/>
+</p>
+
+<p align="center">
+  Full ASCII storyboard (asciicast v2): matrix opener → proxy handshake → command audit → policy block.
+  <a href="demos/ascii-stream/README.md">Demo guide</a> ·
+  <code>audit-proxy play --file demos/ascii-stream/demo.cast</code>
+</p>
 
 High-performance, extensible SSH protocol proxy platform. C data plane (libssh, ~14,700 LOC) + Go control plane (REST API / Web UI / Automation / Gateway / Insights).
 
@@ -112,7 +122,7 @@ make release
 make test
 
 # Generate host key (first run)
-ssh-keygen -t rsa -f /tmp/ssh_proxy_host_key -N ""
+ssh-keygen -t rsa -f /tmp/audit_proxy_host_key -N ""
 ```
 
 ### 2. Configuration
@@ -123,11 +133,11 @@ Create a configuration file (e.g., `config.ini`):
 [server]
 bind_addr = 0.0.0.0
 port = 2222
-host_key = /etc/ssh-proxy/host_key
+host_key = /etc/audit-proxy/host_key
 
 [logging]
 level = info
-audit_dir = /var/log/ssh-proxy/audit
+audit_dir = /var/log/audit-proxy/audit
 
 [limits]
 max_sessions = 1000
@@ -145,7 +155,7 @@ enabled = true
 upstream = prod.example.com
 port = 22
 user = root
-privkey = /etc/ssh-proxy/keys/admin.key
+privkey = /etc/audit-proxy/keys/admin.key
 
 # Wildcard routes
 [route:dev-*]
@@ -174,19 +184,19 @@ deny = upload, scp_upload, sftp_upload, rsync_upload, git_push, exec
 
 ```bash
 # Validate configuration (like nginx -t)
-./build/bin/ssh-proxy-core -t -c config.ini
+./build/bin/audit-proxy-core -t -c config.ini
 
 # Start with config file
-./build/bin/ssh-proxy-core -c config.ini
+./build/bin/audit-proxy-core -c config.ini
 
 # Debug mode
-./build/bin/ssh-proxy-core -d -c config.ini
+./build/bin/audit-proxy-core -d -c config.ini
 
 # Show version
-./build/bin/ssh-proxy-core --version
+./build/bin/audit-proxy-core --version
 
 # Show help
-./build/bin/ssh-proxy-core --help
+./build/bin/audit-proxy-core --help
 ```
 
 ### 4. Connect
@@ -201,7 +211,7 @@ ssh -p 2222 admin@target-server -o ProxyJump=proxy-server
 
 ## Configuration Reference
 
-SSH Proxy Core uses INI-format configuration. All new feature sections are optional and disabled by default for backward compatibility.
+Audit Proxy Core uses INI-format configuration. All new feature sections are optional and disabled by default for backward compatibility.
 
 ### `[server]` — Server Settings
 
@@ -209,8 +219,8 @@ SSH Proxy Core uses INI-format configuration. All new feature sections are optio
 [server]
 bind_addr = 0.0.0.0                     # Listen address
 port = 2222                              # Listen port
-host_key = /etc/ssh-proxy/host_key       # SSH host key path
-banner = /etc/ssh-proxy/banner.txt       # Pre-auth banner file path (v0.3.0)
+host_key = /etc/audit-proxy/host_key       # SSH host key path
+banner = /etc/audit-proxy/banner.txt       # Pre-auth banner file path (v0.3.0)
 motd = Welcome {username} from {client_ip}!  # Post-auth message (v0.3.0)
 ```
 
@@ -222,14 +232,14 @@ motd = Welcome {username} from {client_ip}!  # Post-auth message (v0.3.0)
 | `{client_ip}` | Client IP address |
 | `{datetime}` | Current date and time |
 | `{hostname}` | Proxy server hostname |
-| `{version}` | SSH Proxy Core version |
+| `{version}` | Audit Proxy Core version |
 
 ### `[logging]` — Logging Configuration
 
 ```ini
 [logging]
 level = info                             # Log level: debug, info, warn, error
-audit_dir = /var/log/ssh-proxy/audit     # Audit log and recording directory
+audit_dir = /var/log/audit-proxy/audit     # Audit log and recording directory
 audit_encryption_key = 001122...eeff     # Optional: 64 hex chars for AES-256-GCM
 format = text                            # Output format: text | json (v0.3.0)
 ```
@@ -261,7 +271,7 @@ Each user section defines authentication credentials. Generate password hashes w
 [user:admin]
 password_hash = $6$saltsalt$...          # crypt(3) password hash
 pubkey = ssh-rsa AAAA... admin@host      # Inline public key
-pubkey_file = /etc/ssh-proxy/authorized_keys/admin  # Authorized keys file
+pubkey_file = /etc/audit-proxy/authorized_keys/admin  # Authorized keys file
 enabled = true                           # Enable/disable user
 totp_secret = JBSWY3DPEHPK3PXP          # Base32 TOTP secret (v0.3.0)
 mfa_enabled = true                       # Enable MFA for this user (v0.3.0)
@@ -286,7 +296,7 @@ serials from `/api/v2/ca/crl` and configure `revoked_user_cert_serial` or
 ```ini
 [security]
 master_key = ${env:SSH_PROXY_MASTER_KEY}      # 64 hex chars (AES-256)
-# master_key_file = /etc/ssh-proxy/master_key.hex
+# master_key_file = /etc/audit-proxy/master_key.hex
 ```
 
 ### `[route:*]` — User-to-Upstream Routing
@@ -299,7 +309,7 @@ Route sections map proxy users to upstream servers. Patterns support glob matchi
 upstream = prod.example.com              # Upstream hostname/IP
 port = 22                                # Upstream port (default: 22)
 user = root                              # Upstream username
-privkey = /etc/ssh-proxy/keys/admin.key  # Private key for upstream auth
+privkey = /etc/audit-proxy/keys/admin.key  # Private key for upstream auth
 enabled = true                           # Enable/disable route
 
 # Wildcard match
@@ -427,7 +437,7 @@ Asynchronous HTTP POST notifications for system events.
 ```ini
 [webhook]
 enabled = true
-url = https://hooks.example.com/ssh-proxy  # Webhook endpoint URL
+url = https://hooks.example.com/audit-proxy  # Webhook endpoint URL
 auth_header = Bearer your-webhook-token     # Authorization header value
 events = auth.success, auth.failure, session.start, session.end  # Subscribed events
 retry_max = 3                            # Max retry attempts
@@ -494,7 +504,7 @@ nodes enforce the same concurrent-session ceiling.
 ```ini
 [session_store]
 type = local                             # local (in-memory) | file (NDJSON + flock)
-path = /var/lib/ssh-proxy/sessions.ndjson  # File path (when type = file)
+path = /var/lib/audit-proxy/sessions.ndjson  # File path (when type = file)
 max_records = 10000                      # Maximum stored session records
 ```
 
@@ -557,7 +567,7 @@ The feature policy system provides fine-grained control over which SSH capabilit
 | Command audit | `{audit_dir}/commands_YYYYMMDD.log` | Shell command records *(v0.3.0)* |
 | Runtime log | stdout/stderr | Server runtime log |
 
-Default `audit_dir` is `/tmp/ssh_proxy_audit`. Override it in the `[logging]` section.
+Default `audit_dir` is `/tmp/audit_proxy_audit`. Override it in the `[logging]` section.
 
 ### Structured JSON Logging *(v0.3.0)*
 
@@ -629,20 +639,20 @@ sudo apt install asciinema
 pip install asciinema
 
 # Play recording
-asciinema play /tmp/ssh_proxy_audit/session_12345_20250105_120000.cast
+asciinema play /tmp/audit_proxy_audit/session_12345_20250105_120000.cast
 
 # Play at 2x speed
-asciinema play -s 2 /tmp/ssh_proxy_audit/session_12345_20250105_120000.cast
+asciinema play -s 2 /tmp/audit_proxy_audit/session_12345_20250105_120000.cast
 
 # Cap idle time to 2 seconds
-asciinema play -i 2 /tmp/ssh_proxy_audit/session_12345_20250105_120000.cast
+asciinema play -i 2 /tmp/audit_proxy_audit/session_12345_20250105_120000.cast
 ```
 
 #### Method 2: asciinema-player (Web)
 
 ```bash
 # Serve recordings over HTTP
-cd /tmp/ssh_proxy_audit
+cd /tmp/audit_proxy_audit
 python3 -m http.server 8000
 ```
 
@@ -667,10 +677,10 @@ Then embed the player in an HTML page:
 
 ```bash
 # View recording header
-head -1 /tmp/ssh_proxy_audit/session_12345_20250105_120000.cast | jq
+head -1 /tmp/audit_proxy_audit/session_12345_20250105_120000.cast | jq
 
 # View all frames
-cat /tmp/ssh_proxy_audit/session_12345_20250105_120000.cast
+cat /tmp/audit_proxy_audit/session_12345_20250105_120000.cast
 ```
 
 `.cast` file format:
@@ -730,9 +740,9 @@ curl -H "Authorization: Bearer <token>" http://localhost:9090/api/v1/config
 Validate configuration syntax and semantics without starting the server (like `nginx -t`):
 
 ```bash
-./build/bin/ssh-proxy-core -t -c config.ini
+./build/bin/audit-proxy-core -t -c config.ini
 # or
-./build/bin/ssh-proxy-core --check -c config.ini
+./build/bin/audit-proxy-core --check -c config.ini
 ```
 
 On success:
@@ -748,7 +758,7 @@ Reload configuration without restarting the server:
 
 ```bash
 # Via SIGHUP
-kill -HUP $(pgrep ssh-proxy-core)
+kill -HUP $(pgrep audit-proxy-core)
 
 # Via Admin API (v0.3.0)
 curl -X POST -H "Authorization: Bearer <token>" http://localhost:9090/api/v1/reload
@@ -756,29 +766,29 @@ curl -X POST -H "Authorization: Bearer <token>" http://localhost:9090/api/v1/rel
 
 Hot reload updates users, routes, policies, and ACL rules. Existing sessions are not interrupted.
 
-### `sshproxy` Control-Plane CLI
+### `audit-proxy` Control-Plane CLI
 
-`cmd/sshproxy` provides a control-plane CLI for OIDC login, short-lived SSH certificate issuance, session discovery, and proxied `ssh` / `scp` access:
+`cmd/audit-proxy` provides a control-plane CLI for OIDC login, short-lived SSH certificate issuance, session discovery, and proxied `ssh` / `scp` access:
 
 ```bash
-go build ./cmd/sshproxy
+go build ./cmd/audit-proxy
 
 # Initial control-plane configuration
-./sshproxy config set server https://proxy.example.com
-./sshproxy config set ssh_addr proxy.example.com:2222
+./audit-proxy config set server https://proxy.example.com
+./audit-proxy config set ssh_addr proxy.example.com:2222
 
 # Browser-based OIDC login and automatic SSH certificate issuance
-./sshproxy login
+./audit-proxy login
 
 # Common commands
-./sshproxy ls servers
-./sshproxy ls sessions
-./sshproxy ssh alice@db-prod
-./sshproxy scp ./backup.tgz alice@db-prod:/tmp/
-./sshproxy completion bash
+./audit-proxy ls servers
+./audit-proxy ls sessions
+./audit-proxy ssh alice@db-prod
+./audit-proxy scp ./backup.tgz alice@db-prod:/tmp/
+./audit-proxy completion bash
 ```
 
-`sshproxy login` stores the authenticated control-plane session in `~/.sshproxy/config.json`, generates or reuses `~/.sshproxy/id_ed25519`, and requests a short-lived user certificate from the built-in SSH CA. Later `sshproxy ssh` / `scp` commands automatically inject that identity file. To pin the control-plane HTTPS server key, set `pinned_server_pubkey_sha256` in that config file using the `sha256/<base64-spki-hash>` format.
+`audit-proxy login` stores the authenticated control-plane session in `~/.audit-proxy/config.json`, generates or reuses `~/.audit-proxy/id_ed25519`, and requests a short-lived user certificate from the built-in SSH CA. Later `audit-proxy ssh` / `scp` commands automatically inject that identity file. To pin the control-plane HTTPS server key, set `pinned_server_pubkey_sha256` in that config file using the `sha256/<base64-spki-hash>` format.
 
 ### Web SSO (OIDC / SAML)
 
@@ -798,7 +808,7 @@ enterprise IdPs such as ADFS, Shibboleth, and OneLogin.
 | `-h`, `--help` | Show help message |
 | `-v`, `--version` | Show version information |
 | `-d`, `--debug` | Enable debug logging |
-| `-c`, `--config FILE` | Config file path (default: `/etc/ssh-proxy/config.ini`) |
+| `-c`, `--config FILE` | Config file path (default: `/etc/audit-proxy/config.ini`) |
 | `-p`, `--port PORT` | Listen port (overrides config file) |
 | `-k`, `--key FILE` | Host key file path |
 | `-t`, `--check` | Validate configuration and exit *(v0.3.0)* |
@@ -807,7 +817,7 @@ enterprise IdPs such as ADFS, Shibboleth, and OneLogin.
 
 ```
 ┌─────────────┐     ┌───────────────────────────────────────────────┐     ┌──────────────┐
-│             │     │              SSH Proxy Core                   │     │              │
+│             │     │              Audit Proxy Core                   │     │              │
 │   Client    │────▶│  ┌─────────────────────────────────────────┐  │────▶│   Upstream   │
 │             │     │  │           Filter Chain                  │  │     │              │
 └─────────────┘     │  │ ┌────────┬────────┬───────┬──────────┐  │  │     └──────────────┘
@@ -860,7 +870,7 @@ enterprise IdPs such as ADFS, Shibboleth, and OneLogin.
 ## Project Structure
 
 ```
-ssh-proxy-core/
+audit-proxy-core/
 ├── src/                          # Source files (.c) — 20 files
 │   ├── main.c                        # Entry point and CLI argument parsing
 │   ├── ssh_server.c                  # SSH server (libssh, epoll, signalfd)
@@ -908,7 +918,7 @@ ssh-proxy-core/
 │   └── config.example.ini          # Example configuration file
 ├── scripts/                      # Build and utility scripts
 ├── deploy/                       # Deployment files
-│   └── ssh-proxy.service            # systemd unit file
+│   └── audit-proxy.service            # systemd unit file
 ├── build/                        # Build output directory
 ├── Makefile                      # Build configuration
 ├── Dockerfile                    # Docker build file
@@ -973,8 +983,8 @@ requiring a full Terraform plugin runtime.
 
 ### Environment Variables
 
-- `SSHPROXY_SERVER` — control-plane URL, for example `https://proxy.example.com:8443`
-- `SSHPROXY_TOKEN` — API Bearer token
+- `AUDITPROXY_SERVER` — control-plane URL, for example `https://proxy.example.com:8443`
+- `AUDITPROXY_TOKEN` — API Bearer token
 
 ### Supported Actions
 
@@ -985,8 +995,8 @@ requiring a full Terraform plugin runtime.
 
 ```bash
 # Read the current config
-SSHPROXY_SERVER=https://proxy.example.com:8443 \
-SSHPROXY_TOKEN=$TOKEN \
+AUDITPROXY_SERVER=https://proxy.example.com:8443 \
+AUDITPROXY_TOKEN=$TOKEN \
 go run ./cmd/terraform-provider read-config
 
 # "Import" an existing user / server by identifier for Terraform state alignment
@@ -1161,10 +1171,10 @@ router_add_upstream(router, &upstream);
 make debug
 
 # Run with GDB
-gdb ./build/bin/ssh-proxy-core
+gdb ./build/bin/audit-proxy-core
 
 # Run with debug logging
-./build/bin/ssh-proxy-core -d -c config.ini
+./build/bin/audit-proxy-core -d -c config.ini
 ```
 
 ### Code Quality
@@ -1182,32 +1192,32 @@ make check
 ### systemd
 
 ```bash
-sudo cp deploy/ssh-proxy.service /etc/systemd/system/
+sudo cp deploy/audit-proxy.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now ssh-proxy
+sudo systemctl enable --now audit-proxy
 
 # Check status
-sudo systemctl status ssh-proxy
+sudo systemctl status audit-proxy
 
 # View logs
-sudo journalctl -u ssh-proxy -f
+sudo journalctl -u audit-proxy -f
 
 # Reload configuration
-sudo systemctl reload ssh-proxy
+sudo systemctl reload audit-proxy
 ```
 
 ### Docker
 
 ```bash
 # Build image
-docker build -t ssh-proxy-core .
+docker build -t audit-proxy-core .
 
 # Run container
 docker run -d -p 2222:2222 -p 9090:9090 \
-  -v /path/to/config.ini:/etc/ssh-proxy/config.ini:ro \
-  -v /path/to/host_key:/etc/ssh-proxy/host_key:ro \
-  -v /var/log/ssh-proxy:/var/log/ssh-proxy \
-  ssh-proxy-core
+  -v /path/to/config.ini:/etc/audit-proxy/config.ini:ro \
+  -v /path/to/host_key:/etc/audit-proxy/host_key:ro \
+  -v /var/log/audit-proxy:/var/log/audit-proxy \
+  audit-proxy-core
 ```
 
 ## Documentation

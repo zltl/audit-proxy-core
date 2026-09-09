@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/models"
+	"github.com/zltl/audit-proxy-core/internal/models"
 )
 
 func TestRunDataMigrationImportsFileBackedStateIntoSQLStores(t *testing.T) {

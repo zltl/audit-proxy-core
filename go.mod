@@ -1,4 +1,4 @@
-module github.com/ssh-proxy-core/ssh-proxy-core
+module github.com/zltl/audit-proxy-core
 
 go 1.25.5
 

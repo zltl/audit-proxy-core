@@ -14,12 +14,12 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	sshproxyv1 "github.com/ssh-proxy-core/ssh-proxy-core/api/proto/sshproxy/v1"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/pdp"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/secrets"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/sshca"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/store"
-	"github.com/ssh-proxy-core/ssh-proxy-core/internal/telemetry"
+	auditproxyv1 "github.com/zltl/audit-proxy-core/api/proto/auditproxy/v1"
+	"github.com/zltl/audit-proxy-core/internal/pdp"
+	"github.com/zltl/audit-proxy-core/internal/secrets"
+	"github.com/zltl/audit-proxy-core/internal/sshca"
+	"github.com/zltl/audit-proxy-core/internal/store"
+	"github.com/zltl/audit-proxy-core/internal/telemetry"
 )
 
 // startAccessDecisionPoint brings up the service the data plane asks before it
@@ -83,7 +83,7 @@ func (s *Server) startAccessDecisionPoint() error {
 	}
 
 	grpcServer := grpc.NewServer(telemetry.GRPCServerOption())
-	sshproxyv1.RegisterAccessDecisionServiceServer(grpcServer, decisionPoint)
+	auditproxyv1.RegisterAccessDecisionServiceServer(grpcServer, decisionPoint)
 
 	s.pdpServer = grpcServer
 	s.pdpListener = listener
