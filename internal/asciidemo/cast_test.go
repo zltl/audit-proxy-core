@@ -66,6 +66,78 @@ func TestStoryboardWriteAndParse(t *testing.T) {
 	}
 }
 
+func TestStoryboardKeepsSingleWidthLayout(t *testing.T) {
+	frames := Storyboard()
+	var joined strings.Builder
+	for _, f := range frames {
+		joined.WriteString(f.Data)
+	}
+	data := joined.String()
+
+	// Bare LF (without CR) stairs the cursor in agg/asciinema.
+	for i := 0; i < len(data); i++ {
+		if data[i] != '\n' {
+			continue
+		}
+		if i == 0 || data[i-1] != '\r' {
+			t.Fatalf("bare LF at offset %d (need CR+LF for stable columns)", i)
+		}
+	}
+
+	// Strip CSI / OSC-ish ESC sequences, then require printable runes are ASCII.
+	stripped := stripANSI(data)
+	for _, r := range stripped {
+		switch {
+		case r == '\r' || r == '\n' || r == '\t':
+			continue
+		case r < 0x20 || r > 0x7e:
+			t.Fatalf("non-ASCII / control rune %U in storyboard (ambiguous width breaks GIF layout)", r)
+		}
+	}
+}
+
+func stripANSI(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		if s[i] == '\x1b' && i+1 < len(s) {
+			switch s[i+1] {
+			case '[':
+				i += 2
+				for i < len(s) {
+					c := s[i]
+					i++
+					if c >= 0x40 && c <= 0x7e {
+						break
+					}
+				}
+				continue
+			case ']':
+				i += 2
+				for i < len(s) {
+					if s[i] == '\x07' {
+						i++
+						break
+					}
+					if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '\\' {
+						i += 2
+						break
+					}
+					i++
+				}
+				continue
+			default:
+				// Other ESC sequences: skip ESC + next byte.
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
+
 func TestEmbeddedDemoCastMatchesStoryboard(t *testing.T) {
 	if len(DemoCast) == 0 {
 		t.Fatal("DemoCast embed is empty")

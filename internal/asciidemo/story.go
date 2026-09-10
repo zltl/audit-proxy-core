@@ -15,16 +15,6 @@ const (
 	Title = "Audit Proxy Core — ASCII stream demo"
 )
 
-// padCenter left-pads visible text so it appears centered in Width columns.
-// ansiLen is the printable width excluding escape sequences (caller-provided).
-func padCenter(s string, visible int) string {
-	if visible >= Width {
-		return s
-	}
-	pad := (Width - visible) / 2
-	return strings.Repeat(" ", pad) + s
-}
-
 // Frame is one asciicast output event at a relative timestamp (seconds).
 type Frame struct {
 	At   float64
@@ -41,13 +31,41 @@ const (
 	yellow  = "\x1b[33m"
 	red     = "\x1b[31m"
 	brightR = "\x1b[91m"
-	white   = "\x1b[37m"
 	clear   = "\x1b[2J\x1b[H"
 	hideCur = "\x1b[?25l"
 	showCur = "\x1b[?25h"
+	// eraseEOL clears leftover cells after a \r redraw (progress bars).
+	eraseEOL = "\x1b[K"
+	// nl is CR+LF. Bare LF keeps the column and stairs the cursor in agg/asciinema.
+	nl = "\r\n"
 )
 
+// padCenter left-pads s so its printable width is centered in Width columns.
+func padCenter(s string, visible int) string {
+	if visible >= Width {
+		return s
+	}
+	pad := (Width - visible) / 2
+	return strings.Repeat(" ", pad) + s
+}
+
+// line returns text ending with CR+LF (never bare LF).
+func line(s string) string { return s + nl }
+
+// boxLine builds a single-width ASCII box row aligned with "  +----+":
+// "  |" + body + padding + "|" where body+padding is exactly inner cells.
+func boxLine(inner int, body string, visible int) string {
+	if visible > inner {
+		visible = inner
+	}
+	return "  |" + body + strings.Repeat(" ", inner-visible) + "|"
+}
+
 // Storyboard returns the full demo timeline (~70s at 1x).
+//
+// All glyphs are single-cell ASCII (or ASCII box art). Ambiguous-width Unicode
+// (block elements, arrows, CJK halfwidth, emoji) makes agg wrap mid-line and
+// produces the classic staircase / clipped frames in the README GIF.
 func Storyboard() []Frame {
 	var frames []Frame
 	at := 0.0
@@ -58,19 +76,19 @@ func Storyboard() []Frame {
 
 	add(0.0, clear+hideCur)
 
-	// --- Phase 1: matrix rain opener ---
-	cols := make([]int, Width)
-	for i := range cols {
-		cols[i] = (i*7 + 3) % Height
+	// --- Phase 1: matrix rain opener (ASCII-only, fixed Width cells/row) ---
+	heads := make([]int, Width)
+	for i := range heads {
+		heads[i] = (i*7 + 3) % Height
 	}
-	glyphs := []rune{'0', '1', 'ﾊ', 'ﾐ', 'ﾋ', 'ｰ', 'ｳ', 'ｼ', 'ﾅ', 'ﾓ', 'ﾆ', 'ｻ', 'ﾜ', 'ﾂ', 'ｵ', 'ﾘ', 'ｱ', 'ﾎ', 'ﾃ', 'ﾏ'}
+	glyphs := []byte("01ABCDEFGHJKLMNPQRSTUVWXYZ#*+=|/\\")
 	for tick := 0; tick < 48; tick++ {
 		var b strings.Builder
 		b.WriteString(clear)
 		b.WriteString(hideCur)
 		for row := 0; row < Height-2; row++ {
 			for col := 0; col < Width; col++ {
-				head := cols[col]
+				head := heads[col]
 				dist := (row - head + Height) % Height
 				ch := glyphs[(col*13+row*7+tick*3)%len(glyphs)]
 				switch {
@@ -84,46 +102,41 @@ func Storyboard() []Frame {
 					b.WriteByte(' ')
 				}
 			}
-			b.WriteByte('\n')
+			b.WriteString(nl)
 		}
 		add(0.1, b.String())
-		for i := range cols {
-			cols[i] = (cols[i] + 1 + (i % 3)) % Height
+		for i := range heads {
+			heads[i] = (heads[i] + 1 + (i % 3)) % Height
 		}
 	}
 
 	// --- Banner ---
-	boxTop := "╔══════════════════════════════╗"
-	boxMid := "║      AUDIT PROXY CORE        ║"
-	boxBot := "╚══════════════════════════════╝"
-	tagline := "session recording · asciicast v2 · live tail"
-	banner := []string{
-		"",
-		padCenter(cyan+bold+boxTop+reset, len(boxTop)),
-		padCenter(cyan+bold+boxMid+reset, len(boxMid)),
-		padCenter(cyan+bold+boxBot+reset, len(boxBot)),
-		"",
-		padCenter(dim+tagline+reset, len(tagline)),
-		"",
-	}
+	boxTop := "+==============================+"
+	boxMid := "|      AUDIT PROXY CORE        |"
+	boxBot := "+==============================+"
+	tagline := "session recording . asciicast v2 . live tail"
 	var bannerBuf strings.Builder
 	bannerBuf.WriteString(clear + hideCur)
-	for _, line := range banner {
-		bannerBuf.WriteString(green + line + reset + "\n")
-	}
+	bannerBuf.WriteString(line(""))
+	bannerBuf.WriteString(line(padCenter(cyan+bold+boxTop+reset, len(boxTop))))
+	bannerBuf.WriteString(line(padCenter(cyan+bold+boxMid+reset, len(boxMid))))
+	bannerBuf.WriteString(line(padCenter(cyan+bold+boxBot+reset, len(boxBot))))
+	bannerBuf.WriteString(line(""))
+	bannerBuf.WriteString(line(padCenter(dim+tagline+reset, len(tagline))))
+	bannerBuf.WriteString(line(""))
 	add(0.5, bannerBuf.String())
-	add(1.0, "\n"+padCenter(dim+tagline+reset, len(tagline))+"\n")
-	add(2.0, "\n")
+	add(1.0, line("")+line(padCenter(dim+tagline+reset, len(tagline))))
+	add(2.0, line(""))
 
 	// --- Phase 2: proxy connect ---
-	add(0.5, clear+showCur+cyan+bold+"audit-proxy"+reset+dim+" › "+reset+"connecting alice@bastion → prod-db-01\n")
-	add(0.7, dim+"[policy]"+reset+" route matched: "+yellow+"prod-db"+reset+"  mfa=ok  recording=on\n")
+	add(0.5, clear+showCur+line(cyan+bold+"audit-proxy"+reset+dim+" > "+reset+"connecting alice@bastion -> prod-db-01"))
+	add(0.7, line(dim+"[policy]"+reset+" route matched: "+yellow+"prod-db"+reset+"  mfa=ok  recording=on"))
 	for i := 0; i < 16; i++ {
-		bar := strings.Repeat("█", i) + strings.Repeat("░", 16-i)
-		add(0.15, fmt.Sprintf("\r"+dim+"handshake "+reset+green+"[%s]"+reset+" %3d%%", bar, i*100/16))
+		bar := strings.Repeat("#", i) + strings.Repeat("-", 16-i)
+		add(0.15, fmt.Sprintf("\r"+dim+"handshake "+reset+green+"[%s]"+reset+" %3d%%"+eraseEOL, bar, i*100/16))
 	}
-	add(0.35, "\r"+dim+"handshake "+reset+green+"[████████████████]"+reset+" 100%\n")
-	add(0.7, fmt.Sprintf(green+"✓"+reset+" channel opened  pty %dx%d  audit stream active\n\n", Width, Height))
+	add(0.35, "\r"+dim+"handshake "+reset+green+"[################]"+reset+" 100%"+eraseEOL+nl)
+	add(0.7, line(green+"OK"+reset+fmt.Sprintf(" channel opened  pty %dx%d  audit stream active", Width, Height))+line(""))
 
 	prompt := green + "alice@prod-db-01" + reset + ":" + cyan + "~" + reset + "$ "
 
@@ -133,21 +146,21 @@ func Storyboard() []Frame {
 		for _, r := range cmd {
 			add(charDelay, string(r))
 		}
-		add(0.2, "\r\n"+output)
+		add(0.2, nl+output)
 		if afterDelay > 0 {
 			add(afterDelay, "")
 		}
 	}
 
-	typeCmd("whoami", "alice\n", 0.07, 0.45)
-	typeCmd("uptime", " 14:02:11 up 42 days,  3:17,  1 user,  load average: 0.08, 0.12, 0.09\n", 0.06, 0.5)
+	typeCmd("whoami", line("alice"), 0.07, 0.45)
+	typeCmd("uptime", line(" 14:02:11 up 42 days,  3:17,  1 user,  load average: 0.08, 0.12, 0.09"), 0.06, 0.5)
 	typeCmd("ls -la /srv/app",
-		"total 28\n"+
-			"drwxr-xr-x  5 alice alice 4096 Mar  9 09:11 .\n"+
-			"drwxr-xr-x 12 root  root  4096 Jan 14 02:40 ..\n"+
-			"-rw-r-----  1 alice alice  812 Mar  9 09:11 README.md\n"+
-			"drwxr-x---  3 alice alice 4096 Mar  8 18:22 bin\n"+
-			"drwxr-x---  4 alice alice 4096 Mar  9 08:55 data\n",
+		line("total 28")+
+			line("drwxr-xr-x  5 alice alice 4096 Mar  9 09:11 .")+
+			line("drwxr-xr-x 12 root  root  4096 Jan 14 02:40 ..")+
+			line("-rw-r-----  1 alice alice  812 Mar  9 09:11 README.md")+
+			line("drwxr-x---  3 alice alice 4096 Mar  8 18:22 bin")+
+			line("drwxr-x---  4 alice alice 4096 Mar  9 08:55 data"),
 		0.045, 0.7)
 
 	// --- Phase 4: policy block ---
@@ -156,47 +169,48 @@ func Storyboard() []Frame {
 	for _, r := range blocked {
 		add(0.08, string(r))
 	}
-	add(0.55, "\r\n")
+	add(0.55, nl)
 	ruleW := Width - 8
 	if ruleW < 72 {
 		ruleW = 72
 	}
-	rule := strings.Repeat("═", ruleW)
-	add(0.35, "\n"+brightR+bold+rule+reset+"\n")
-	add(0.3, brightR+bold+"  ✕  COMMAND BLOCKED  ·  policy rule: deny-sensitive-files"+reset+"\n")
-	add(0.3, yellow+"  command: "+reset+"cat /etc/shadow\n")
-	add(0.3, yellow+"  action:  "+reset+"deny + alert  ·  session continues under watch\n")
-	add(0.3, cyan+"  audit:   "+reset+"event=command.denied id=evt_7f3a… severity=high\n")
-	add(0.35, brightR+bold+rule+reset+"\n\n")
-	add(0.8, dim+"# reviewer can jump here via asciicast marker"+reset+"\n")
+	rule := strings.Repeat("=", ruleW)
+	add(0.35, line("")+line(brightR+bold+rule+reset))
+	add(0.3, line(brightR+bold+"  X  COMMAND BLOCKED  -  policy rule: deny-sensitive-files"+reset))
+	add(0.3, line(yellow+"  command: "+reset+"cat /etc/shadow"))
+	add(0.3, line(yellow+"  action:  "+reset+"deny + alert  -  session continues under watch"))
+	add(0.3, line(cyan+"  audit:   "+reset+"event=command.denied id=evt_7f3a... severity=high"))
+	add(0.35, line(brightR+bold+rule+reset)+line(""))
+	add(0.8, line(dim+"# reviewer can jump here via asciicast marker"+reset))
 
 	add(1.0, prompt)
 	add(0.4, "sudo -i")
-	add(0.6, "\r\n"+brightR+"✕ denied"+reset+" — privilege escalation requires JIT approval\n")
-	add(1.0, dim+"jit request queued → notify on-call"+reset+"\n\n")
+	add(0.6, nl+line(brightR+"X denied"+reset+" - privilege escalation requires JIT approval"))
+	add(1.0, line(dim+"jit request queued -> notify on-call"+reset)+line(""))
 
 	// --- Phase 5: session kill / seal ---
 	add(1.5, clear+hideCur)
-	add(0.4, "\n\n")
-	add(0.45, yellow+bold+"  ⚠  SESSION TERMINATED BY POLICY"+reset+"\n\n")
-	add(0.5, "  reason:   "+red+"repeated sensitive-file access"+reset+"\n")
-	add(0.4, "  actor:    threat-response / auto-kill\n")
-	add(0.4, "  recording sealed → asciicast v2\n")
-	add(0.7, "\n")
+	add(0.4, line("")+line(""))
+	add(0.45, line(yellow+bold+"  !  SESSION TERMINATED BY POLICY"+reset)+line(""))
+	add(0.5, line("  reason:   "+red+"repeated sensitive-file access"+reset))
+	add(0.4, line("  actor:    threat-response / auto-kill"))
+	add(0.4, line("  recording sealed -> asciicast v2"))
+	add(0.7, line(""))
 
+	const sealInner = 45
 	seal := []string{
-		"  ┌─────────────────────────────────────────────┐",
-		"  │  " + green + "●" + reset + " recording.complete                       │",
-		"  │  format: asciicast v2                       │",
-		"  │  live tail: /ws/sessions/{id}/live          │",
-		"  │  playback:  audit-proxy play · web UI         │",
-		"  └─────────────────────────────────────────────┘",
+		"  +" + strings.Repeat("-", sealInner) + "+",
+		boxLine(sealInner, "  "+green+"*"+reset+" recording.complete", len("  * recording.complete")),
+		boxLine(sealInner, "  format: asciicast v2", len("  format: asciicast v2")),
+		boxLine(sealInner, "  live tail: /ws/sessions/{id}/live", len("  live tail: /ws/sessions/{id}/live")),
+		boxLine(sealInner, "  playback:  audit-proxy play / web UI", len("  playback:  audit-proxy play / web UI")),
+		"  +" + strings.Repeat("-", sealInner) + "+",
 	}
-	for _, line := range seal {
-		add(0.28, line+"\n")
+	for _, s := range seal {
+		add(0.28, line(s))
 	}
-	add(1.4, "\n"+dim+"  demo complete — same bytes as a real audited session"+reset+"\n")
-	add(0.8, showCur+"\n")
+	add(1.4, line("")+line(dim+"  demo complete - same bytes as a real audited session"+reset))
+	add(0.8, showCur+line(""))
 
 	// Drop empty data frames (used only as timing pads).
 	out := frames[:0]
