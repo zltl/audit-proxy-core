@@ -211,9 +211,7 @@
         ensureAsciinemaPlayer().then(function(AsciinemaPlayer) {
             container.innerHTML = '';
             AsciinemaPlayer.create('/api/v2/demo/ascii-stream.cast', container, {
-                fit: false,
-                cols: 80,
-                rows: 24,
+                fit: 'width',
                 autoPlay: false,
                 preload: true,
                 terminalFontSize: '13px'

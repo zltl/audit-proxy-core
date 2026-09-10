@@ -8,12 +8,22 @@ import (
 )
 
 const (
-	// Width and Height match a typical session recording viewport.
-	Width  = 80
-	Height = 24
+	// Width and Height size the asciicast viewport (wide enough for README / web players).
+	Width  = 120
+	Height = 36
 	// Title is written into the asciicast header.
 	Title = "Audit Proxy Core — ASCII stream demo"
 )
+
+// padCenter left-pads visible text so it appears centered in Width columns.
+// ansiLen is the printable width excluding escape sequences (caller-provided).
+func padCenter(s string, visible int) string {
+	if visible >= Width {
+		return s
+	}
+	pad := (Width - visible) / 2
+	return strings.Repeat(" ", pad) + s
+}
 
 // Frame is one asciicast output event at a relative timestamp (seconds).
 type Frame struct {
@@ -83,13 +93,17 @@ func Storyboard() []Frame {
 	}
 
 	// --- Banner ---
+	boxTop := "╔══════════════════════════════╗"
+	boxMid := "║      AUDIT PROXY CORE        ║"
+	boxBot := "╚══════════════════════════════╝"
+	tagline := "session recording · asciicast v2 · live tail"
 	banner := []string{
 		"",
-		"                   " + cyan + bold + "╔══════════════════════════════╗" + reset,
-		"                   " + cyan + bold + "║      AUDIT PROXY CORE        ║" + reset,
-		"                   " + cyan + bold + "╚══════════════════════════════╝" + reset,
+		padCenter(cyan+bold+boxTop+reset, len(boxTop)),
+		padCenter(cyan+bold+boxMid+reset, len(boxMid)),
+		padCenter(cyan+bold+boxBot+reset, len(boxBot)),
 		"",
-		"              " + dim + "session recording · asciicast v2 · live tail" + reset,
+		padCenter(dim+tagline+reset, len(tagline)),
 		"",
 	}
 	var bannerBuf strings.Builder
@@ -98,7 +112,7 @@ func Storyboard() []Frame {
 		bannerBuf.WriteString(green + line + reset + "\n")
 	}
 	add(0.5, bannerBuf.String())
-	add(1.0, "\n"+dim+"                    session recording · asciicast v2 · live tail"+reset+"\n")
+	add(1.0, "\n"+padCenter(dim+tagline+reset, len(tagline))+"\n")
 	add(2.0, "\n")
 
 	// --- Phase 2: proxy connect ---
@@ -109,7 +123,7 @@ func Storyboard() []Frame {
 		add(0.15, fmt.Sprintf("\r"+dim+"handshake "+reset+green+"[%s]"+reset+" %3d%%", bar, i*100/16))
 	}
 	add(0.35, "\r"+dim+"handshake "+reset+green+"[████████████████]"+reset+" 100%\n")
-	add(0.7, green+"✓"+reset+" channel opened  pty 80x24  audit stream active\n\n")
+	add(0.7, fmt.Sprintf(green+"✓"+reset+" channel opened  pty %dx%d  audit stream active\n\n", Width, Height))
 
 	prompt := green + "alice@prod-db-01" + reset + ":" + cyan + "~" + reset + "$ "
 
@@ -143,12 +157,17 @@ func Storyboard() []Frame {
 		add(0.08, string(r))
 	}
 	add(0.55, "\r\n")
-	add(0.35, "\n"+brightR+bold+strings.Repeat("═", 72)+reset+"\n")
+	ruleW := Width - 8
+	if ruleW < 72 {
+		ruleW = 72
+	}
+	rule := strings.Repeat("═", ruleW)
+	add(0.35, "\n"+brightR+bold+rule+reset+"\n")
 	add(0.3, brightR+bold+"  ✕  COMMAND BLOCKED  ·  policy rule: deny-sensitive-files"+reset+"\n")
 	add(0.3, yellow+"  command: "+reset+"cat /etc/shadow\n")
 	add(0.3, yellow+"  action:  "+reset+"deny + alert  ·  session continues under watch\n")
 	add(0.3, cyan+"  audit:   "+reset+"event=command.denied id=evt_7f3a… severity=high\n")
-	add(0.35, brightR+bold+strings.Repeat("═", 72)+reset+"\n\n")
+	add(0.35, brightR+bold+rule+reset+"\n\n")
 	add(0.8, dim+"# reviewer can jump here via asciicast marker"+reset+"\n")
 
 	add(1.0, prompt)
